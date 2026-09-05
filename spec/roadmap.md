@@ -194,7 +194,23 @@ Nothing resolves until this exists. Every version a site names is a row here.
 
 ## Track D — The api
 
-- [ ] **D1a ★ Server-sent events are the last thing only mesh-api has.** *(audited 2026-09-06)*
+- [x] **D1a ★ Server-sent events.** *(built 2026-09-06)* `methods/stream.ts` on `node:http`, an
+      `/events` subscription per site, 8 integration tests. The transport is small; what it protects
+      is not.
+      **Two failures are refused at subscribe time rather than streamed silently**, and they are the
+      same failure from opposite sides: an event whose definition declares no `scopedBy` can never be
+      narrowed to anybody, and a subscriber who resolved no scope can never be narrowed *to*. Either
+      one opens a stream that is correct, quiet and impossible to distinguish from a working one — so
+      both answer with a reason instead.
+      The second has a specific cause worth naming: **a site that streams scoped events and configures
+      no `authorize` hook has built a stream that can never deliver.** Only a site knows what an
+      organization means to it, so the coarse gate cannot resolve a scope on its own. Found by writing
+      the test — the positive case failed while every negative case passed, which is exactly what
+      "nothing is ever delivered" looks like.
+      **The caller is re-resolved on every heartbeat.** A stream outlives the request that opened it,
+      so a ticket revoked five minutes in must reach a connection authorised ten minutes ago —
+      otherwise revoking a session closes the door and leaves the window open.
+- [x] **~~D1a~~ original entry** *(audited 2026-09-06)*
       Everything else is moved or deliberately dropped. The **decisions** are saved —
       `api/methods/delivery.ts` and `api/schema/events.ts` — and they are the part that matters:
       *an event that cannot be scoped is delivered to nobody*, which replaced a version that read a

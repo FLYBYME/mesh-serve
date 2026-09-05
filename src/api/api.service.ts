@@ -27,7 +27,7 @@
  * Every step is a lookup except the gate.
  */
 
-import { globalContractRegistry, MeshError, ServiceModule, type IServiceBroker } from '@flybyme/mesh';
+import { globalContractRegistry, MeshError, ServiceModule, z, type IServiceBroker } from '@flybyme/mesh';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import { canonical, digestOf } from '../builder/methods/content.js';
@@ -38,11 +38,17 @@ import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
 import { executeGate, SCOPE_HEADER, type Caller } from './methods/gate.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
+import { eventTable, type EventTable } from './methods/events.js';
 import { matchRoute, routeTable, type ContractLookup, type RouteTable } from './methods/routes.js';
+import { openStream, type Stream } from './methods/stream.js';
+import type { Subscriber } from './methods/delivery.js';
 import { createTicketCache, type TicketCache } from './methods/tickets.js';
 import type { AuthorizeHook } from './methods/gate.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
+
+/** Where a browser subscribes. One path per site, not one per event: a stream carries them all. */
+export const EVENTS_PATH = '/events';
 
 export interface ApiServiceOptions {
     /** `0` picks one, which is what a test wants. */
@@ -85,6 +91,16 @@ export class ApiService extends ServiceModule {
      */
     private readonly sites = new Map<string, { site: Site | undefined; expires: number }>();
     private readonly tables = new Map<string, RouteTable>();
+    private readonly eventTables = new Map<string, EventTable>();
+
+    /**
+     * Every open subscription on this node.
+     *
+     * Held so an event arriving over the mesh can be offered to each, and so `onStop` can close them
+     * — a process that exits without ending its streams leaves browsers reconnecting to a node that
+     * is gone.
+     */
+    private readonly streams = new Set<Stream>();
 
     constructor(private readonly options: ApiServiceOptions = {}) {
         super();
@@ -138,6 +154,12 @@ export class ApiService extends ServiceModule {
     }
 
     async onStop(): Promise<void> {
+        // Ended explicitly rather than dropped: a process that exits without closing its streams
+        // leaves browsers reconnecting to a node that is gone, and the reconnect is indistinguishable
+        // from a network blip.
+        for (const stream of this.streams) stream.close('this node is shutting down');
+        this.streams.clear();
+
         const open = this.listener;
         this.listener = undefined;
         if (open === undefined) return;
@@ -171,8 +193,14 @@ export class ApiService extends ServiceModule {
                 });
             }
 
+            const inner = stripBase(path ?? '/');
+
+            if (inner === EVENTS_PATH) {
+                return await this.subscribe(req, res, site, origin);
+            }
+
             const table = await this.tableFor(site);
-            const found = matchRoute(table, req.method ?? 'GET', stripBase(path ?? '/'));
+            const found = matchRoute(table, req.method ?? 'GET', inner);
 
             const headers = { ...this.cors(origin), [EXPOSURE_HEADER]: table.exposure };
 
@@ -239,6 +267,169 @@ export class ApiService extends ServiceModule {
             if (status >= 500) this.broker?.logger.error(`[api] ${host}${path ?? ''}`, error);
             send(res, status, this.cors(origin), body);
         }
+    }
+
+    /**
+     * Open a subscription.
+     *
+     * A `GET` that never ends. The gate runs **once, here**, exactly as it does for a call — and then
+     * again on every heartbeat, because a stream outlives the request that opened it and a ticket
+     * revoked five minutes in must reach a connection authorised ten minutes ago.
+     */
+    private async subscribe(
+        req: IncomingMessage,
+        res: ServerResponse,
+        site: Site,
+        origin: string | undefined,
+    ): Promise<void> {
+        const headers = this.cors(origin);
+
+        if (req.method !== 'GET') {
+            return send(res, 405, { ...headers, allow: 'GET' }, {
+                error: 'METHOD_NOT_ALLOWED', message: 'A subscription is a GET.',
+            });
+        }
+
+        const table = this.eventsFor(site);
+        if (table.events.length === 0) {
+            // Nothing to stream. A 404 rather than an idle connection, because a subscription that
+            // succeeds and never delivers is the hardest failure here to tell from a working one.
+            return send(res, 404, headers, {
+                error: 'NO_EVENTS',
+                message: table.refused.length === 0
+                    ? 'This site exposes no events.'
+                    : `This site exposes no streamable events. Refused: ${
+                        table.refused.map((r) => `${r.name} (${r.reason})`).join('; ')}`,
+            });
+        }
+
+        const ticket = bearer(req);
+        const caller = await this.tickets?.resolve(ticket);
+        const requestedScope = header(req, SCOPE_HEADER);
+
+        /**
+         * One gate for the whole stream, at its strictest.
+         *
+         * A subscription carries several events with possibly different gates, and a connection is
+         * one thing that either exists or does not. So it is opened only if the caller passes **every**
+         * event's gate, and `offer` filters per event afterwards — which is the conservative order:
+         * a caller who could receive some events gets a refusal rather than a stream that silently
+         * omits the rest.
+         */
+        for (const event of table.events) {
+            const outcome = await executeGate({
+                gate: event.gate,
+                contract: streamPseudoContract(event.name),
+                caller,
+                requestedScope,
+                input: {},
+                ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
+            });
+
+            if (!outcome.ok) {
+                return send(res, outcome.status, headers, {
+                    error: outcome.code,
+                    message: `${outcome.message} (subscribing to ${event.name})`,
+                });
+            }
+        }
+
+        const scopeOf = async (): Promise<Subscriber | undefined> => {
+            const current = ticket === undefined ? undefined : await this.tickets?.resolve(ticket);
+            if (ticket !== undefined && current === undefined) return undefined;
+
+            const outcome = await executeGate({
+                gate: table.events[0]!.gate,
+                contract: streamPseudoContract(table.events[0]!.name),
+                caller: current,
+                requestedScope,
+                input: {},
+                ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
+            });
+            if (!outcome.ok) return undefined;
+
+            return {
+                userId: current?.userId ?? '',
+                scope: outcome.scope,
+                // An operator sees across organizations, and it is granted by the coarse gate having
+                // admitted them to an admin stream rather than by a role read here.
+                operator: current?.roles.includes('admin') ?? false,
+            };
+        };
+
+        const subscriber = await scopeOf();
+        if (subscriber === undefined) {
+            return send(res, 401, headers, {
+                error: 'UNAUTHENTICATED', message: 'That ticket is not accepted.',
+            });
+        }
+
+        /**
+         * A subscriber with no resolved scope receives nothing, so say so now.
+         *
+         * The same failure as an unscopable event, arriving from the other side: every event here is
+         * narrowed by an organization, this caller is acting in none, and `decideDelivery` will
+         * answer `no-subscriber-scope` for every payload forever. The stream would be open, correct
+         * and silent.
+         *
+         * **The usual cause is a site with no `authorize` hook.** The coarse gate cannot resolve a
+         * scope — only the site knows what an organization means to it — so a deployment that exposes
+         * scoped events and configures no hook has built a stream that can never deliver. That is a
+         * misconfiguration, and it should be visible on the first subscription rather than as an
+         * absence nobody can date.
+         */
+        const needsScope = table.events.some((event) => event.scope !== 'global');
+        if (needsScope && !subscriber.operator && subscriber.scope === undefined) {
+            return send(res, 409, headers, {
+                error: 'NO_SCOPE',
+                message: 'Every event this site streams is scoped to an organization, and this call '
+                    + 'resolved none. Name one with the ' + SCOPE_HEADER + ' header — or, if this API '
+                    + 'has no authorize hook, nothing can resolve a scope and no scoped event can '
+                    + 'ever be delivered.',
+            });
+        }
+
+        for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+
+        const stream = openStream({
+            res,
+            events: table.events,
+            subscriber,
+            recheck: scopeOf,
+            onClose: () => { this.streams.delete(stream); },
+        });
+
+        this.streams.add(stream);
+        this.broker?.logger.info(`[api] ${site.host}: subscription opened (${String(this.streams.size)} open)`);
+    }
+
+    /**
+     * An event arrived over the mesh. Offer it to every open stream.
+     *
+     * **Offer, not send.** Each stream decides for its own subscriber, because two connections on one
+     * node belong to different people in different organizations — and the rule is that an event
+     * which cannot be narrowed to a subscriber reaches nobody.
+     */
+    public deliver(name: string, payload: unknown): void {
+        for (const stream of this.streams) stream.offer(name, payload);
+    }
+
+    /** A site's streamable events, cached on the record they came from. */
+    private eventsFor(site: Site): EventTable {
+        const key = `${site.id}:${String(site.updatedAt.getTime())}`;
+        const held = this.eventTables.get(key);
+        if (held !== undefined) return held;
+
+        const built = eventTable(site.mesh);
+        if (built.refused.length > 0) {
+            this.broker?.logger.warn(
+                `[api] ${site.host} exposes events that cannot be streamed: ` +
+                built.refused.map((r) => `${r.name} — ${r.reason}`).join('; '),
+            );
+        }
+
+        this.eventTables.set(key, built);
+        return built;
     }
 
     /**
@@ -333,6 +524,32 @@ export class ApiService extends ServiceModule {
 }
 
 // ---------------------------------------------------------------------------- request pieces
+
+/** A schema for a thing with no input. Shared, because a new one per subscription is waste. */
+const emptySchema = z.object({});
+
+/**
+ * A stand-in contract, so the gate can refuse a subscription the same way it refuses a call.
+ *
+ * `executeGate` takes a contract because its messages name one — *"identity.whoami requires a valid
+ * ticket"* — and an event is not a contract. Rather than a second gate that would drift from the
+ * first, the event's name is wrapped in the shape the gate reads.
+ *
+ * The schemas are never used: nothing validates input on a subscription, because a subscription has
+ * none. Only `domain` and `action` are read, for the message.
+ */
+function streamPseudoContract(eventName: string): Parameters<typeof executeGate>[0]['contract'] {
+    const dot = eventName.lastIndexOf('.');
+    return {
+        domain: dot === -1 ? 'event' : eventName.slice(0, dot),
+        action: dot === -1 ? eventName : eventName.slice(dot + 1),
+        description: `subscription to ${eventName}`,
+        inputSchema: emptySchema,
+        outputSchema: emptySchema,
+        rest: { method: 'GET', path: EVENTS_PATH },
+        print: () => eventName,
+    };
+}
 
 /** 201 for a creation, 200 otherwise. */
 const successStatus = (method: string, action: string): number =>
