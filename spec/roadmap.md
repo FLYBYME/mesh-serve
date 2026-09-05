@@ -51,13 +51,14 @@ These are wrong now, and everything built on top of them inherits the mistake.
       DATABASE_INTEGRATION), so `artifact.digest` and `site.host` are ordinary fields beside a minted
       id. **Two rows can claim the same bytes**, which content addressing exists to prevent. Needs
       the index *and* a check in the writer — the check alone is a race. **S**
-- [ ] **A5a ★ The builder cannot clone a private repository.** *(found 2026-09-06)* Every repository
-      here except `mesh` is private on GitHub, and `gitFetcher` runs `git fetch` with no credential
-      at all. It works today only because a developer's machine has a credential helper configured;
-      a builder pod has nothing. So **the first real build of any first-party part fails**, and it
-      fails as an opaque git error rather than as *"this builder has no credential for that
-      repository"*. Needs a token per source, held where a node can reach it and never in a
-      descriptor. **M**
+- [ ] **A5a The builder cannot clone a private repository.** *(found 2026-09-06; no longer urgent the
+      same day)* `gitFetcher` runs `git fetch` with no credential at all, and works today only
+      because a developer's machine has a credential helper configured — a builder pod has nothing.
+      **`mesh`, `mesh-web`, `mesh-serve` and `mesh-auth` were made public**, so the first real build
+      of a first-party part now succeeds and this stops blocking. It does not stop being true: the
+      first private part, and `surfdns`/`surfdns-console` which are still private, hit it. Needs a
+      token per source, held where a node can reach it and never in a descriptor — and a failure
+      that says *"no credential for that repository"* rather than an opaque git error. **M**
 - [ ] **A6 A test that builds a real repository.** The builder has never run. Everything about it is
       asserted by unit tests over pure functions, and the last time that was true of the declaration
       reader, running it against one real repository found two defects in an afternoon. Needs a
