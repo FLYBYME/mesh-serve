@@ -22,7 +22,7 @@
  * platform is exactly the shape of that mistake.
  */
 
-import { defineCrud, defineEvent, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { SiteSchema } from '../schema/site.js';
 
@@ -61,3 +61,49 @@ export const SiteComposedSchema = z.object({
 export type SiteComposed = z.infer<typeof SiteComposedSchema>;
 
 export const siteComposedEvent = defineEvent('cdn.site_composed', SiteComposedSchema);
+
+// ---------------------------------------------------------------------------- composing
+
+/**
+ * Resolve what this site asked for into what it will actually serve.
+ *
+ * Explicit, and never a hook on `site.update`, for the reason this repository keeps CRUD
+ * unhooked: composing calls the catalog to resolve version ranges, refuses when a part requires a
+ * contract the site does not grant, and writes `resolution` — a dependency, an invariant and a side
+ * effect, none of which a generated handler should be quietly carrying.
+ *
+ * It is also why `resolution` is a separate field from `parts`. `parts` is what a person asked for
+ * and is theirs to write; `resolution` is what was composed and is only ever written here. Collapsing
+ * them would make *what is this site actually running* unanswerable, which is the exact failure the
+ * previous generation is being replaced for.
+ *
+ * ## What it refuses
+ *
+ * **A requirement with no grant.** Every part declares the contracts it calls; the site declares what
+ * it exposes and at what gate. A part calling something the site does not grant is refused here,
+ * naming the part and the contract — not discovered as a 404 by whoever opens the page.
+ *
+ * A grant with no requirement is *reported*, not refused: that is the route nobody deleted when they
+ * deleted the screen that used it, and it is worth seeing without being fatal.
+ */
+export const siteComposeContract = defineContract({
+    domain: 'cdn',
+    action: 'site_compose',
+    description: 'Resolve a site\'s parts, generate its page, and record what it now serves.',
+    inputSchema: z.object({
+        host: z.string().min(1),
+        /** Compose and report without writing. What a deploy runs before it decides to. */
+        dryRun: z.boolean().optional(),
+    }),
+    outputSchema: z.object({
+        host: z.string(),
+        page: z.string().describe('→ artifact.digest of the generated page'),
+        kernel: z.string(),
+        parts: z.record(z.string(), z.string()).describe('part id → artifact digest'),
+        /** Contracts the site grants that no part asked for. Reported, never fatal. */
+        unusedGrants: z.array(z.string()),
+    }),
+    rest: { method: 'POST', path: '/sites/:host/compose' },
+    destructive: true,
+    print: (o) => `${o.host} → ${o.page}`,
+});

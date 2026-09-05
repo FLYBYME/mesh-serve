@@ -52,6 +52,31 @@ part's repository. There is no resolution step, so a missing dependency is a bui
 than a network round trip — and a build is reproducible from a commit with nothing else in the world
 required.
 
+### 3a. A repository names an entry, not a command — **Decided**
+
+The consequence of §3, and it is a bigger change than it sounds.
+
+The predecessor's descriptor carried `ui.build` — a shell command the builder ran with `sh -c` — and
+`ui.output`, the directory it was expected to have written. That is what made `npm ci` possible in
+the first place, and it made the builder's threat model *arbitrary code from a repository*.
+
+There is no `build` field now. A part declares an **entry** — `src/app.ts` — and the builder runs
+esbuild against it. What a repository can ask for is a bundle of its own source, and nothing else.
+
+What is given up: a repository can no longer run a pre-build step. That is deliberate — a pre-build
+step is where `npm ci` came back, and a build that runs a repository's own tooling is a build that
+cannot be reproduced from a commit alone.
+
+### 3b. Requirements are declared per part, not per repository — **Decided**
+
+A repository builds several parts: `surfdns-console` is a chrome extension and an application in one
+tree. `mesh` — the contracts a part calls — hangs off each part, not off the repository.
+
+A repository-level list would make every part declare every contract any of them calls, so a site
+loading only the chrome extension would have to grant it the domain contracts the console app uses.
+**Over-declaring a requirement turns the grant check into a formality**, which is the one thing it
+must not become.
+
 ## 4. An artifact declares what it is — **Decided, built in the predecessor**
 
 An artifact carries a `Declaration`: the parts it provides, and `builtAgainst` — the versions it was

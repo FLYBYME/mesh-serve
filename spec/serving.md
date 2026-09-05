@@ -2,34 +2,51 @@
 
 The cdn: hostname in, bytes out.
 
-**Status: mounts are Decided and built in the predecessor. Page generation is Decided in shape and
-unbuilt.**
+**Status: the URL space and the page generator are Decided and built as pure functions
+(`src/cdn/methods/`). Nothing is wired to a broker or a port yet.**
 
 ---
 
-## 1. A site serves several artifacts — **Decided, built**
+## 1. An artifact's URL is its hash — **Decided, built**
 
 The blocker for the whole kernel/apps split was one word: `Site.artifactDigest` was **singular**, and
 the serving path resolved every request against that one artifact. A hostname served exactly one
 thing, so a site that wanted a framework had **nowhere to reference one from** — which is why every
 site copied it in.
 
-A site carries **mounts**: a path prefix and an artifact digest. Longest prefix wins. Two rules,
-both with tests, because both fail silently:
+The first fix was **mounts**: a chosen path prefix per artifact, longest prefix wins, matching on a
+segment boundary so that `/framework` could not steal `/frameworks-of-the-world.html` from a site
+that already served it. That worked, and the bug it had to defend against is the argument for not
+naming artifacts at all.
 
-**A prefix matches on a segment boundary.** Otherwise mounting `/framework` quietly steals
-`/frameworks-of-the-world.html` from a site that already served it. Verified by disabling the check
-and watching the test fail.
+**Superseded 2026-09-06.** An artifact is bytes and a hash, so its URL is its hash. Every composed
+artifact is served under one reserved prefix — `/_a/<hash>/` — and the site's own generated page
+answers everything else.
 
-**A mount is not a redirect.** It resolves within its own artifact, so the entry-document fallback —
-serve `index.html` for an unmatched path, which is what makes client-side routing work — applies to
-the *mounted* artifact. A kernel artifact has no `index.html`, which is exactly what makes a missing
-module return 404 instead of HTML that reaches a developer as `Unexpected token '<'`.
+| | mounts | hashes |
+| --- | --- | --- |
+| can a new part shadow an existing page? | yes, unless the boundary rule holds | **no** — there is one reserved prefix |
+| cache header | per file, decided by looking at the name | **per URL**: `/_a/` is immutable, the page is not |
+| redeploying a part | same URL, new bytes | **new URL**; the old one is not stale, it is unreferenced |
 
-Blobs are shared by digest in the store, so two sites mounting one kernel store it once. The waste was
+The cost is unreadable URLs in a network tab, paid once by whoever is debugging, against a class of
+collision paid by whoever deploys. `spec/composition.md` already said a part is chosen by version and
+served by digest; this makes the URL say the same thing.
+
+**A site may only serve what it composed.** The digest in a URL is a claim, checked against that
+site's own `resolution`. Without the check `/_a/<any digest>/` is an open proxy into every other
+tenant's code — served from *this* site's origin, which is the boundary the isolation model rests on.
+It is a 404, not a 403: which artifacts exist is not something an anonymous request gets to probe.
+
+**The entry-document fallback belongs to the artifact, not the site.** Serving `index.html` for an
+unmatched path is what makes client-side routing work, and it applies within whichever artifact
+answered. A part artifact has no `index.html`, so a missing module 404s instead of returning HTML
+that reaches a developer as `Unexpected token '<'` — without needing a rule of its own.
+
+Blobs are shared by digest in the store, so two sites using one kernel store it once. The waste was
 never storage; it was **different URLs**, and therefore different module instances.
 
-## 2. The page is generated, not written — **Decided**
+## 2. The page is generated, not written — **Decided, built**
 
 Nobody writes `index.html`. Nobody writes a boot file.
 
@@ -57,6 +74,57 @@ needs its caching special-cased.
 The inversion this completes: the kernel loads a part and the part hands back what it built. Then
 `getElementById` goes, the notification surface stops being an app writing raw `createElement`,
 `export { page }` becomes real, and `index.html` has nothing left to do.
+
+### 2a. The cdn generates a composition, never framework code — **Decided**
+
+The rule that keeps the generator small, and the reason it *is* small.
+
+The console's `main.ts` was 140 lines. Almost none of it was about that console: it constructed a
+`WindowManager`, chose four settings hives and their providers, installed `windowPersistence`, wired
+`kernel.services.meshClient` through `withHeaders`, built a component registry from `PRIMITIVES`,
+called `mountPage`, ran an `effect` to render notifications into `#notifications`, and added a resize
+listener. **Identical on every site**, all of it.
+
+If the cdn generated that, the cdn would have to be updated whenever the kernel changed — a code
+generator that tracks another package's internals is a second copy of that package. So it generates
+only what it actually knows:
+
+```js
+import { start } from '/_a/9f2c1a/index.js';
+import part0 from '/_a/3ab77e/index.js';
+import part1 from '/_a/c40d21/index.js';
+
+start({
+    application: 'surfdns-console',
+    api: document.documentElement.dataset.api ?? '',
+    policy: { "window-manager/mode": "tiled" },
+    parts: [
+        { id: 'chrome', contribution: part0 },
+        { id: 'process-monitor', contribution: part1 },
+    ],
+});
+```
+
+**The order in `parts` is not the order they start.** The kernel resolves that from what each part
+provides and consumes, which is also what lets the generator emit them in id order and stay
+deterministic — the page is hashed, so non-determinism would mean a new digest on every deploy that
+changed nothing.
+
+**`start` does not exist yet.** That is the point of writing the file first: the generated output is
+what says what the kernel owes. Logged against mesh-web, not here — a kernel entry point is the
+framework's job, and putting it in the cdn is how the 140 lines got written the first time.
+
+Two smaller things the page settles:
+
+- **The import map resolves the framework to exactly one URL.** A part is built with the framework
+  `external`, so its bare `import … from '@flybyme/mesh-web'` has to resolve somewhere; two URLs
+  would be two module graphs and two of every singleton, which no amount of testing one part at a
+  time would reveal. There is a test asserting the map and the boot module name the same URL.
+- **The theme is checked, not trusted.** A site record is written by its owner, who is not
+  necessarily the operator of this cdn, and the page is the platform's own output. A token value
+  containing `}` would close the rule and let a site write arbitrary CSS into a document it does not
+  own. Refused loudly — silently dropping a token is a theme that is subtly wrong with nothing to
+  point at.
 
 ## 3. Styles and themes — **Decided in shape**
 

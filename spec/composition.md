@@ -64,10 +64,35 @@ Composing is checking one list against the other:
 This is `needs()` / `provides()` one level up. A part declares what it needs, the site grants it, and
 the thing that assembles them refuses when a need is unmet.
 
-## 4. Every part carries its own descriptor — **Decided**
+## 4. Every part carries its own descriptor — **Decided, built**
 
-`{ kind, id, version, kernel, mesh: [{ package, version, contracts: ["…"] }] }` — keys only, no
-gates.
+`src/builder/schema/descriptor.ts`. This is the second file called `mesh.json`, and it is build input
+rather than a record:
+
+```json
+{
+    "kernel": "^1.4",
+    "parts": [
+        { "kind": "extension", "id": "chrome", "version": "1.0.0", "entry": "src/chrome.ts" },
+        {
+            "kind": "application", "id": "process-monitor", "version": "1.0.0", "entry": "src/app.ts",
+            "mesh": [{
+                "package": "@flybyme/surfdns-domains",
+                "version": "^2.1",
+                "contracts": ["domains.zone_find", "domains.zone_create"]
+            }]
+        }
+    ]
+}
+```
+
+**Keys only, and there is nowhere to put a gate** — that is the schema enforcing §3 rather than a
+convention asking for it. `kernel` sits at the repository level because it is a property of the tree;
+`mesh` sits per part, because a repository-level list would make every part declare every contract
+any of them calls. What it refuses, each with a test: a part with no id, two parts sharing one, an
+entry that leaves the repository, a package named with no contracts taken from it, and any field
+nobody defined — a stray `"build"` key parses as a command that is never run, and the author waits
+for a build step that does not exist.
 
 A part is then self-contained: install it into any site and it says what it needs. An extension that
 talks to nothing declares nothing. A site's total requirement is the union of its parts', which means
