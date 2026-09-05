@@ -16,7 +16,7 @@ a finding that came from looking at a screen is worth more than a paragraph that
 | [serving.md](./serving.md) | The cdn: an artifact's URL is its hash, the generated page, styles and themes. |
 | [exposure.md](./exposure.md) | What goes on the internet: contracts by name, gates, and the CRUD discipline that paas did not have. |
 | [fleet.md](./fleet.md) | Nodes announce, fleet reacts. The standard way to run a service anywhere. |
-| [roadmap.md](./roadmap.md) | **The gap between those documents and `src/`**, in dependency order. Start here. |
+| [roadmap.md](./roadmap.md) | **The gap between those documents and `src/`** — five milestones, five tracks, in dependency order. Start here. |
 
 ## What this repository is
 
