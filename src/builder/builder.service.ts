@@ -37,6 +37,14 @@ export interface BuilderServiceOptions {
     /** Where bytes go. Defaults to GridFS on the framework's database, resolved at start. */
     readonly blobs?: BlobStore;
     readonly maxBytes?: number;
+    /**
+     * The origin content is downloaded from — what `artifact_blob` puts in front of a digest.
+     *
+     * A deployment decision, not a builder one: it is wherever these bytes are reachable from, which
+     * behind a proxy is not the address of any node. Absent means relative, which is only correct
+     * when the caller is on the same origin.
+     */
+    readonly blobOrigin?: string;
 }
 
 export class BuilderService extends ServiceModule {
@@ -63,11 +71,21 @@ export class BuilderService extends ServiceModule {
         this.mountCrud(artifactCrud);
         this.mountCrud(buildCrud);
 
-        // No `.bind(this)`: `ServiceModule.execute` invokes a handler with `handler.call(this, …)`,
-        // so a tool written as `function (this: BuilderService, …)` gets the service for free.
         this.mountTool(buildStartContract, builder_build_start);
         this.mountTool(getArtifactContract, builder_get_artifact);
         this.mountTool(artifactBlobContract, builder_artifact_blob);
+    }
+
+    /**
+     * Where a digest is downloaded from.
+     *
+     * The digest is the whole path, so the URL is immutable and cacheable forever — and two callers
+     * asking about the same content are handed the same address, which is what lets anything in
+     * front of it cache once for everybody.
+     */
+    public blobUrl(digest: string): string {
+        const slug = digest.slice(digest.indexOf(':') + 1);
+        return `${this.options.blobOrigin ?? ''}/blobs/${slug}`;
     }
 
     async onStart(broker: IServiceBroker): Promise<void> {

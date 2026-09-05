@@ -1,15 +1,17 @@
 /**
- * `builder.artifact_blob` — one file's bytes, by content digest.
+ * `builder.artifact_blob` — where to download one file of an artifact.
  *
- * The only way content leaves the builder, and **one hop per file per node**: a serving node caches
- * by digest, and a digest can never come to mean different bytes, so a cold cache is slower rather
- * than wrong.
+ * **The mesh answers questions; content moves over HTTP.** This returns a URL rather than bytes: a
+ * kernel bundle is megabytes, base64 adds a third again, and the whole of it would travel as one
+ * JSON-encoded broker message held complete in memory at both ends — on a transport meant for
+ * control messages.
  *
- * Base64, because the wire is JSON. That is a 33% overhead on a call made once per file per node
- * for its lifetime, which is the right thing to trade against a second transport nobody else needs.
+ * The caller then fetches it the ordinary way, streaming, in parallel, with caching and range
+ * requests it did not have to invent. And because the digest *is* the content, the URL is stable
+ * forever and a node that already holds those bytes never asks at all.
  */
 
-import { z, type IServiceContext } from '@flybyme/mesh';
+import { ClientError, z, type IServiceContext } from '@flybyme/mesh';
 
 import type { BuilderService } from '../builder.service.js';
 import { artifactBlobContract } from '../contracts/artifact.contract.js';
@@ -22,12 +24,14 @@ export async function builder_artifact_blob(
     input: Input,
     _ctx: IServiceContext,
 ): Promise<Output> {
-    const content = await this.blobs.get(input.digest);
+    const held = await this.blobs.stat(input.digest);
 
-    // Absent rather than an error: "this node does not hold it" is an ordinary answer, and the
-    // caller's next move — ask another node — is the same either way. An error would make a normal
-    // cache miss look like a fault.
-    return content === undefined
-        ? { size: 0 }
-        : { content: content.toString('base64'), size: content.length };
+    if (held === undefined) {
+        // 404 rather than a URL that will 404 later. Handing back an address for content this
+        // cluster does not have moves the failure to whoever fetches it, at which point the only
+        // symptom is a missing module in someone's browser.
+        throw new ClientError(`No blob with digest ${input.digest}.`, 'blob_not_found', 404);
+    }
+
+    return { url: this.blobUrl(input.digest), size: held.size };
 }

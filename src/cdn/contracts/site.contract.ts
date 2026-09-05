@@ -110,7 +110,7 @@ export const siteComposedEvent = defineEvent('cdn.site_composed', SiteComposedSc
 export const siteComposeContract = defineContract({
     domain: 'cdn',
     action: 'site_compose',
-    description: 'Resolve a sites parts, generate its page, and record what it now serves.',
+    description: 'Resolve a site\'s parts, generate its page, and record what it now serves.',
     inputSchema: z.object({
         host: z.string().min(1),
         /** Compose and report without writing. What a deploy runs before it decides to. */

@@ -73,7 +73,7 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_builder_getArtifactContract_get_artifact, Contract_0.getArtifactContract.inputSchema);
-    const cmd_builder_artifactBlobContract_artifact_blob = builder.command('artifact_blob').description(`Fetch one file of an artifact by its content digest.`);
+    const cmd_builder_artifactBlobContract_artifact_blob = builder.command('artifact_blob').description(`Where to download one file of an artifact, by its content digest.`);
     cmd_builder_artifactBlobContract_artifact_blob.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
             await executeCommand('builder.artifact_blob', o, Contract_0.artifactBlobContract, cmd.optsWithGlobals());
@@ -246,7 +246,7 @@ export function registerGeneratedCommands(program: Command) {
     });
     ZodToCliMapper.applyOptions(cmd_build_buildCrud_delete_delete, Contract_0.buildCrud['delete'].inputSchema);
     const cdn = program.command('cdn').description('cdn tools');
-    const cmd_cdn_siteComposeContract_site_compose = cdn.command('site_compose').description(`Resolve a sites parts, generate its page, and record what it now serves.`);
+    const cmd_cdn_siteComposeContract_site_compose = cdn.command('site_compose').description(`Resolve a site's parts, generate its page, and record what it now serves.`);
     cmd_cdn_siteComposeContract_site_compose.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
             await executeCommand('cdn.site_compose', o, Contract_1.siteComposeContract, cmd.optsWithGlobals());

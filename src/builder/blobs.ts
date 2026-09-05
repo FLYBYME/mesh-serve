@@ -24,6 +24,14 @@ interface DatabaseProvider {
 
 export interface BlobStore {
     has(digest: string): Promise<boolean>;
+    /**
+     * How big it is, without reading it.
+     *
+     * The question a caller asking *where do I download this* actually needs answered, and the one
+     * `has` cannot answer. Separate from `get` because answering it must not pull megabytes through
+     * a process that is only going to hand back a URL.
+     */
+    stat(digest: string): Promise<{ readonly size: number } | undefined>;
     get(digest: string): Promise<Buffer | undefined>;
     put(digest: string, content: Buffer): Promise<void>;
 }
@@ -48,8 +56,15 @@ export function gridfsBlobStore(database: DatabaseProvider): BlobStore {
 
     return {
         async has(digest) {
-            const found = await bucketOf().find({ filename: digest }, { limit: 1 }).toArray();
-            return found.length > 0;
+            return await this.stat(digest) !== undefined;
+        },
+
+        async stat(digest) {
+            // GridFS keeps a `files` document per blob carrying its length, so size is an index
+            // lookup rather than a read. That is what lets `artifact_blob` answer *how big is it*
+            // without pulling megabytes through a process that is only going to return a URL.
+            const [found] = await bucketOf().find({ filename: digest }, { limit: 1 }).toArray();
+            return found === undefined ? undefined : { size: found.length };
         },
 
         async get(digest) {

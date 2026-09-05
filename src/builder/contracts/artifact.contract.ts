@@ -120,29 +120,34 @@ export const getArtifactContract = defineContract({
 });
 
 /**
- * The bytes of one file.
+ * **Where** to download one file of an artifact — not the file.
  *
- * Base64 over the mesh, and the only way content leaves the builder. **One hop per file per node**:
- * a serving node caches by digest, and a digest can never come to mean different bytes, so a cold
- * cache is slower rather than wrong.
+ * The first version returned the bytes as base64 over the mesh, and that does not survive contact
+ * with a real artifact. A kernel bundle is megabytes; base64 adds a third again; and every byte
+ * would be JSON-encoded into a single broker message, held whole in memory at both ends, on a
+ * transport built for control messages rather than for content. The failure mode is not slowness,
+ * it is a frame that a transport refuses at some size nobody chose.
  *
- * `internal`, and it must stay that way. Blobs are addressed by hash with no tenant on them — the
- * check that a site may serve a given artifact lives in the cdn, against that site's own
- * composition. Exposing this would route around it.
+ * So the contract hands back a URL and the caller fetches it over HTTP, streaming, in parallel, with
+ * range requests and caching it did not have to invent. **The mesh answers questions; content moves
+ * over HTTP.**
+ *
+ * The URL is stable for the life of the content because the digest *is* the content, so a caller may
+ * cache the answer as long as it likes — and a node that already holds those bytes never asks.
  */
 export const artifactBlobContract = defineContract({
     domain: 'builder',
     action: 'artifact_blob',
-    description: 'Fetch one file of an artifact by its content digest.',
+    description: 'Where to download one file of an artifact, by its content digest.',
     inputSchema: z.object({ digest: z.string().min(1) }),
     outputSchema: z.object({
-        content: z.string().optional().describe('base64; absent when this node does not hold it'),
+        url: z.string().describe('Absolute, and safe to cache: a digest cannot come to mean other bytes'),
         size: z.number(),
     }),
     // Required by `defineContract`, and declaring one is not exposing one: a REST shape says how this
     // *would* be addressed, and whether any site puts it on the internet is that site's decision.
     rest: { method: 'GET', path: '/builder/blobs/:digest' },
-    print: (o) => (o.content === undefined ? 'not held' : `${String(o.size)} bytes`),
+    print: (o) => `${o.url} (${String(o.size)} bytes)`,
 });
 
 // ---------------------------------------------------------------------------- events
