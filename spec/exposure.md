@@ -122,6 +122,68 @@ deployment's decision rather than a contract author's.
 The record carries `key` and the gate. **Schemas come from the broker's registry**, populated when the
 owning module mounts. The api joins the two and hashes the result.
 
+## 6a. How the module is shaped — **Decided 2026-09-06**
+
+The api is **the cdn's twin**. Both resolve `Host → site`, both bind a port, both cache the same
+records with the same invalidation. One serves files and the other serves calls, and that is the only
+difference worth a separate module.
+
+So it takes the shape the other three services already have — `contracts/`, `schema/`, `methods/`,
+`tools/`, one `api.service.ts` — with one thing that makes it unlike them:
+
+> **It owns no collections.**
+
+What a site exposes is `site.mesh`, owned by the cdn. Tickets are identity's. The exposure hash is
+derived from the two. So `api.service.ts` calls `mountCrud` **zero times**, and every record it reads
+comes through another service's contract. That is not an omission; it is what *the api is a
+projection* means, and if it ever grows a collection the first question is which service should have
+owned it.
+
+### What survives from mesh-api, and what does not
+
+| | |
+| --- | --- |
+| `auth/gate.ts` | **keep.** `SCOPE_HEADER`, the caller model, and the argument for one header rather than four caller-controlled names in three places. |
+| `auth/tickets.ts`, `revocations.ts` | **keep.** The revocation-epoch poller is subtle and correct. |
+| `server/input.ts` | **keep.** Coercing a query string to a zod schema is fiddly and done. |
+| `server/rest.ts`'s *inner* logic | **keep** — error-to-status mapping, `DeclaredFailure`, the exposure header. |
+| `server/rest.ts`'s *structure* | **goes.** It takes `expose: ExposeEntry[]` and mounts one express route per contract **at boot**. A fixed route table known at startup is exactly what routes-from-the-record replaces: a route now depends on which hostname asked. |
+| express | **goes.** The cdn proved `node:http` is enough for *resolve a host, look up a table, answer*, and a framework for that is a dependency earning nothing. |
+| `createWebServer` | **goes.** It gates on `instanceof WebServiceModule`, the class model this repository left. |
+| `module/exposure-collection.ts` | **goes as a collection, stays as an idea.** It kept a heartbeat of which node exposes what; the site record answers that now without a second source of truth. |
+
+### The request path
+
+```
+Host → site → route table → gate → broker.call(key, input, { meta }) → response
+```
+
+Every step is a lookup except the gate, and the gate is where the caller stops being anonymous: a
+ticket resolves to a principal, `x-organization` resolves to a scope, and both go into `meta` so the
+handler on the other side of the broker sees who is asking.
+
+The route table is **derived from the record, cached with it**. `site.mesh` names contract keys; the
+broker's registry has each contract's `rest.method` and `rest.path` and its schemas. The api joins the
+two — which is also the only place both halves exist, and therefore where the exposure hash is
+computed.
+
+### The one thing this cannot fix
+
+**Scope has to reach `defineCrud`, and that is a change to mesh rather than to this module.**
+
+The api can resolve a caller's organization and put it in `meta`. It cannot make a generated `find`
+use it: the query is built inside the framework's CRUD path, which knows nothing about a scope. So the
+api can refuse a *caller* and still hand back every row.
+
+Writing the filter here instead would be worse than not having it — a second copy of authorization,
+sitting beside a CRUD path that bypasses it, is how a rule comes to be true on the routes somebody
+remembered.
+
+The shape the framework needs is a collection declaring what scopes it: `defineCrud('site',
+SiteSchema, { scopedBy: 'tenantId' })`, so `find` is *always* within the caller's resolved scope and
+an unscoped one is unrepresentable rather than discouraged. Until then, [§1](#1-generate-everything-expose-almost-nothing)'s
+rule stands as a discipline — and a discipline is what paas had.
+
 ## 7. Three credential planes, never confused — **Decided**
 
 | plane | who | credential |

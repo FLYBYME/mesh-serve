@@ -194,14 +194,28 @@ Nothing resolves until this exists. Every version a site names is a row here.
 
 ## Track D — The api
 
-- [ ] **D1 Move it out of mesh-api before mesh-api is deleted.** 2,923 source lines and 2,713 test
-      lines, including the only implementations of the REST/SSE server, the gate, and
-      `SCOPE_HEADER`. **Order matters: move, then delete.** **L**
+- [ ] **D1 Move it out of mesh-api before mesh-api is deleted.** **Not a port** — the shape is decided
+      in [exposure.md §6a](./exposure.md). The api is the cdn's twin: `Host → site`, bind a port,
+      same records, same invalidation; one serves files and the other serves calls.
+      **It owns no collections**, which makes it unlike the other three services — `site.mesh` is the
+      cdn's, tickets are identity's, and the exposure hash is derived from both. `mountCrud` is called
+      zero times.
+      Kept: `gate.ts` (`SCOPE_HEADER` and its argument), the ticket cache and revocation poller,
+      `input.ts`'s query coercion, and `rest.ts`'s error mapping and `DeclaredFailure`.
+      **Dropped: `rest.ts`'s structure and express.** It takes `expose: ExposeEntry[]` and mounts one
+      route per contract *at boot*, and a fixed route table known at startup is precisely what D2
+      replaces. The cdn proved `node:http` answers *resolve a host, look up a table, reply* without a
+      framework. **L**
 - [ ] **D2 ★ Routes come from the record.** Host → site → release → `mesh[]` → routes, exactly as the
       cdn resolves Host → site → artifact. Same cache, same invalidation. It makes the gate **per
       site**: one site may expose `domains.zone_find` as public while another requires `user`. **M** ·
       ⛔ C1, D1
-- [ ] **D3 ★ Scope must reach `defineCrud`.** This is the specific way 100,000 lines of paas went
+- [ ] **D3 ★ Scope must reach `defineCrud`. *This is a change to mesh, not to the api.*** The api can
+      resolve a caller's organization into `meta`; it cannot make a generated `find` use it, because
+      the query is built inside the framework's CRUD path. Writing the filter in the api instead
+      would be a second copy of authorization sitting beside a path that bypasses it. The shape the
+      framework needs: `defineCrud('site', SiteSchema, { scopedBy: 'tenantId' })`, so an unscoped
+      find is unrepresentable rather than discouraged. This is the specific way 100,000 lines of paas went
       wrong. The `authorize` hook already takes a requested scope and returns a resolved one;
       `defineCrud` has no idea it exists. **Authorization can refuse a caller but cannot narrow a
       result set**, so an unbounded `find` returns every row there is and no contract could have said
