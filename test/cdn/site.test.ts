@@ -18,11 +18,9 @@ const site = (over: Record<string, unknown> = {}) => ({
     application: 'surfdns-console',
     tenantId: 'org-1',
     api: 'https://console.surfdns.net/api',
-    kernel: '^1.4',
-    parts: [
-        { kind: 'extension', id: 'chrome', version: '^1.0' },
-        { kind: 'application', id: 'process-monitor', version: '*' },
-    ],
+    // What it serves is a release, not a composition of its own. Changing this one field is the
+    // deploy, and pointing two sites at it makes them provably identical.
+    releaseHash: 'sha256:abc123',
     mesh: [{
         package: '@flybyme/surfdns-domains',
         version: '^2.1',
@@ -70,30 +68,51 @@ describe('a dependency that takes nothing is refused', () => {
     });
 });
 
-describe('desired and resolved are different fields with different writers', () => {
-    it('parses a site that has never been composed', () => {
-        const parsed = SiteSchema.safeParse(site());
-
-        expect(parsed.success).toBe(true);
-        expect(parsed.success && parsed.data.resolution).toBeUndefined();
+describe('what runs is separate from where it runs', () => {
+    it('holds no composition of its own', () => {
+        // It used to hold a kernel range, part ranges, and the resolution of both. While it did,
+        // two sites naming `^1.4` resolved independently and at different times — so "staging runs
+        // the same code as production" was a claim nobody could check.
+        const fields = Object.keys(SiteSchema.shape);
+        expect(fields).not.toContain('kernel');
+        expect(fields).not.toContain('parts');
+        expect(fields).not.toContain('resolution');
     });
 
-    it('keeps the requirement and the resolved digest side by side', () => {
+    it('names a release instead, and that one field is the deploy', () => {
+        expect(SiteSchema.parse(site()).releaseHash).toBe('sha256:abc123');
+    });
+
+    it('parses a site that has never been deployed', () => {
+        // A hostname reserved before its first deploy. Ordinary, not an error.
+        const { releaseHash: _, ...reserved } = site();
+        const parsed = SiteSchema.safeParse(reserved);
+
+        expect(parsed.success).toBe(true);
+        expect(parsed.success && parsed.data.releaseHash).toBeUndefined();
+    });
+
+    it('keeps what it exposes, because that is the deployment\'s decision', () => {
+        // A release says what its parts *call*; the site says what is reachable and at what gate.
+        // One site may expose a contract as public while another requires `user`, on one release.
+        expect(SiteSchema.parse(site()).mesh[0]?.contracts).toHaveLength(1);
+    });
+});
+
+describe('what a person and a crawler read', () => {
+    it('lives on the site, because two sites on one release are different identities', () => {
         const parsed = SiteSchema.parse(site({
-            resolution: {
-                kernel: { version: '1.4.7', digest: 'sha256:aaa' },
-                parts: { chrome: { version: '1.0.3', digest: 'sha256:bbb' } },
-                exposure: 'sha256:ccc',
-                page: 'sha256:ddd',
-                resolvedAt: new Date(0),
-            },
+            title: 'surfdns console', description: 'Operate your zones.',
         }));
 
-        // `^1.0` is what someone asked for; `1.0.3` is what is running. Collapsing them would make
-        // "what is this site actually running" unanswerable, which is the question the whole
-        // declared/desired/observed split exists to keep answerable.
-        expect(parsed.parts[0]?.version).toBe('^1.0');
-        expect(parsed.resolution?.parts['chrome']?.version).toBe('1.0.3');
+        expect(parsed.title).toBe('surfdns console');
+        expect(parsed.description).toBe('Operate your zones.');
+    });
+
+    it('is indexable unless a site says otherwise', () => {
+        // A staging site on the same release as production must be able to say no.
+        expect(SiteSchema.parse(site()).indexable).toBe(true);
+        expect(SiteSchema.parse(site({ indexable: false })).indexable).toBe(false);
     });
 });
 

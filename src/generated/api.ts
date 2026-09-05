@@ -2,8 +2,9 @@
 import { z } from 'zod';
 import * as Contract_0 from '../builder/contracts/artifact.contract.js';
 import * as Contract_1 from '../catalog/contracts/part.contract.js';
-import * as Contract_2 from '../cdn/contracts/site.contract.js';
-import * as Contract_3 from '../identity/contracts/identity.contract.js';
+import * as Contract_2 from '../cdn/contracts/release.contract.js';
+import * as Contract_3 from '../cdn/contracts/site.contract.js';
+import * as Contract_4 from '../identity/contracts/identity.contract.js';
 
 declare global {
     interface IServiceToolRegistry {
@@ -44,22 +45,30 @@ declare global {
         'partVersion.resolve': { params: z.input<typeof Contract_1.partVersionCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_1.partVersionCrud['resolve']['outputSchema']> };
         'partVersion.update': { params: z.input<typeof Contract_1.partVersionCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_1.partVersionCrud['update']['outputSchema']> };
         'partVersion.delete': { params: z.input<typeof Contract_1.partVersionCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_1.partVersionCrud['delete']['outputSchema']> };
-        'cdn.site_compose': { params: z.input<typeof Contract_2.siteComposeContract['inputSchema']>, returns: z.infer<typeof Contract_2.siteComposeContract['outputSchema']> };
-        'site.create': { params: z.input<typeof Contract_2.siteCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['create']['outputSchema']> };
-        'site.find': { params: z.input<typeof Contract_2.siteCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['find']['outputSchema']> };
-        'site.find_one': { params: z.input<typeof Contract_2.siteCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['findOne']['outputSchema']> };
-        'site.count': { params: z.input<typeof Contract_2.siteCrud['count']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['count']['outputSchema']> };
-        'site.get': { params: z.input<typeof Contract_2.siteCrud['get']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['get']['outputSchema']> };
-        'site.resolve': { params: z.input<typeof Contract_2.siteCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['resolve']['outputSchema']> };
-        'site.update': { params: z.input<typeof Contract_2.siteCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['update']['outputSchema']> };
-        'site.delete': { params: z.input<typeof Contract_2.siteCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_2.siteCrud['delete']['outputSchema']> };
-        'identity.ticket_issue': { params: z.input<typeof Contract_3.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_3.ticketIssueContract['outputSchema']> };
-        'identity.ticket_validate': { params: z.input<typeof Contract_3.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_3.ticketValidateContract['outputSchema']> };
-        'identity.ticket_revoke': { params: z.input<typeof Contract_3.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_3.ticketRevokeContract['outputSchema']> };
-        'identity.revocations_since': { params: z.input<typeof Contract_3.revocationsSinceContract['inputSchema']>, returns: z.infer<typeof Contract_3.revocationsSinceContract['outputSchema']> };
-        'identity.whoami': { params: z.input<typeof Contract_3.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_3.whoamiContract['outputSchema']> };
-        'identity.register': { params: z.input<typeof Contract_3.registerContract['inputSchema']>, returns: z.infer<typeof Contract_3.registerContract['outputSchema']> };
-        'identity.permits': { params: z.input<typeof Contract_3.permitsContract['inputSchema']>, returns: z.infer<typeof Contract_3.permitsContract['outputSchema']> };
+        'cdn.compose': { params: z.input<typeof Contract_2.composeContract['inputSchema']>, returns: z.infer<typeof Contract_2.composeContract['outputSchema']> };
+        'release.create': { params: z.input<typeof Contract_2.releaseCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['create']['outputSchema']> };
+        'release.find': { params: z.input<typeof Contract_2.releaseCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['find']['outputSchema']> };
+        'release.find_one': { params: z.input<typeof Contract_2.releaseCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['findOne']['outputSchema']> };
+        'release.count': { params: z.input<typeof Contract_2.releaseCrud['count']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['count']['outputSchema']> };
+        'release.get': { params: z.input<typeof Contract_2.releaseCrud['get']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['get']['outputSchema']> };
+        'release.resolve': { params: z.input<typeof Contract_2.releaseCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['resolve']['outputSchema']> };
+        'release.update': { params: z.input<typeof Contract_2.releaseCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['update']['outputSchema']> };
+        'release.delete': { params: z.input<typeof Contract_2.releaseCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['delete']['outputSchema']> };
+        'site.create': { params: z.input<typeof Contract_3.siteCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['create']['outputSchema']> };
+        'site.find': { params: z.input<typeof Contract_3.siteCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['find']['outputSchema']> };
+        'site.find_one': { params: z.input<typeof Contract_3.siteCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['findOne']['outputSchema']> };
+        'site.count': { params: z.input<typeof Contract_3.siteCrud['count']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['count']['outputSchema']> };
+        'site.get': { params: z.input<typeof Contract_3.siteCrud['get']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['get']['outputSchema']> };
+        'site.resolve': { params: z.input<typeof Contract_3.siteCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['resolve']['outputSchema']> };
+        'site.update': { params: z.input<typeof Contract_3.siteCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['update']['outputSchema']> };
+        'site.delete': { params: z.input<typeof Contract_3.siteCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_3.siteCrud['delete']['outputSchema']> };
+        'identity.ticket_issue': { params: z.input<typeof Contract_4.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_4.ticketIssueContract['outputSchema']> };
+        'identity.ticket_validate': { params: z.input<typeof Contract_4.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_4.ticketValidateContract['outputSchema']> };
+        'identity.ticket_revoke': { params: z.input<typeof Contract_4.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_4.ticketRevokeContract['outputSchema']> };
+        'identity.revocations_since': { params: z.input<typeof Contract_4.revocationsSinceContract['inputSchema']>, returns: z.infer<typeof Contract_4.revocationsSinceContract['outputSchema']> };
+        'identity.whoami': { params: z.input<typeof Contract_4.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_4.whoamiContract['outputSchema']> };
+        'identity.register': { params: z.input<typeof Contract_4.registerContract['inputSchema']>, returns: z.infer<typeof Contract_4.registerContract['outputSchema']> };
+        'identity.permits': { params: z.input<typeof Contract_4.permitsContract['inputSchema']>, returns: z.infer<typeof Contract_4.permitsContract['outputSchema']> };
     }
 }
 

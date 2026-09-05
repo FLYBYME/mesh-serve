@@ -22,7 +22,7 @@
  * platform is exactly the shape of that mistake.
  */
 
-import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
+import { defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { SiteSchema } from '../schema/site.js';
 
@@ -67,64 +67,20 @@ export const siteCrud = defineCrud('site', SiteSchema, {
 export type Site = z.infer<typeof siteCrud.outputSchema>;
 
 /**
- * A site now serves something else.
+ * A site now serves a different release.
  *
- * Every serving node listens and drops that hostname from its cache. **Latency, not correctness**:
- * a node that misses the event serves the previous composition until its cache entry expires, which
- * is a stale page rather than a wrong one.
+ * Every serving node listens and drops that hostname from its cached pages. **Latency, not
+ * correctness**: a node that misses the event serves the previous release until its cache entry
+ * expires, which is a stale page rather than a wrong one — and the mesh delivers at-most-once, so
+ * the TTL is doing real work rather than tidying up after the event.
  */
-export const SiteComposedSchema = z.object({
+export const SiteDeployedSchema = z.object({
     host: z.string(),
-    /** → artifact.digest of the generated page. */
-    page: z.string(),
-    previousPage: z.string().optional(),
+    /** → release.hash. */
+    release: z.string(),
+    /** What it served before, so a listener can say what changed and a rollback is legible. */
+    previousRelease: z.string().optional(),
 });
-export type SiteComposed = z.infer<typeof SiteComposedSchema>;
+export type SiteDeployed = z.infer<typeof SiteDeployedSchema>;
 
-export const siteComposedEvent = defineEvent('cdn.site_composed', SiteComposedSchema);
-
-// ---------------------------------------------------------------------------- composing
-
-/**
- * Resolve what this site asked for into what it will actually serve.
- *
- * Explicit, and never a hook on `site.update`, for the reason this repository keeps CRUD
- * unhooked: composing calls the catalog to resolve version ranges, refuses when a part requires a
- * contract the site does not grant, and writes `resolution` — a dependency, an invariant and a side
- * effect, none of which a generated handler should be quietly carrying.
- *
- * It is also why `resolution` is a separate field from `parts`. `parts` is what a person asked for
- * and is theirs to write; `resolution` is what was composed and is only ever written here. Collapsing
- * them would make *what is this site actually running* unanswerable, which is the exact failure the
- * previous generation is being replaced for.
- *
- * ## What it refuses
- *
- * **A requirement with no grant.** Every part declares the contracts it calls; the site declares what
- * it exposes and at what gate. A part calling something the site does not grant is refused here,
- * naming the part and the contract — not discovered as a 404 by whoever opens the page.
- *
- * A grant with no requirement is *reported*, not refused: that is the route nobody deleted when they
- * deleted the screen that used it, and it is worth seeing without being fatal.
- */
-export const siteComposeContract = defineContract({
-    domain: 'cdn',
-    action: 'site_compose',
-    description: 'Resolve a site\'s parts, generate its page, and record what it now serves.',
-    inputSchema: z.object({
-        host: z.string().min(1),
-        /** Compose and report without writing. What a deploy runs before it decides to. */
-        dryRun: z.boolean().optional(),
-    }),
-    outputSchema: z.object({
-        host: z.string(),
-        page: z.string().describe('→ artifact.digest of the generated page'),
-        kernel: z.string(),
-        parts: z.record(z.string(), z.string()).describe('part id → artifact digest'),
-        /** Contracts the site grants that no part asked for. Reported, never fatal. */
-        unusedGrants: z.array(z.string()),
-    }),
-    rest: { method: 'POST', path: '/sites/:host/compose' },
-    destructive: true,
-    print: (o) => `${o.host} → ${o.page}`,
-});
+export const siteDeployedEvent = defineEvent('cdn.site_deployed', SiteDeployedSchema);

@@ -34,10 +34,16 @@ These are wrong now, and everything built on top of them inherits the mistake.
       2026-09-06: **the cdn is the object store**, and its disk is a cache — a pod's storage is
       deleted on restart. So the store becomes content-addressed files on the edge's disk, and
       durability comes from *rebuild*, not from replication. **M**
-- [ ] **A2 ★ `index.html` is not an artifact.** `methods/page.ts` generates a page artifact to be
-      hashed and stored. It is generated **per request** from site + release instead, cached in
-      memory keyed on `(siteId, releaseId)` — which is the key that makes invalidation correct by
-      construction. Site title and meta go in the document, so crawlers see them. **M** · ⛔ B1
+- [x] **A2 ★ `index.html` is not an artifact.** *(done 2026-09-06)* It was going to be hashed and
+      stored like everything else, on the argument that the page should not be the one thing that is
+      not content-addressed. The site record made that wrong: a page carries the site's `title`,
+      `description` and canonical URL, so **two hostnames on one release do not have the same page**,
+      and content-addressing a per-site document means an artifact per site — the coupling releases
+      exist to remove.
+      It is a *response* now, built from site + release, cacheable in memory on `(siteId,
+      releaseHash)` — the key that makes invalidation correct by construction. What that buys is the
+      metadata reaching the **document**: a title injected by script is a title a crawler never sees,
+      and on a window manager what a part renders is invisible to one anyway.
 - [ ] **A3 The `/_a/<digest>/` URL scheme goes.** It was built to be shadow-proof when artifacts had
       chosen mount names. With the page generated on the fly, nobody reads these URLs by hand, so
       they stay content-addressed — but the *rule* changes: a release is a set of artifacts, not a
@@ -71,6 +77,21 @@ These are wrong now, and everything built on top of them inherits the mistake.
       immutability that makes a range safe. And a build is now reproducible from the catalog alone,
       which is exactly what `gone` → rebuild needs: the security fix and the durability path were the
       same change.
+- [ ] **A5c-i ★ `mesh.json` carries no description, and a marketplace is a list of names.** A part
+      declares `kind`, `id`, `version`, `entry` and what it calls — everything a *build* needs and
+      nothing a *person choosing one* needs. `part.description` exists in the catalog and there is no
+      field anywhere that fills it.
+      The distinction that decides the shape: **identity is immutable, presentation is not.** `id`
+      and `kind` are fixed at first publish and a version's `commit` can never move — but a typo in a
+      description, a new icon, a screenshot, a changed homepage must all be fixable without minting a
+      version, because a version means *this code*. So presentation lives on the `part` row, updated
+      by whatever publishes, and never on `partVersion`.
+      The exception is anything a person needs to read **per version**: a summary of what changed. A
+      changelog entry belongs to the version and is immutable with it.
+      Worth having before a marketplace exists rather than after, because a store showing a grid of
+      bare ids is the thing that makes people write descriptions into names. Likely: `description`,
+      `homepage`, `license`, `keywords`, `icon` (a path within the artifact, so it is content-
+      addressed like everything else), and `changelog` on the version. **S**
 - [ ] **A5b-i `mesh-serve publish` needs a broker connection.** It reads `mesh.json`, refuses a dirty
       tree, resolves the commit and remote, and prints what it would publish — but writing it means
       calling `catalog.publish`, and the CLI opens no broker. Writing rows directly would be a second
@@ -127,14 +148,25 @@ Nothing resolves until this exists. Every version a site names is a row here.
 
 ## Track C — Releases and the cdn edge
 
-- [ ] **C1 ★ The `release` collection.** A kernel and N parts at exact versions, plus policy,
-      **referenced by a derived hash** — sha256 over its contents, canonically ordered, so two people
-      composing the same set land on the same release without coordinating. It is not a packaged
-      artifact: it is a *set* of artifacts. **M** · ⛔ B1, B3
-- [ ] **C2 `site` loses its composition.** `kernel`, `parts`, `mesh` and `policy` move to the
-      release; `site` keeps host, tenant, api, theme tokens, and gains title and SEO. Then staging
-      and production referencing one release are **provably** identical, and rollback is one write.
-      **S** · ⛔ C1
+- [x] **C1 ★ The `release` collection.** *(built 2026-09-06)* A kernel and N parts at exact versions,
+      plus policy, **referenced by a derived hash** — sha256 over the *digests*, canonically ordered,
+      so two people composing the same set land on the same release without coordinating. Hashing
+      versions instead would make two releases equal while serving different code, which is the one
+      thing a release exists to rule out. `tenantId`, `name` and `composedAt` are deliberately not
+      inputs: two organizations composing the same set have composed the same thing.
+      `checkComposition` alongside it, and the distinctions are the point: a **required** part that is
+      absent refuses, an **optional** one reports, an unmet **contract** refuses, and an unused grant
+      reports. Everything is returned at once, because somebody composing five parts wants five
+      answers.
+- [x] **C2 `site` loses its composition.** *(built 2026-09-06)* `kernel`, `parts` and `resolution`
+      are gone; the site names a `releaseHash`, and **that one field is the deploy**. `mesh` stays,
+      because what a hostname exposes and at what gate is a deployment's decision — one site may
+      expose a contract as `public` while another requires `user`, on one release. Gained `title`,
+      `description`, `canonical`, `image` and `indexable`, which reach the generated document.
+- [ ] **C2a `cdn.compose` and the deploy have no handlers.** Both contracts are written and neither
+      has a tool behind it: `compose` resolves against the catalog, runs `checkComposition` and
+      writes the row; deploying is `site.update` plus the event. The pure halves are tested; the
+      wiring is not written. **M** · ⛔ B3a
 - [ ] **C3 ★ `CdnEdgeService` — the thing that binds a port.** Modelled on paas's `DnsEdgeService`:
       same domain, its own class, an in-memory projection kept fresh by **events for latency and a
       `resync` tool for correctness**, because the mesh delivers at-most-once. Third time this shape
@@ -239,10 +271,14 @@ Shape decided, nothing built. See [fleet.md](./fleet.md).
 
 The first thing that could actually be looked at, in order:
 
-~~B1 → B2 → B3~~ **→ C1 → A1 → A2 → C3** — a catalog with immutable versions ✓, a release that names
-them, bytes on disk instead of in mongo, a page generated per request, and an edge that binds a port
-and serves it. A6 belongs anywhere in there and the sooner the better, because the builder has still
-never run — and B3a is the same gap in the catalog.
+~~B1 → B2 → B3 → C1 → C2 → A2~~ **→ A1 → C3** — a catalog with immutable versions ✓, a release that
+names them ✓, a site that points at one ✓, a page generated per request ✓; then bytes on disk instead
+of in mongo, and an edge that binds a port and serves it.
+
+**Everything above is still pure functions and schemas.** A6 and B3a and C2a are one gap wearing
+three names: nothing in this repository has executed a CRUD call, bundled a real repository, or
+answered an HTTP request. That gap is now the largest risk here, because the last time unit tests
+passed on the first try and proved nothing, running the thing found two defects in an afternoon.
 
 One thing the catalog surfaced that has to be answered before anyone but us publishes: **part names
 are a flat global namespace.** Two publishers both wanting `auth` collide, and renaming a part breaks

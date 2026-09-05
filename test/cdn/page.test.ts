@@ -16,16 +16,26 @@ const input = (over: Partial<PageInput> = {}): PageInput => ({
         api: 'https://console.surfdns.net/api',
         theme: { '--surface': '#161b22', '--ink': '#e6edf3' },
         policy: { 'window-manager/mode': 'tiled' },
+        title: '',
+        description: '',
+        indexable: true,
     },
-    resolution: {
+    release: {
+        id: 'r1',
+        hash: 'sha256:release',
+        name: '',
+        tenantId: 'org-1',
         kernel: { version: '1.4.0', digest: 'sha256:kernel' },
         parts: {
             chrome: { version: '1.0.0', digest: 'sha256:chrome' },
             'process-monitor': { version: '2.0.0', digest: 'sha256:monitor' },
         },
+        requires: [],
+        policy: {},
         exposure: 'sha256:exposure',
-        page: 'sha256:page',
-        resolvedAt: new Date(0),
+        composedAt: new Date(0),
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
     },
     kernel: { entry: 'index.js', styles: ['kernel.css'] },
     ...over,
@@ -47,8 +57,8 @@ describe('what it emits', () => {
 
     it('does not depend on the order parts were written in', () => {
         const reordered = input({
-            resolution: {
-                ...input().resolution,
+            release: {
+                ...input().release,
                 parts: {
                     'process-monitor': { version: '2.0.0', digest: 'sha256:monitor' },
                     chrome: { version: '1.0.0', digest: 'sha256:chrome' },
@@ -134,6 +144,54 @@ describe('the page', () => {
         // Five undeclared contracts between a bundle and a hand-written page is what this replaces.
         // The kernel creates what it mounts into.
         expect(fileOf(generatePage(input()), 'index.html')).not.toContain('id="console"');
+    });
+});
+
+describe('what a crawler reads', () => {
+    // The entire reason the page is generated per request rather than built as an artifact. A title
+    // set by script after boot is a title a crawler that does not run JavaScript never sees — and
+    // this is a window manager, so what a part renders is invisible to one anyway.
+    const head = (over: Record<string, unknown>) =>
+        fileOf(generatePage(input({ site: { ...input().site, ...over } })), 'index.html');
+
+    it('puts the title in the document', () => {
+        expect(head({ title: 'surfdns console' })).toContain('<title>surfdns console</title>');
+    });
+
+    it('falls back to the application label rather than an empty title', () => {
+        expect(head({ title: '' })).toContain('<title>surfdns-console</title>');
+    });
+
+    it('writes description and og tags when there is a description', () => {
+        const html = head({ description: 'Operate your zones.' });
+
+        expect(html).toContain('<meta name="description" content="Operate your zones.">');
+        expect(html).toContain('og:description');
+    });
+
+    it('omits the description tags entirely when there is none', () => {
+        // An empty `content=""` is worse than absent: it tells a crawler the page has been described
+        // and that the description is nothing.
+        expect(head({ description: '' })).not.toContain('name="description"');
+    });
+
+    it('writes a canonical link when the site names one', () => {
+        expect(head({ canonical: 'https://console.surfdns.net/' }))
+            .toContain('<link rel="canonical" href="https://console.surfdns.net/">');
+    });
+
+    it('lets a site refuse indexing', () => {
+        // Staging and production may sit on one release, identical but for this record. Without it
+        // they compete for the same search results.
+        expect(head({ indexable: false })).toContain('content="noindex, nofollow"');
+        expect(head({ indexable: true })).not.toContain('noindex');
+    });
+
+    it('escapes metadata into attributes', () => {
+        const html = head({ title: 'a"b', description: '</head><script>x' });
+
+        expect(html).toContain('content="a&quot;b"');
+        expect(html).not.toContain('<script>x');
     });
 });
 

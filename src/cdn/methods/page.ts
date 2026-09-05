@@ -26,17 +26,28 @@
  * `spec/serving.md` — and until it does, this generates a page against an API the kernel has not
  * grown. That is the honest order: the shape of the generated file is what says what the kernel owes.
  *
- * ## Generated when the composition changes, not per request
+ * ## Generated per request, and not an artifact
  *
- * The output is hashed and stored like any other artifact. Otherwise the page would be the one thing
- * in the system that is not content-addressed, and its caching would have to be special-cased
- * against everything else's.
+ * **Changed 2026-09-06.** It was going to be hashed and stored like everything else, on the argument
+ * that the page should not be the one thing in the system that is not content-addressed. That was
+ * wrong for a reason the site record made obvious: a page carries the site's `title`, `description`
+ * and canonical URL, so **two hostnames on one release do not have the same page** — and content
+ * addressing a per-site document means an artifact per site, which is the coupling releases exist to
+ * remove.
+ *
+ * So the page is a *response*, built from site + release. It costs a string concatenation over data
+ * the edge already holds, and it is cacheable in memory keyed on `(siteId, releaseHash)` — the same
+ * key that makes invalidation correct by construction, since either changing makes the cached page
+ * stale.
+ *
+ * What it buys is the thing that would otherwise have been lost: **SEO metadata reaches the
+ * document**. A title injected by script after boot is a title a crawler never sees.
  */
 
 import { ClientError } from '@flybyme/mesh';
 
 import type { Site } from '../contracts/site.contract.js';
-import type { Resolution } from '../schema/site.js';
+import type { Release } from '../contracts/release.contract.js';
 import { slugOf } from './resolve.js';
 
 /** A file the cdn produced, before it is hashed into an artifact. */
@@ -46,8 +57,10 @@ export interface GeneratedFile {
 }
 
 export interface PageInput {
-    readonly site: Pick<Site, 'application' | 'api' | 'theme' | 'policy'>;
-    readonly resolution: Resolution;
+    readonly site: Pick<Site,
+        'application' | 'api' | 'theme' | 'policy'
+        | 'title' | 'description' | 'canonical' | 'indexable'>;
+    readonly release: Release;
     /**
      * What the kernel artifact contains, read from its own declaration and file list.
      *
@@ -74,15 +87,15 @@ const urlOf = (digest: string, path: string): string =>
  * that matter — non-determinism here would be a new digest on every deploy that changed nothing.
  */
 export function generatePage(input: PageInput): readonly GeneratedFile[] {
-    const { site, resolution, kernel } = input;
+    const { site, release, kernel } = input;
 
-    const kernelUrl = urlOf(resolution.kernel.digest, kernel.entry);
-    const parts = Object.entries(resolution.parts)
+    const kernelUrl = urlOf(release.kernel.digest, kernel.entry);
+    const parts = Object.entries(release.parts)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([id, artifact], index) => ({ id, index, url: urlOf(artifact.digest, 'index.js') }));
 
     return [
-        { path: 'index.html', content: indexHtml(site, kernel, kernelUrl, resolution) },
+        { path: 'index.html', content: indexHtml(site, kernel, kernelUrl, release) },
         { path: 'boot.js', content: bootModule(site, kernelUrl, parts) },
     ];
 }
@@ -93,7 +106,7 @@ function indexHtml(
     site: PageInput['site'],
     kernel: PageInput['kernel'],
     kernelUrl: string,
-    resolution: Resolution,
+    release: Release,
 ): string {
     /**
      * Why an import map, and why it is not optional.
@@ -107,7 +120,7 @@ function indexHtml(
     const importMap = JSON.stringify({ imports: { '@flybyme/mesh-web': kernelUrl } }, null, 4);
 
     const styles = kernel.styles
-        .map((path) => `    <link rel="stylesheet" href="${attr(urlOf(resolution.kernel.digest, path))}">`)
+        .map((path) => `    <link rel="stylesheet" href="${attr(urlOf(release.kernel.digest, path))}">`)
         .join('\n');
 
     return `<!doctype html>
@@ -115,8 +128,7 @@ function indexHtml(
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>${text(site.application)}</title>
-
+${metadata(site)}
     <script type="importmap">
 ${indent(importMap, 4)}
     </script>
@@ -133,6 +145,43 @@ ${themeTokens(site.theme)}
 </body>
 </html>
 `;
+}
+
+/**
+ * What a crawler reads.
+ *
+ * **In the document, which is the entire reason the page is generated per request.** A title set by
+ * script after boot is a title a crawler that does not run JavaScript never sees — and this is a
+ * window manager, so what a part renders is invisible to one anyway. Site-level metadata reaching
+ * the markup is what makes the difference between a site that can be indexed and one that cannot.
+ *
+ * `title` falls back to `application`, which is a grouping label rather than a name — better than an
+ * empty `<title>`, and worse than one somebody wrote, which is why it is a fallback.
+ *
+ * `noindex` matters more than it looks: a staging site and production may sit on **one release**,
+ * identical in every way except this record, and without it they compete for the same search
+ * results.
+ */
+function metadata(site: PageInput['site']): string {
+    const title = site.title === '' ? site.application : site.title;
+
+    const lines = [
+        `    <title>${text(title)}</title>`,
+        `    <meta property="og:title" content="${attr(title)}">`,
+    ];
+
+    if (site.description !== '') {
+        lines.push(`    <meta name="description" content="${attr(site.description)}">`);
+        lines.push(`    <meta property="og:description" content="${attr(site.description)}">`);
+    }
+    if (site.canonical !== undefined) {
+        lines.push(`    <link rel="canonical" href="${attr(site.canonical)}">`);
+    }
+    if (!site.indexable) {
+        lines.push('    <meta name="robots" content="noindex, nofollow">');
+    }
+
+    return lines.join('\n');
 }
 
 /**

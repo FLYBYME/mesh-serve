@@ -28,18 +28,20 @@
 
 import { z } from '@flybyme/mesh';
 
-// ---------------------------------------------------------------------------- parts
+// ---------------------------------------------------------------------------- what a site asks for
 
 /**
- * A part this site loads into the page.
+ * A part someone wants in a composition — **not a stored field.**
  *
- * `version` is a *requirement*, in npm's vocabulary — `1.4.2`, `^1.4`, `*`. Not to be confused with a
- * record version for concurrency, which this schema deliberately does not have: ordering is by the
- * framework's `updatedAt`.
+ * `version` is a *requirement* in npm's vocabulary: `1.4.2`, `^1.4`, `*`. It is what a person types
+ * when composing a release and what `catalog.resolve` turns into an exact version, so it belongs to
+ * the request rather than to any record. A site once stored these and it is why staging and
+ * production could not be proved identical: two rows naming `^1.4` resolve independently, at
+ * different times, against a catalog that moved in between.
  */
 export const PartRefSchema = z.object({
     kind: z.enum(['application', 'extension']),
-    /** → part.id in the catalog. */
+    /** → part.name in the catalog. */
     id: z.string().min(1),
     version: z.string().min(1),
 });
@@ -88,38 +90,12 @@ export const MeshDependencySchema = z.object({
 });
 export type MeshDependency = z.infer<typeof MeshDependencySchema>;
 
-// ---------------------------------------------------------------------------- what was actually composed
-
-export const ResolvedArtifactSchema = z.object({
-    /** The exact version chosen, never the range it was chosen for. */
-    version: z.string().min(1),
-    /** → artifact.digest. What is actually served. */
-    digest: z.string().min(1),
-});
-
-/**
- * What the cdn composed, and the answer to *what is this site actually running*.
- *
- * **Written by the cdn.** Not settable through user CRUD: a resolution someone typed would be a
- * claim about what is running rather than a record of it, and the whole point of separating this
- * from `parts` is that one is an intention and the other is an observation.
- */
-export const ResolutionSchema = z.object({
-    kernel: ResolvedArtifactSchema,
-    parts: z.record(z.string(), ResolvedArtifactSchema),
-    /**
-     * The hash of the exposure this site's parts were generated against.
-     *
-     * A client generated from one exposure and pointed at an API serving another is a lie the
-     * compiler vouches for, which is worse than no types at all. Recorded here so a mismatch is an
-     * error at compose time rather than a confusing 404 three calls later.
-     */
-    exposure: z.string().min(1),
-    /** → artifact.digest of the page and boot module the cdn generated for this composition. */
-    page: z.string().min(1),
-    resolvedAt: z.date(),
-});
-export type Resolution = z.infer<typeof ResolutionSchema>;
+// What a site is *running* is not here any more. It was `resolution` — the kernel and parts the cdn
+// had chosen — and it is now a `release`, in `./release.js`, for the reason that motivated the whole
+// split: a resolution living on a site is a resolution done per site, so two hostnames meant to be
+// identical were two independent resolutions against a catalog that moved between them.
+//
+// The exposure hash went with it, since it describes a set of parts rather than a hostname.
 
 // ---------------------------------------------------------------------------- the site
 
@@ -147,10 +123,28 @@ export const SiteSchema = z.object({
     /** Where the browser sends its calls. The one value a page cannot discover at run time. */
     api: z.string().min(1),
 
-    /** A version requirement, resolved against the catalog. */
-    kernel: z.string().min(1),
+    /**
+     * What this hostname serves — **→ release.hash. Changing it is the deploy.**
+     *
+     * The composition used to live here: a `kernel` range, `parts` ranges, and the resolution of
+     * both. Three things were impossible while it did. Staging and production could not be *proved*
+     * identical, because two rows naming `^1.4` resolve independently and at different times.
+     * Rollback meant re-resolving rather than writing one field. And a hundred hostnames resolved a
+     * hundred times over the same catalog.
+     *
+     * Absent means a site that exists and serves nothing yet — a hostname reserved before its first
+     * deploy, which is an ordinary state and not an error.
+     */
+    releaseHash: z.string().min(1).optional(),
 
-    parts: z.array(PartRefSchema),
+    /**
+     * What this hostname exposes to the internet, and at what gate.
+     *
+     * **Stays on the site, and must.** A release says what its parts *call*; this says what is
+     * reachable from outside and to whom, which is a deployment's decision — one site may expose
+     * `domains.zone_find` as `public` while another requires `user`, on the same release. Composing
+     * checks one list against the other.
+     */
     mesh: z.array(MeshDependencySchema),
 
     /**
@@ -170,8 +164,22 @@ export const SiteSchema = z.object({
      */
     policy: z.record(z.string(), z.string()),
 
-    /** Written by the cdn. Absent until this site has been composed. */
-    resolution: ResolutionSchema.optional(),
+    /**
+     * What a person reads, and what a crawler reads.
+     *
+     * On the site rather than the release, because it is per hostname: two sites on one release are
+     * the same application under different identities. It reaches the **document** — the cdn
+     * generates `index.html` per request, so a title here is a real `<title>` rather than something
+     * a script sets after the page has already been indexed.
+     */
+    title: z.string().default(''),
+    description: z.string().default(''),
+    /** The canonical URL, when this hostname is one of several serving the same thing. */
+    canonical: z.string().optional(),
+    /** A path within an artifact this release serves, so it is content-addressed like everything else. */
+    image: z.string().optional(),
+    /** Whether crawlers should index it. A staging site on the same release as production must not. */
+    indexable: z.boolean().default(true),
 });
 
 // No `export type Site` here. The site *object* is what the collection returns — `id`, `createdAt`

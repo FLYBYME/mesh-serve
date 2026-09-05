@@ -30,8 +30,6 @@
  */
 
 import type { Artifact, ArtifactFile } from '../../builder/schema/artifact.js';
-import type { Site } from '../contracts/site.contract.js';
-import type { Resolution } from '../schema/site.js';
 
 /** The one reserved prefix in a site's URL space. */
 export const ARTIFACT_PREFIX = '/_a/';
@@ -64,29 +62,35 @@ export const slugOf = (digest: string): string => {
  * costs nothing and means one rule covers the whole site: a request either names an artifact or gets
  * the page.
  */
-export function composedArtifacts(resolution: Resolution): ReadonlyMap<string, string> {
+export function releasedArtifacts(release: ReleaseArtifacts): ReadonlyMap<string, string> {
     const digests = [
-        resolution.page,
-        resolution.kernel.digest,
-        ...Object.values(resolution.parts).map((part) => part.digest),
+        release.kernel.digest,
+        ...Object.values(release.parts).map((part) => part.digest),
     ];
     return new Map(digests.map((digest) => [slugOf(digest), digest]));
 }
 
-export interface Resolved {
-    /** Which artifact answers. */
-    readonly digest: string;
-    /** The path *within* that artifact. */
-    readonly path: string;
-    /**
-     * Whether the URL names the content it serves.
-     *
-     * Only the page is reached by a mutable name, so only the page must not be cached. This is the
-     * whole of the caching policy, and it is a property of *how it was addressed* rather than of the
-     * file — which is why it is decided here and not by looking at a filename.
-     */
-    readonly immutable: boolean;
+/** What a release contributes to serving: the artifacts, and nothing else about it. */
+export interface ReleaseArtifacts {
+    readonly kernel: { readonly digest: string };
+    readonly parts: Readonly<Record<string, { readonly digest: string }>>;
 }
+
+/**
+ * What answers a request.
+ *
+ * Two outcomes, and the split is what makes the caching rule fall out rather than be decided:
+ *
+ * - **the page** — generated per request from site + release, so `no-cache`, and the only mutable
+ *   name on the site
+ * - **an artifact** — named by its own hash, so `immutable` with no judgement call
+ *
+ * That is a property of *how it was addressed* rather than of the file, which is why it is decided
+ * here and not by looking at a filename.
+ */
+export type Resolved =
+    | { readonly kind: 'page' }
+    | { readonly kind: 'artifact'; readonly digest: string; readonly path: string };
 
 /**
  * Which artifact answers this path.
@@ -95,27 +99,25 @@ export interface Resolved {
  * than a 403: which artifacts exist is not something an anonymous request gets to probe for.
  */
 export function resolveRequest(
-    site: Pick<Site, 'resolution'>,
+    release: ReleaseArtifacts | undefined,
     path: string,
 ): Resolved | undefined {
-    const resolution = site.resolution;
-    // A site that has never been composed has nothing to serve. Distinguished from "no such site" by
-    // the caller, because the two need different answers: this one is the cluster owing an answer.
-    if (resolution === undefined) return undefined;
+    // A site with no release exists and serves nothing — a hostname reserved before its first
+    // deploy, which is ordinary and not an error. Distinguished by the caller from "no such site",
+    // because the two are different answers and this one is the cluster owing one.
+    if (release === undefined) return undefined;
 
-    if (!path.startsWith(ARTIFACT_PREFIX)) {
-        return { digest: resolution.page, path, immutable: false };
-    }
+    if (!path.startsWith(ARTIFACT_PREFIX)) return { kind: 'page' };
 
     const rest = path.slice(ARTIFACT_PREFIX.length);
     const slash = rest.indexOf('/');
     const slug = slash === -1 ? rest : rest.slice(0, slash);
 
-    const digest = composedArtifacts(resolution).get(slug);
+    const digest = releasedArtifacts(release).get(slug);
     if (digest === undefined) return undefined;
 
     const inner = slash === -1 ? '/' : rest.slice(slash);
-    return { digest, path: inner === '' ? '/' : inner, immutable: true };
+    return { kind: 'artifact', digest, path: inner === '' ? '/' : inner };
 }
 
 /**
@@ -158,7 +160,7 @@ export function headersFor(file: ArtifactFile, resolved: Resolved): Readonly<Rec
     return {
         'content-type': file.contentType,
         etag: `"${file.digest}"`,
-        'cache-control': resolved.immutable
+        'cache-control': resolved.kind === 'artifact'
             ? 'public, max-age=31536000, immutable'
             : 'no-cache',
         // A cache between here and a browser must key on the hostname it was asked for: the proxy in
