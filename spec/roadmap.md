@@ -194,6 +194,20 @@ Nothing resolves until this exists. Every version a site names is a row here.
 
 ## Track D — The api
 
+- [ ] **D1a ★ Server-sent events are the last thing only mesh-api has.** *(audited 2026-09-06)*
+      Everything else is moved or deliberately dropped. The **decisions** are saved —
+      `api/methods/delivery.ts` and `api/schema/events.ts` — and they are the part that matters:
+      *an event that cannot be scoped is delivered to nobody*, which replaced a version that read a
+      payload/contract disagreement as *"unscoped, send to everybody"* and put one organization's
+      data on every connected browser. That is the unbounded-find bug one level over.
+      What remains is the **transport**, needing the same rework `rest.ts` got: mesh-api mounts a
+      static express route, and a subscription now depends on which hostname asked. `site.mesh`
+      gained an `events` list for it — separate from `contracts` although the keys look identical,
+      because a contract key resolving to nothing 404s while an event key resolving to nothing
+      **connects and stays silent forever**, which is far worse to diagnose.
+      **⛔ blocked on mesh, not on effort**: `EventDefinition` is `{ name, schema }`, so an event
+      cannot say which field of its payload names an organization, and `decideDelivery` therefore
+      refuses every scoped event. Queued as mesh dispatch 4. **M**
 - [ ] **D1 Move it out of mesh-api before mesh-api is deleted.** **Not a port** — the shape is decided
       in [exposure.md §6a](./exposure.md). The api is the cdn's twin: `Host → site`, bind a port,
       same records, same invalidation; one serves files and the other serves calls.

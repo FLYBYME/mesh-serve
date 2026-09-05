@@ -87,6 +87,22 @@ export const MeshDependencySchema = z.object({
     package: z.string().min(1),
     version: z.string().min(1),
     contracts: z.array(ExposedContractSchema).min(1),
+
+    /**
+     * Events this site streams to a browser, and the gate on each.
+     *
+     * Separate from `contracts` although the keys look identical — `cdn.site_deployed` and
+     * `identity.whoami` are the same shape — because they are looked up in different registries and
+     * they fail differently. A contract key that resolves to nothing is a route that 404s; an event
+     * key that resolves to nothing is a subscription that connects and stays silent forever, which
+     * is far worse to diagnose.
+     *
+     * **Exposing an event is a heavier decision than exposing a contract.** A contract answers the
+     * caller who asked; an event is pushed to everyone subscribed, so the question is not only *may
+     * this caller see it* but *can this event even be narrowed to a caller* — and an event that
+     * cannot be scoped is delivered to nobody. See `api/methods/delivery.ts`.
+     */
+    events: z.array(ExposedContractSchema).default([]),
 });
 export type MeshDependency = z.infer<typeof MeshDependencySchema>;
 
