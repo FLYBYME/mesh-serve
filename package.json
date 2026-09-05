@@ -1,0 +1,37 @@
+{
+    "name": "@flybyme/mesh-serve",
+    "version": "0.1.0",
+    "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
+    "type": "module",
+    "private": true,
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "scripts": {
+        "prepare": "npm run build",
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.check.json --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@flybyme/mesh": "github:FLYBYME/mesh#v2.1.0",
+        "zod": "^3.25.76"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.9.3",
+        "vitest": "^2.1.9"
+    },
+    "license": "UNLICENSED"
+}
