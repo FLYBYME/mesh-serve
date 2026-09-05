@@ -12,16 +12,20 @@ import { parseDescriptor } from '../../src/builder/schema/descriptor.js';
 
 const COMMIT = 'a'.repeat(40);
 
-const partOf = (json: Record<string, unknown>) => {
-    const descriptor = parseDescriptor(JSON.stringify(json));
+const partOf = (part: Record<string, unknown>, kernel?: string) => {
+    // One shape, always: a repository builds parts, even when it builds one.
+    const descriptor = parseDescriptor(JSON.stringify({
+        ...(kernel === undefined ? {} : { kernel }), parts: [part],
+    }));
     return { part: descriptor.parts[0]!, kernel: descriptor.kernel };
 };
 
 describe('what a part publishes as', () => {
     it('carries the commit, which is the only identity that means anything', () => {
-        const { part, kernel } = partOf({
-            kind: 'extension', id: 'auth', version: '0.1.0', kernel: '^0.3', entry: 'src/index.ts',
-        });
+        const { part, kernel } = partOf(
+            { kind: 'extension', id: 'auth', version: '0.1.0', entry: 'src/index.ts' },
+            '^0.3',
+        );
 
         expect(versionFrom(part, COMMIT, kernel)).toMatchObject({
             version: '0.1.0', commit: COMMIT, entry: 'src/index.ts', kernel: '^0.3',

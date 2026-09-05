@@ -122,10 +122,9 @@ export const DescribedPartSchema = z.object({
     /**
      * Other parts this one needs on the page.
      *
-     * **Named `requiredParts` and not `parts`**, which reads worse and is the only option. In the
-     * flat single-part form a part's own fields sit at the root, so a root `parts` would mean both
-     * *what this repository builds* and *what this part needs* — and `parts` is exactly what tells
-     * the two file shapes apart. One key cannot be the discriminator and an ordinary field at once.
+     * Kept as `requiredParts` even though `parts` is free again now the flat form is gone: inside a
+     * part, `parts` would read as *the parts of this part*, which is not what it means. It is a
+     * requirement on the composition, and the name should say so.
      *
      * A kernel may declare these too. A kernel that ships no chrome and expects one is stating a real
      * requirement, and the alternative is a bare kernel rendering nothing with no explanation.
@@ -146,11 +145,18 @@ export type DescribedPart = z.infer<typeof DescribedPartSchema>;
 const KernelRange = z.string().min(1).optional();
 
 /**
- * A repository that builds **several** parts.
+ * A repository builds parts. **One shape, always, even for one part.**
  *
- * `surfdns-console` is the real case: a chrome extension and an application in one tree.
+ * A flat single-part form was accepted for a day — a part's fields at the root, no array — on the
+ * argument that nesting one part inside an array is noise. It is, slightly. The cost was larger:
+ * `mesh-auth` was written flat and `surfdns-console` nested, and an author could not learn the format
+ * from either one, because neither was the format.
+ *
+ * Removing it also removed a constraint it had imposed. `parts` was the discriminator between the two
+ * shapes, so it could not also be an ordinary field, which is why a part's own dependencies on other
+ * parts are called `requiredParts` — a name chosen to dodge a collision that no longer exists.
  */
-const NestedDescriptorSchema = z.object({
+export const DescriptorSchema = z.object({
     kernel: KernelRange,
     parts: z.array(DescribedPartSchema).min(1)
         .superRefine((parts, ctx) => {
@@ -170,37 +176,7 @@ const NestedDescriptorSchema = z.object({
         }),
 }).strict();
 
-/**
- * A repository that builds **one** part, written flat.
- *
- * The common case, and nesting a single part inside an array to say so is noise. This is
- * `package.json`'s `bin` — accepted in two shapes, normalised to one immediately, so nothing
- * downstream ever branches on which was written.
- *
- * **Not both.** A file carrying flat fields *and* a `parts` array says two contradictory things about
- * what this repository builds, and `.strict()` on each branch is what makes that unrepresentable
- * rather than resolved by whichever the parser happened to try first.
- */
-const FlatDescriptorSchema = DescribedPartSchema.extend({ kernel: KernelRange }).strict();
-
-/** Normalised. Nothing downstream ever branches on which shape was written. */
-export interface Descriptor {
-    readonly kernel?: string;
-    readonly parts: readonly DescribedPart[];
-}
-
-/**
- * Which shape a file is, decided before it is parsed.
- *
- * **Not `z.union`**, and the reason is the whole point of this parser. Zod reports a failed union as
- * one `invalid_union` issue at the root, so *"parts.1.kind must be application or extension"* becomes
- * *"invalid input"* — and this file is written by hand, by someone who is not watching the builder's
- * logs. Choosing the branch first keeps every message pointing at the field that is wrong.
- *
- * `parts` is the discriminator because it is the one key that only ever appears in the nested form.
- */
-const isNested = (value: unknown): boolean =>
-    typeof value === 'object' && value !== null && 'parts' in value;
+export type Descriptor = z.infer<typeof DescriptorSchema>;
 
 /**
  * `400`: the repository's own file is wrong, and whoever asked for the build is the one who can fix
@@ -229,22 +205,8 @@ export function parseDescriptor(text: string): Descriptor {
         );
     }
 
-    const nested = isNested(value);
-    const parsed = nested
-        ? NestedDescriptorSchema.safeParse(value)
-        : FlatDescriptorSchema.safeParse(value);
-
-    if (parsed.success) {
-        if ('parts' in parsed.data) {
-            const { kernel, parts } = parsed.data;
-            return { ...(kernel === undefined ? {} : { kernel }), parts };
-        }
-
-        // The flat form's `kernel` is repository-level in both shapes, so it comes off the part and
-        // the normalised value has exactly one place it can live.
-        const { kernel, ...part } = parsed.data;
-        return { ...(kernel === undefined ? {} : { kernel }), parts: [part] };
-    }
+    const parsed = DescriptorSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
 
     const where = (path: readonly (string | number)[]): string =>
         path.length === 0 ? DESCRIPTOR_FILE : `${DESCRIPTOR_FILE} ${path.map(String).join('.')}`;

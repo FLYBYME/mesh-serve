@@ -68,17 +68,32 @@ export async function writeDevPage(root: string, descriptor: Descriptor): Promis
     });
     files.push(`${DEV_DIR}/kernel.js`);
 
+    /** Stylesheets the parts emitted, in part order, so the page can link them. */
+    const styles: string[] = [];
+
     for (const part of descriptor.parts) {
-        await esbuild({
+        const built = await esbuild({
             entryPoints: [join(root, part.entry)],
             bundle: true, format: 'esm', platform: 'browser', target: 'es2022',
             // The same rule the real builder follows, and the reason this page is worth having: a
             // part that accidentally works only because the framework was inlined into it fails
             // here, in the author's browser, instead of after it is published.
             external: [FRAMEWORK],
-            outfile: join(out, `${part.id}.js`), logLevel: 'silent',
+            // `outdir` rather than `outfile`, because a part that imports CSS emits **two** files and
+            // esbuild refuses a single outfile for that. Which is the mechanism: a part's rules
+            // travel with the code that names them, in the same artifact, so neither can be deployed
+            // without the other.
+            outdir: out, entryNames: part.id, assetNames: `${part.id}-[name]`,
+            metafile: true, logLevel: 'silent',
         });
         files.push(`${DEV_DIR}/${part.id}.js`);
+
+        for (const emitted of Object.keys(built.metafile.outputs)) {
+            if (!emitted.endsWith('.css')) continue;
+            const name = emitted.split('/').pop()!;
+            styles.push(name);
+            files.push(`${DEV_DIR}/${name}`);
+        }
     }
 
     const extensions = descriptor.parts.filter((p) => p.kind === 'extension');
@@ -94,7 +109,7 @@ export async function writeDevPage(root: string, descriptor: Descriptor): Promis
     }
 
     write(join(out, 'boot.js'), bootModule(extensions, applications), files);
-    write(join(out, 'index.html'), indexHtml(descriptor), files);
+    write(join(out, 'index.html'), indexHtml(descriptor, styles), files);
 
     return { dir: out, files, warnings };
 }
@@ -105,8 +120,12 @@ function write(path: string, content: string, files: string[]): void {
     files.push(path);
 }
 
-function indexHtml(descriptor: Descriptor): string {
+function indexHtml(descriptor: Descriptor, styles: readonly string[]): string {
     const title = descriptor.parts[0]?.id ?? 'part';
+
+    // Every stylesheet the parts emitted. Without this a part renders a correct DOM against no
+    // rules — which looks exactly like a blank page and reports nothing, because nothing is wrong.
+    const sheets = styles.map((name) => `    <link rel="stylesheet" href="./${name}">`).join('\n');
 
     return `<!doctype html>
 <html lang="en" data-api="${process.env['MESH_API'] ?? 'http://127.0.0.1:5005'}">
@@ -122,17 +141,39 @@ function indexHtml(descriptor: Descriptor): string {
     </script>
 
     <style>
-        :root { --surface: #161b22; --ink: #e6edf3; color-scheme: dark }
-        html, body { margin: 0; height: 100%; background: #0d1117; color: var(--ink);
+        /*
+         * Theme values only, standing in for what a site record supplies. A part's rules come from
+         * the part; these are the tokens those rules reference, and a dev page has no site to take
+         * them from.
+         */
+        :root {
+            --page: #0d1117; --chrome: #161b22; --surface: #21262d;
+            --ink: #e6edf3; --ink-dim: #8b949e; --edge: #30363d;
+            --accent: #58a6ff; --on-accent: #0d1117;
+            color-scheme: dark;
+        }
+        html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink);
             font: 14px/1.5 ui-sans-serif, system-ui, sans-serif }
-        #root { position: relative; height: 100% }
+
+        /* The window frame, which the kernel names and does not style. See mesh-web serving §5. */
         .window { position: absolute; background: var(--surface); color: var(--ink);
-            border: 1px solid #30363d; border-radius: 6px; overflow: hidden }
-        .titlebar { padding: 6px 10px; background: #21262d; cursor: move; user-select: none }
+            border: 1px solid var(--edge); border-radius: 6px; overflow: hidden;
+            display: flex; flex-direction: column }
+        .titlebar { padding: 6px 10px; background: var(--chrome); cursor: move; user-select: none;
+            border-bottom: 1px solid var(--edge) }
+
+        .mesh-notifications { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px }
+        .mesh-notice { padding: 8px 12px; background: var(--surface); color: var(--ink);
+            border: 1px solid var(--edge); border-radius: 6px; font-size: 13px }
+        .mesh-notice.error { border-color: #f85149 }
     </style>
+${sheets}
 </head>
 <body>
-    <div id="root"></div>
+    <!--
+      No element here for a part to find. The kernel creates what it mounts into, which was one of
+      five undeclared contracts between a bundle and a hand-written page.
+    -->
     <script type="module" src="./boot.js"></script>
 </body>
 </html>
