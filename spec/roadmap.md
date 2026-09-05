@@ -15,14 +15,15 @@ Sizes are **S** (an afternoon), **M** (a day or two), **L** (longer, or unknown 
 | | state |
 | --- | --- |
 | `identity` | **built, and written the wrong way.** Zero `defineCrud`, 8 hand-written contracts, a 160-line hand-rolled store. Moved in from mesh-identity verbatim. |
-| `builder` | **built, untested against a real repository.** Service, 3 tools, esbuild, descriptor, content addressing. GridFS is wrong and comes out. |
-| `cdn` | **pure functions only.** Site record, hostname rules, resolve, page generation. No service, no port, no edge. |
-| `catalog` | **collections, resolver and tools written.** Immutability enforced in `publish`. The tools have never run against a broker. |
-| `api` | **empty.** Three `.gitkeep` files. |
+| `builder` | **works.** Fetches a commit, bundles with esbuild, publishes one artifact per part, caches by input hash, and refuses a part it does not own. Bytes on disk. |
+| `cdn` | **serves.** Binds a port, resolves Host → site → release → artifact, generates the page per request, composes and deploys. |
+| `catalog` | **works.** `part` and `partVersion`, a pure resolver, immutability enforced in `publish`. |
+| `api` | **the generator only** — `mesh-serve client`, salvaged from mesh-api. No server. |
 | `fleet` | **empty.** Three `.gitkeep` files. |
 
-109 tests, all unit. Nothing in this repository has ever served a request or built a real
-repository.
+216 tests, and 13 of them are the spine running for real: a `MeshApp` with mongo, a git repository at
+a commit, esbuild, a bound port. **M1 is done.** What is unproven now is everything about surviving
+something — a second node, a lost disk, a caller who should be refused.
 
 ---
 
@@ -30,7 +31,7 @@ repository.
 
 These are wrong now, and everything built on top of them inherits the mistake.
 
-- [ ] **A1 ★ Bytes leave the database.** `src/builder/blobs.ts` puts blobs in GridFS. Decided
+- [x] **A1 ★ Bytes leave the database.** *(done 2026-09-06)* `src/builder/blobs.ts` puts blobs in GridFS. Decided
       2026-09-06: **the cdn is the object store**, and its disk is a cache — a pod's storage is
       deleted on restart. So the store becomes content-addressed files on the edge's disk, and
       durability comes from *rebuild*, not from replication. **M**
@@ -102,7 +103,7 @@ These are wrong now, and everything built on top of them inherits the mistake.
       disk is a cache and git is the archive*, and an uploaded tarball has nothing behind it: lose
       every copy and the version is gone rather than `gone`. It has to be stored durably or marked
       unreproducible before anything is published from one. **M** · ⛔ C6
-- [ ] **A6 A test that builds a real repository.** The builder has never run. Everything about it is
+- [x] **A6 A test that builds a real repository.** *(done 2026-09-06)* The builder has never run. Everything about it is
       asserted by unit tests over pure functions, and the last time that was true of the declaration
       reader, running it against one real repository found two defects in an afternoon. Needs a
       fixture repository under `test/fixtures` and a fake fetcher. **M**
@@ -130,7 +131,7 @@ Nothing resolves until this exists. Every version a site names is a row here.
       since getting it wrong ships a release candidate to every site tracking `^1.0`.
       An unsupported range is reported as unsupported rather than matching nothing, because a range
       nobody implemented looks exactly like a part nobody published.
-- [ ] **B3a Neither tool has run against a broker.** `publish` and `resolve` typecheck and their pure
+- [x] **B3a Both tools run against a broker.** *(done 2026-09-06)* `publish` and `resolve` typecheck and their pure
       halves are tested; the CRUD calls in them have never executed. This is the same gap that made
       the declaration reader look finished. **S** · ⛔ A6
 - [ ] **B4 Contract descriptors, so a build can verify.** A site's `mesh[]` names contracts as
@@ -163,11 +164,11 @@ Nothing resolves until this exists. Every version a site names is a row here.
       because what a hostname exposes and at what gate is a deployment's decision — one site may
       expose a contract as `public` while another requires `user`, on one release. Gained `title`,
       `description`, `canonical`, `image` and `indexable`, which reach the generated document.
-- [ ] **C2a `cdn.compose` and the deploy have no handlers.** Both contracts are written and neither
+- [x] **C2a `cdn.compose` and `cdn.deploy` have handlers.** *(done 2026-09-06)* Both contracts are written and neither
       has a tool behind it: `compose` resolves against the catalog, runs `checkComposition` and
       writes the row; deploying is `site.update` plus the event. The pure halves are tested; the
       wiring is not written. **M** · ⛔ B3a
-- [ ] **C3 ★ `CdnEdgeService` — the thing that binds a port.** Modelled on paas's `DnsEdgeService`:
+- [x] **C3 ★ `CdnService` — the thing that binds a port.** *(done 2026-09-06)* Modelled on paas's `DnsEdgeService`:
       same domain, its own class, an in-memory projection kept fresh by **events for latency and a
       `resync` tool for correctness**, because the mesh delivers at-most-once. Third time this shape
       has been the answer. **L** · ⛔ A1, A2, C1
@@ -276,19 +277,27 @@ Every one of them is gated on the same thing at the moment: **nothing here has e
 and C2a are one gap wearing three names — no CRUD call executed, no repository bundled, no HTTP
 request answered.
 
-### M1 — A hostname serves a site composed from published parts
+### M1 — A hostname serves a site composed from published parts ✅ *2026-09-06*
 
-*The spine, end to end, on one node.* `mesh-serve publish` → `builder.build_start` →
-`cdn.compose` → point a site at the release → `curl` returns the generated page, and the parts load
-from `/_a/<digest>/`.
+*The spine, end to end, on one node.* `test/integration/spine.test.ts` — a real `MeshApp` with a real
+mongo, a real git repository at a real commit, real esbuild, a real port. 13 tests:
 
-⛔ **A1** bytes on disk · **A6** a real build · **B3a** catalog tools against a broker · **C2a**
-compose and deploy handlers · **C3** an edge that binds a port
-⛔ **mesh-web A9.1c** — `start(composition)`. *Outside this repository*, and the only external
-blocker: the generated boot module calls a function the kernel does not have.
+```
+catalog.publish  →  builder.build_start  →  cdn.compose  →  cdn.deploy  →  GET / → 200
+```
 
-**Why it is the first milestone and not a later one**: everything after it is about surviving
-something. Until one node serves one page, none of that has anything to survive.
+It proved the properties rather than the plumbing: a version is idempotent from the same commit and
+refused from a different one; two parts in one repository become two artifacts; a second build is
+cached; a build for another organization is refused; composing the same set twice returns the same
+hash; the page carries its title and description in the **document**; the kernel it names is
+fetchable and `immutable`; an artifact the release does not contain is a 404.
+
+**A1 · A6 · B3a · C2a · C3** all closed by it. **mesh-web A9.1c** is *not* — the generated boot module
+still calls a `start()` the kernel does not have, so the page loads and the parts fetch, and nothing
+boots. That is A0 of M1's follow-through, not a gap in the spine.
+
+**Why it was first**: everything after it is about surviving something, and until one node serves one
+page there is nothing to survive.
 
 ### M2 — It survives losing a disk
 
@@ -338,14 +347,17 @@ recovery path and a fleet that needed the cdn would mean a broken cdn cannot be 
 
 The first thing that could actually be looked at, in order:
 
-~~B1 → B2 → B3 → C1 → C2 → A2~~ **→ A1 → C3** — a catalog with immutable versions ✓, a release that
-names them ✓, a site that points at one ✓, a page generated per request ✓; then bytes on disk instead
-of in mongo, and an edge that binds a port and serves it.
+~~B1 → B2 → B3 → C1 → C2 → A2 → A1 → C3~~ — **all of M1, done 2026-09-06.**
 
-**Everything above is still pure functions and schemas.** A6 and B3a and C2a are one gap wearing
-three names: nothing in this repository has executed a CRUD call, bundled a real repository, or
-answered an HTTP request. That gap is now the largest risk here, because the last time unit tests
-passed on the first try and proved nothing, running the thing found two defects in an afternoon.
+The thing that had never happened has now happened, and it went better than the last time: 11 of 13
+assertions passed on the first run against a real database. The one failure was the *test's* fault —
+`fetch` silently drops a `Host` header, because it is forbidden by the fetch specification, so every
+request arrived as `127.0.0.1` and the cdn correctly found no site for it. A cdn is addressed by
+hostname; the test has to speak the protocol the way the proxy in front of it will.
+
+**Next**: M2, which is where the design gets tested rather than the code. C4 → C5 → C6 — an edge
+registry, sync between edges, and `gone` → rebuild. Everything up to here assumed one node, and every
+assumption about the other case is currently unexamined.
 
 One thing the catalog surfaced that has to be answered before anyone but us publishes: **part names
 are a flat global namespace.** Two publishers both wanting `auth` collide, and renaming a part breaks

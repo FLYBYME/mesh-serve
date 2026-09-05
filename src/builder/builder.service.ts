@@ -15,7 +15,7 @@
 
 import { ServiceModule, type IServiceBroker } from '@flybyme/mesh';
 
-import { gridfsBlobStore, type BlobStore } from './blobs.js';
+import { fileBlobStore, type BlobStore } from './blobs.js';
 import {
     artifactBlobContract, artifactCrud, buildCrud, buildStartContract, getArtifactContract,
 } from './contracts/artifact.contract.js';
@@ -34,8 +34,16 @@ export interface BuilderServiceOptions {
      * is".
      */
     readonly fetcher?: Fetcher;
-    /** Where bytes go. Defaults to GridFS on the framework's database, resolved at start. */
+    /** Where bytes go. Defaults to a content-addressed directory under `blobRoot`. */
     readonly blobs?: BlobStore;
+    /**
+     * The directory that holds artifact bytes.
+     *
+     * A **cache**, not durable storage: an edge's disk is deleted when its pod restarts, and what
+     * makes an artifact recoverable is the catalog's commit plus a deterministic build. So this can
+     * point at ephemeral storage without ceremony.
+     */
+    readonly blobRoot?: string;
     readonly maxBytes?: number;
     /**
      * The origin content is downloaded from — what `artifact_blob` puts in front of a digest.
@@ -89,8 +97,10 @@ export class BuilderService extends ServiceModule {
     }
 
     async onStart(broker: IServiceBroker): Promise<void> {
-        this.blobs = this.options.blobs
-            ?? gridfsBlobStore(broker.getProvider('database'));
+        const root = this.options.blobRoot ?? process.env['MESH_BLOB_ROOT'] ?? './.artifacts';
+        this.blobs = this.options.blobs ?? fileBlobStore({ root });
+
+        broker.logger.info(`[builder] artifacts in ${root}`);
     }
 }
 

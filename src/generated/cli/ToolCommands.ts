@@ -441,6 +441,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_cdn_composeContract_compose, Contract_2.composeContract.inputSchema);
+    const cmd_cdn_deployContract_deploy = cdn.command('deploy').description(`Point a hostname at a release.`);
+    cmd_cdn_deployContract_deploy.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('cdn.deploy', o, Contract_2.deployContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_cdn_deployContract_deploy, Contract_2.deployContract.inputSchema);
     const release = program.command('release').description('release tools');
     const cmd_release_releaseCrud_create_create = release.command('create').description(`CRUD create for release (releaseCrud)`);
     cmd_release_releaseCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {

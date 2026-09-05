@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+
+# Artifact bytes cached by a local builder or cdn. A cache, never durable.
+.artifacts/

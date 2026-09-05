@@ -75,6 +75,37 @@ export const composeContract = defineContract({
         : `${String(o.problems.length)} problem(s)`),
 });
 
+/**
+ * Point a hostname at a release. **This is the deploy, and it is one field.**
+ *
+ * Which is what makes rollback the same write backwards — no rebuild, no re-resolution, nothing to
+ * get wrong at the moment somebody is under pressure.
+ *
+ * It is also the only place the grant check can happen. A release says what its parts *call*; a site
+ * says what it *exposes and at what gate*; a release is deliberately site-independent, so neither
+ * knows the other until here.
+ */
+export const deployContract = defineContract({
+    domain: 'cdn',
+    action: 'deploy',
+    description: 'Point a hostname at a release.',
+    inputSchema: z.object({
+        host: z.string().min(1),
+        release: z.string().min(1).describe('→ release.hash'),
+    }),
+    outputSchema: z.object({
+        host: z.string(),
+        release: z.string(),
+        /** False when the site already served this release and nothing was written. */
+        changed: z.boolean(),
+        /** Contracts the site exposes that nothing in this release calls. Reported, never fatal. */
+        unusedGrants: z.array(z.string()),
+    }),
+    rest: { method: 'POST', path: '/sites/:host/deploy' },
+    destructive: true,
+    print: (o) => (o.changed ? `${o.host} → ${o.release}` : `${o.host} already on ${o.release}`),
+});
+
 export const ReleaseComposedSchema = z.object({
     hash: z.string(),
     kernel: z.string(),

@@ -46,6 +46,7 @@ declare global {
         'partVersion.update': { params: z.input<typeof Contract_1.partVersionCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_1.partVersionCrud['update']['outputSchema']> };
         'partVersion.delete': { params: z.input<typeof Contract_1.partVersionCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_1.partVersionCrud['delete']['outputSchema']> };
         'cdn.compose': { params: z.input<typeof Contract_2.composeContract['inputSchema']>, returns: z.infer<typeof Contract_2.composeContract['outputSchema']> };
+        'cdn.deploy': { params: z.input<typeof Contract_2.deployContract['inputSchema']>, returns: z.infer<typeof Contract_2.deployContract['outputSchema']> };
         'release.create': { params: z.input<typeof Contract_2.releaseCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['create']['outputSchema']> };
         'release.find': { params: z.input<typeof Contract_2.releaseCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['find']['outputSchema']> };
         'release.find_one': { params: z.input<typeof Contract_2.releaseCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_2.releaseCrud['findOne']['outputSchema']> };
