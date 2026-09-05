@@ -51,14 +51,27 @@ These are wrong now, and everything built on top of them inherits the mistake.
       DATABASE_INTEGRATION), so `artifact.digest` and `site.host` are ordinary fields beside a minted
       id. **Two rows can claim the same bytes**, which content addressing exists to prevent. Needs
       the index *and* a check in the writer — the check alone is a race. **S**
-- [ ] **A5a The builder cannot clone a private repository.** *(found 2026-09-06; no longer urgent the
-      same day)* `gitFetcher` runs `git fetch` with no credential at all, and works today only
-      because a developer's machine has a credential helper configured — a builder pod has nothing.
-      **`mesh`, `mesh-web`, `mesh-serve` and `mesh-auth` were made public**, so the first real build
-      of a first-party part now succeeds and this stops blocking. It does not stop being true: the
-      first private part, and `surfdns`/`surfdns-console` which are still private, hit it. Needs a
-      token per source, held where a node can reach it and never in a descriptor — and a failure
-      that says *"no credential for that repository"* rather than an opaque git error. **M**
+- [x] **A5a The builder can clone a private repository.** *(built 2026-09-06)* `GIT_TOKEN_<HOST>` on
+      the node, sent as `http.extraHeader` and **never in the remote URL** — a URL with a token in it
+      reaches `.git/config`, git's error messages, and therefore the build log, which is stored on
+      the build row and travels with the failure. Redacted from any error that escapes, and a fetch
+      that fails with no credential says so, because a private repository is otherwise
+      indistinguishable from one that does not exist.
+- [ ] **A5b ★★ `build_start` takes a part, not a URL.** *(found 2026-09-06, immediately)* The caller
+      names the repository, so **a node holding a token that can read `surfdns` will clone it for
+      whoever asks**, bundle it, and publish an artifact the same caller can fetch by digest. That is
+      not a flaw in the token; it is `build_start` accepting an arbitrary URL while holding a
+      credential.
+      The catalog already fixes it: a `part` row carries `repository` and `publisher`, so the input
+      becomes `{ part, version }`, the repository comes from the catalog, and the caller is checked
+      against the publisher. There is then no field in which to name someone else's repository — and
+      a build becomes reproducible from the catalog alone, which is what `gone` → rebuild needs
+      anyway. **M** · ⛔ B1
+- [ ] **A5c A tarball source is not durable.** `archive` is in the schema and is the right answer for
+      a source the builder cannot reach — no credential, no clone. But everything rests on *the edge
+      disk is a cache and git is the archive*, and an uploaded tarball has nothing behind it: lose
+      every copy and the version is gone rather than `gone`. It has to be stored durably or marked
+      unreproducible before anything is published from one. **M** · ⛔ C6
 - [ ] **A6 A test that builds a real repository.** The builder has never run. Everything about it is
       asserted by unit tests over pure functions, and the last time that was true of the declaration
       reader, running it against one real repository found two defects in an afternoon. Needs a

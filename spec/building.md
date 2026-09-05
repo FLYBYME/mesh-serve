@@ -116,6 +116,58 @@ somewhere to live:
 Both, in practice. Neither is written yet. The same shape applies to `site.host` and to any
 collection whose key comes from the domain rather than from the database.
 
+## 4b. Private sources, and the hole a token opens — **Half decided 2026-09-06**
+
+`mesh*` is public and `surfdns*` is a private company, so the builder has to clone repositories it
+cannot read anonymously. Two ways, and they are not alternatives — they answer different questions.
+
+### A token, and why it cannot simply be one token
+
+`GIT_TOKEN_GITHUB_COM` on the builder node, sent as `http.extraHeader`, never in the remote URL — a
+URL with a token in it lands in `.git/config`, in git's error messages, and therefore **in the build
+log, which is stored on the build row and travels with the failure**. Built, and it works for one
+operator with one organization.
+
+It does not survive contact with a second tenant, and the reason is not the token — it is
+`build_start`:
+
+> ```
+> build_start({ source: { kind: 'git', repository: <anything>, ref } })
+> ```
+
+**The caller names the repository.** A node holding a token that can read `surfdns` will clone
+`surfdns` for whoever asks, bundle it, and publish an artifact addressed by a digest that the same
+caller can then fetch. That is not a leak in the token; it is `build_start` accepting an arbitrary
+URL and having a credential.
+
+### The fix is already sitting in the catalog
+
+A `part` row carries `repository` and `publisher`. So the build takes a **part and a version**, not a
+URL:
+
+```
+build_start({ part: 'surfdns-console', version: '0.3.1' })
+```
+
+The repository comes from the catalog, the caller is checked against `publisher`, and there is no
+longer a field in which to name somebody else's repository. It also makes a build reproducible from
+the catalog alone, which is what the `gone` → rebuild path needs anyway — so this is not a security
+patch bolted on, it is the shape the rest of the design already wanted.
+
+### The tarball, and what it costs
+
+An `archive` source is already in the schema. It is the right answer for a source the builder cannot
+reach at all — an air-gapped forge, a CI job that pushes rather than being pulled from — and it needs
+no credential, which removes the whole class of problem above.
+
+**But it breaks the durability story.** Everything else rests on: an edge's disk is a cache, and the
+archive is git. `gone` → rebuild from the commit works because the commit is still there. An uploaded
+tarball has nothing behind it: if every edge loses its copy, the artifact cannot be rebuilt, and the
+version is gone rather than `gone`.
+
+So a tarball source has to be **stored durably or marked as unreproducible**, and neither is written.
+Until then it is a development convenience and must not be how anything is published.
+
 ## 5. Verification happens at build time — **Decided**
 
 A site's `mesh[]` names contracts as strings. With an imported `ToolContract`, a wrong name was a
