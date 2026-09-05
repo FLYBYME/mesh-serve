@@ -28,6 +28,11 @@ import { CapabilitiesSchema, PartKindSchema, PartSchema, PartVersionSchema } fro
 
 export const partCrud = defineCrud('part', PartSchema, {
     pluralPath: 'parts',
+
+    // A part name is what a site writes to install one, so it is one namespace for everybody.
+    // Flat and global, which is a decision with a cost recorded on `PartSchema.name`: two publishers
+    // both wanting `auth` collide, and there is no scoping yet.
+    unique: [{ fields: 'name', scope: 'global' }],
     // Reading and writing a part record touches no other domain. Publishing a version does — it
     // checks the publisher and refuses a changed commit — and that is `publish`'s job, not a hooked
     // create.
@@ -36,6 +41,25 @@ export const partCrud = defineCrud('part', PartSchema, {
 
 export const partVersionCrud = defineCrud('partVersion', PartVersionSchema, {
     pluralPath: 'part-versions',
+
+    /**
+     * **This is what makes *a published version is immutable* true rather than likely.**
+     *
+     * `catalog.publish` checks for an existing version and refuses a different commit, and that
+     * check is correct and cannot be made safe on its own: two publishes of the same version can
+     * interleave between the read and the write, and both succeed. Every version range in the system
+     * rests on that not happening — `^1.4` resolving to bytes that changed underneath it is the
+     * failure the whole catalog exists to prevent.
+     *
+     * An application-level check cannot close a race with itself. Only the database refusing the
+     * second write can, which is why this is *making an existing guarantee true* rather than adding
+     * a constraint.
+     *
+     * Global, because a version is global: `auth@0.1.0` means one commit for everybody, and that is
+     * the point of publishing it.
+     */
+    unique: [{ fields: ['partName', 'version'], scope: 'global' }],
+
     dependencies: [],
 });
 

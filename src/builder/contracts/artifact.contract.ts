@@ -33,12 +33,22 @@ export const artifactCrud = defineCrud('artifact', ArtifactSchema, {
      * digest: the database mints an id and the digest is a field beside it. Every artifact therefore
      * has two identities, one of which means something.
      *
-     * The consequence is a real invariant with nowhere to live yet: **two rows can claim the same
-     * bytes**, which content addressing exists precisely to prevent. Until a collection can take a
-     * natural key, `digest` needs a unique index and the writer needs to check — see
-     * `spec/building.md`.
+     * The consequence was a real invariant with nowhere to live: **two rows could claim the same
+     * bytes**, which content addressing exists precisely to prevent. mesh 2.4.0 closed it — see
+     * `unique` below — so the two identities remain and only one of them can be duplicated.
      */
     pluralPath: 'artifacts',
+
+    /**
+     * **Global, not scoped, and that is the interesting half.**
+     *
+     * An artifact is addressed by the hash of its content, so two organizations building the same
+     * source produce the same digest and *have produced the same artifact*. Scoping this would store
+     * identical bytes once per tenant and discard the property that makes a build cacheable at all —
+     * which is the opposite mistake from `site.host`, where a global key is what prevents a takeover.
+     * Two collections, two answers, neither of them a default.
+     */
+    unique: [{ fields: 'digest', scope: 'global' }],
     // Reading and writing an artifact record touches no other domain. Publishing one does — it asks
     // the catalog to register a version — and that is `build_start`'s job, not a hooked create.
     dependencies: [],

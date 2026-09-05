@@ -72,6 +72,20 @@ export const siteCrud = defineCrud('site', SiteSchema, {
      */
     scopedBy: 'tenantId',
 
+    /**
+     * **`global`, and this is the case that shows the choice cannot be defaulted.**
+     *
+     * Every other field on a scoped collection would sensibly be unique *within* an organization —
+     * two tenants both wanting a slug of `main` is normal, and a global rule would break them for
+     * each other. A hostname is the opposite: it is **one origin on the internet**, so a second row
+     * claiming it is a tenant takeover, and a scoped rule would permit exactly that.
+     *
+     * Both defaults are wrong, silently, in opposite directions. mesh 2.4.0 therefore refuses a bare
+     * unique key on a scoped collection and makes the boundary explicit here, which is the only
+     * place that knows which kind of name this is.
+     */
+    unique: [{ fields: 'host', scope: 'global' }],
+
     dependencies: [],
 });
 /**

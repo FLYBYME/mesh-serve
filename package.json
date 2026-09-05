@@ -30,7 +30,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "github:FLYBYME/mesh#v2.2.1",
+        "@flybyme/mesh": "github:FLYBYME/mesh#v2.4.0",
         "esbuild": "^0.28.2",
         "zod": "^3.25.76",
         "zod-to-json-schema": "^3.25.2"
