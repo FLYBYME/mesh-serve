@@ -46,6 +46,9 @@ readonly MeshDependency[] => [{
     contracts: contracts.map((c) => (c.permission === undefined
         ? { key: c.key, auth: c.auth ?? 'user' }
         : { key: c.key, permission: c.permission })) as MeshDependency['contracts'],
+    // Routing is about contracts. Events are exposed separately and resolved in a different
+    // registry — see the site schema for why they are not one list.
+    events: [],
 }];
 
 describe('building a table', () => {

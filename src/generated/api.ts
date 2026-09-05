@@ -57,7 +57,7 @@ declare global {
         'release.resolve': { params: z.input<typeof Contract_3.releaseCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_3.releaseCrud['resolve']['outputSchema']> };
         'release.update': { params: z.input<typeof Contract_3.releaseCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_3.releaseCrud['update']['outputSchema']> };
         'release.delete': { params: z.input<typeof Contract_3.releaseCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_3.releaseCrud['delete']['outputSchema']> };
-        'cdn.resolve_site': { params: z.input<typeof Contract_3.resolveSiteContract['inputSchema']>, returns: z.infer<typeof Contract_3.resolveSiteContract['outputSchema']> };
+        'cdn.resolve_site': { params: z.input<typeof Contract_4.resolveSiteContract['inputSchema']>, returns: z.infer<typeof Contract_4.resolveSiteContract['outputSchema']> };
         'site.create': { params: z.input<typeof Contract_4.siteCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['create']['outputSchema']> };
         'site.find': { params: z.input<typeof Contract_4.siteCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['find']['outputSchema']> };
         'site.find_one': { params: z.input<typeof Contract_4.siteCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['findOne']['outputSchema']> };
