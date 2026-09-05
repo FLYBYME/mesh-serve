@@ -7,7 +7,9 @@
  * path that configures.
  */
 
-import type { Site } from '../schema/site.js';
+import { ClientError } from '@flybyme/mesh';
+
+import type { Site } from '../contracts/site.contract.js';
 
 /**
  * The hostname a lookup is keyed by.
@@ -57,13 +59,24 @@ export function hostOf(
  * resolution cleverer — a wildcard, a fallback, an alias table — cannot quietly produce a site whose
  * tenant is not the one that hostname belongs to without this failing.
  */
-export class TenantMismatch extends Error {
-    override readonly name = 'TenantMismatch';
-
+/**
+ * A `ClientError`, not a bare `Error`.
+ *
+ * The framework's error carries a `code`, a `status`, and a `toJSON()`, so it survives crossing the
+ * mesh. A plain `Error` arrives at another node as a message with nothing on it — no code to branch
+ * on, and nothing the API can map to an HTTP status, so a refusal that means *404, and deliberately
+ * unexplained* would reach a caller as a 500.
+ *
+ * `404` on purpose, and the message never travels: which tenant owns a hostname is not something an
+ * anonymous request gets to learn. The detail below is for a log on this node.
+ */
+export class TenantMismatch extends ClientError {
     constructor(readonly host: string, readonly expected: string, readonly actual: string) {
         super(
             `${host} belongs to tenant ${expected} but resolved to a site owned by ${actual}. ` +
             `The origin is the isolation boundary, so this is refused rather than served.`,
+            'tenant_mismatch',
+            404,
         );
     }
 }

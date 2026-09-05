@@ -108,8 +108,20 @@ strips the unknown key and silently matches whichever branch was declared first 
 both would get one of them, chosen by declaration order, with nothing said. Verified by removing it
 and watching the test fail.
 
-**`idField: 'host'`.** A site is a hostname and it is looked up on every request; an invented id would
-need a secondary index to answer the only question this collection is ever asked.
+**The id is the framework's, and `host` is an ordinary field.** This said `idField: 'host'` until
+`defineCrud` refused it, and the refusal was right in a way worth recording.
+
+The reasoning was: a site *is* a hostname, it is looked up on every request, and an invented id would
+need a secondary index to answer the only question this collection is ever asked. That reasoning
+holds. The mechanism did not. `defineCrud` builds its create input as
+`baseSchema.omit({ id, _id, createdAt, updatedAt })`, so **nothing can supply an id** — the database
+mints one, and `idField` only renames it on the wire. `idField: 'host'` would have produced
+`site.get({ host: '68a1f2c…' })`: a hostname-shaped parameter carrying a mongo id.
+
+So the lookup is `site.find_one({ query: { host } })` and the secondary index is a real index. The
+same applies to `artifact`, where it costs more: the digest **is** the identity, and an artifact that
+cannot be created at its own digest has two identities, only one of which means anything. See
+[building.md §4a](./building.md).
 
 **`dependencies: []`.** Required by `defineCrud`, and an empty array is an answer here rather than a
 default: reading and writing a site record touches no other domain. The things that *do* have

@@ -25,7 +25,7 @@
  * entry; the builder runs esbuild. See `spec/building.md` §3.
  */
 
-import { z } from '@flybyme/mesh';
+import { ClientError, z } from '@flybyme/mesh';
 
 /** What the file is called in a repository. */
 export const DESCRIPTOR_FILE = 'mesh.json';
@@ -112,8 +112,14 @@ export const DescriptorSchema = z.object({
 }).strict();
 export type Descriptor = z.infer<typeof DescriptorSchema>;
 
-export class DescriptorError extends Error {
-    override readonly name = 'DescriptorError';
+/**
+ * `400`: the repository's own file is wrong, and whoever asked for the build is the one who can fix
+ * it. A `code` so a caller can branch on *this is your descriptor* rather than matching on a string.
+ */
+export class DescriptorError extends ClientError {
+    constructor(message: string) {
+        super(message, 'descriptor_invalid', 400);
+    }
 }
 
 /**

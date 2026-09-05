@@ -13,7 +13,7 @@ a finding that came from looking at a screen is worth more than a paragraph that
 | --- | --- |
 | [composition.md](./composition.md) | What a site is: a hostname, a kernel, and a set of parts. `mesh.json` after it stops being a file. |
 | [building.md](./building.md) | What a build is: no install, framework external, one artifact per part. |
-| [serving.md](./serving.md) | The cdn: mounts, the generated page, styles and themes. |
+| [serving.md](./serving.md) | The cdn: an artifact's URL is its hash, the generated page, styles and themes. |
 | [exposure.md](./exposure.md) | What goes on the internet: contracts by name, gates, and the CRUD discipline that paas did not have. |
 | [fleet.md](./fleet.md) | Nodes announce, fleet reacts. The standard way to run a service anywhere. |
 

@@ -25,9 +25,19 @@ import { BuildSchema, SourceRefSchema } from '../schema/build.js';
 // ---------------------------------------------------------------------------- collections
 
 export const artifactCrud = defineCrud('artifact', ArtifactSchema, {
-    // The digest *is* the identity. An invented id would mean two records could claim the same
-    // bytes, and content addressing exists precisely so that they cannot.
-    idField: 'digest',
+    /**
+     * The default `id`, though the digest *is* the identity — and this is the one place where the
+     * framework and content addressing genuinely disagree.
+     *
+     * `defineCrud` omits the id from its create input, so an artifact cannot be created *at* its own
+     * digest: the database mints an id and the digest is a field beside it. Every artifact therefore
+     * has two identities, one of which means something.
+     *
+     * The consequence is a real invariant with nowhere to live yet: **two rows can claim the same
+     * bytes**, which content addressing exists precisely to prevent. Until a collection can take a
+     * natural key, `digest` needs a unique index and the writer needs to check — see
+     * `spec/building.md`.
+     */
     pluralPath: 'artifacts',
     // Reading and writing an artifact record touches no other domain. Publishing one does — it asks
     // the catalog to register a version — and that is `build_start`'s job, not a hooked create.
@@ -35,7 +45,6 @@ export const artifactCrud = defineCrud('artifact', ArtifactSchema, {
 });
 
 export const buildCrud = defineCrud('build', BuildSchema, {
-    idField: 'id',
     pluralPath: 'builds',
     dependencies: [],
 });
@@ -80,6 +89,34 @@ export const buildStartContract = defineContract({
     rest: { method: 'POST', path: '/builder/builds' },
     destructive: true,
     print: (o) => o.builds.map((b) => `${b.partId}: ${b.state}`).join(', '),
+});
+
+/**
+ * One artifact, by digest.
+ *
+ * **The question every serving node asks first.** A site's resolution names digests; a cdn node
+ * turns one into a file list before it can answer anything, and it must not reach into the builder's
+ * collection to do it. `artifact.find_one({ query: { digest } })` would work and would be wrong — it
+ * makes a private collection part of another service's contract, so the day the builder changes how
+ * it stores things, the cdn breaks.
+ *
+ * `public` means **may be exposed**, never *unauthenticated*: the gate is chosen per site. Worth
+ * knowing before choosing one — a digest is unguessable, but this answers for *any* digest, so a
+ * caller holding one learns that artifact's file names and sizes regardless of who owns it. The
+ * bytes are a separate contract, and the cdn's own check that a site may only serve what it composed
+ * is what actually holds the boundary.
+ */
+export const getArtifactContract = defineContract({
+    domain: 'builder',
+    action: 'get_artifact',
+    description: 'Fetch one artifact by its content digest.',
+    inputSchema: z.object({ digest: z.string().min(1) }),
+    // The collection's own output shape rather than a hand-written copy, so a field added to
+    // `ArtifactSchema` appears here and the two cannot drift.
+    outputSchema: artifactCrud.get.outputSchema,
+    rest: { method: 'GET', path: '/builder/artifacts/:digest' },
+    visibility: 'public',
+    print: (o) => `${o.digest} (${String(o.files.length)} files)`,
 });
 
 /**

@@ -30,7 +30,8 @@
  */
 
 import type { Artifact, ArtifactFile } from '../../builder/schema/artifact.js';
-import type { Resolution, Site } from '../schema/site.js';
+import type { Site } from '../contracts/site.contract.js';
+import type { Resolution } from '../schema/site.js';
 
 /** The one reserved prefix in a site's URL space. */
 export const ARTIFACT_PREFIX = '/_a/';

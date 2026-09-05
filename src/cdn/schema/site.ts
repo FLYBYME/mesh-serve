@@ -173,4 +173,8 @@ export const SiteSchema = z.object({
     /** Written by the cdn. Absent until this site has been composed. */
     resolution: ResolutionSchema.optional(),
 });
-export type Site = z.infer<typeof SiteSchema>;
+
+// No `export type Site` here. The site *object* is what the collection returns — `id`, `createdAt`
+// and `updatedAt` included — and it is inferred from `siteCrud.outputSchema` in
+// `../contracts/site.contract.js`. This file describes what is written; that one describes what
+// exists. Exporting a `Site` from both would be two types that agree until the day they do not.

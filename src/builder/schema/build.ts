@@ -47,7 +47,8 @@ export const BuildStateSchema = z.enum(['queued', 'fetching', 'building', 'succe
 export type BuildState = z.infer<typeof BuildStateSchema>;
 
 export const BuildSchema = z.object({
-    id: z.string().min(1),
+    // No `id`: `defineCrud` adds it, and declaring it here is refused outright — document ids belong
+    // to the database layer.
     source: SourceRefSchema,
 
     /**

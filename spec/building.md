@@ -92,6 +92,30 @@ Found by running it against a real repository after the unit tests passed on the
 nothing. The same run found that reading only a root `package.json` returns nothing at all for an npm
 workspace — which is not an exotic layout, it is what a repository with two halves naturally is.
 
+### 4a. A collection cannot take a natural key — **Open, and it costs something here**
+
+*(found 2026-09-06, wiring the builder onto `defineCrud`)*
+
+An artifact is bytes and a hash. The hash is its identity — that is the whole design — so the obvious
+shape is a collection keyed by digest, where storing the same bytes twice is impossible rather than
+merely unlikely.
+
+`defineCrud` cannot express that. Its create input is `baseSchema.omit({ id, _id, createdAt,
+updatedAt })`, so **nothing can supply an id**; the database mints one. `idField` renames that minted
+id on the wire, which is a different thing entirely, and setting it produces parameters that look
+like natural keys and carry mongo ids. The framework refuses a schema that declares its own id field,
+which is how this was found rather than discovered later in production.
+
+So every artifact has two identities and only one of them means anything. The invariant that content
+addressing was supposed to make free — **two rows must not claim the same bytes** — now needs
+somewhere to live:
+
+- a unique index on `digest`, which is where it can actually be enforced
+- the writer checking before it creates, which is a race unless the index backs it
+
+Both, in practice. Neither is written yet. The same shape applies to `site.host` and to any
+collection whose key comes from the domain rather than from the database.
+
 ## 5. Verification happens at build time — **Decided**
 
 A site's `mesh[]` names contracts as strings. With an imported `ToolContract`, a wrong name was a

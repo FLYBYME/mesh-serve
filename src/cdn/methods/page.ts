@@ -33,7 +33,10 @@
  * against everything else's.
  */
 
-import type { Resolution, Site } from '../schema/site.js';
+import { ClientError } from '@flybyme/mesh';
+
+import type { Site } from '../contracts/site.contract.js';
+import type { Resolution } from '../schema/site.js';
 import { slugOf } from './resolve.js';
 
 /** A file the cdn produced, before it is hashed into an artifact. */
@@ -207,8 +210,16 @@ ${entries}
 
 // ---------------------------------------------------------------------------- escaping
 
-export class PageError extends Error {
-    override readonly name = 'PageError';
+/**
+ * A site record that cannot be turned into a page.
+ *
+ * `422`: the record parsed, and it still describes a page that must not be generated. A caller can
+ * act on this one — it names the token — so unlike `TenantMismatch` the message is the point.
+ */
+export class PageError extends ClientError {
+    constructor(message: string) {
+        super(message, 'page_invalid', 422);
+    }
 }
 
 /** Text in an element. */

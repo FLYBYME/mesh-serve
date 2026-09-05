@@ -27,10 +27,21 @@ import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 import { SiteSchema } from '../schema/site.js';
 
 export const siteCrud = defineCrud('site', SiteSchema, {
-    // A site is a hostname, so the hostname is the key. An invented id would mean every lookup on
-    // the serving path — the hot one, on every request — needed a secondary index to answer the only
-    // question ever asked of this collection.
-    idField: 'host',
+    /**
+     * The default `id`, and **not `idField: 'host'`** — which is what this said until the framework
+     * refused it.
+     *
+     * The reasoning was: a site is a hostname, so the hostname should be the key, or every lookup on
+     * the serving path needs a secondary index. The reasoning was right and the mechanism was wrong.
+     * `defineCrud` builds its create input as `baseSchema.omit({ id, _id, createdAt, updatedAt })`,
+     * so **nothing can supply an id** — the database mints one. `idField` only renames that minted id
+     * on the wire, so `idField: 'host'` would have produced `site.get({ host: '68a1f2c…' })`: a
+     * hostname-shaped parameter holding a mongo id.
+     *
+     * So `host` stays an ordinary field, the serving path asks `site.find_one({ query: { host } })`,
+     * and the secondary index is a real index rather than a naming trick. Uniqueness on `host` has
+     * to be enforced somewhere it can actually be enforced — see below.
+     */
     pluralPath: 'sites',
 
     /**
@@ -44,6 +55,16 @@ export const siteCrud = defineCrud('site', SiteSchema, {
      */
     dependencies: [],
 });
+/**
+ * A site.
+ *
+ * **From the collection, not from the schema.** `SiteSchema` describes what someone writes;
+ * `defineCrud` adds `id`, `createdAt` and `updatedAt`, and what every reader actually handles is the
+ * document that comes back. Inferring it here means a field added to the schema appears for free and
+ * a field the framework adds cannot be forgotten — and it means there is one `Site` type rather than
+ * two that agree until they do not.
+ */
+export type Site = z.infer<typeof siteCrud.outputSchema>;
 
 /**
  * A site now serves something else.
@@ -89,7 +110,7 @@ export const siteComposedEvent = defineEvent('cdn.site_composed', SiteComposedSc
 export const siteComposeContract = defineContract({
     domain: 'cdn',
     action: 'site_compose',
-    description: 'Resolve a site\'s parts, generate its page, and record what it now serves.',
+    description: 'Resolve a sites parts, generate its page, and record what it now serves.',
     inputSchema: z.object({
         host: z.string().min(1),
         /** Compose and report without writing. What a deploy runs before it decides to. */
