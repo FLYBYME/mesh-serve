@@ -14,13 +14,17 @@
 
 // ---------------------------------------------------------------------------- services
 
+export { ApiService } from './api/api.service.js';
 export { BuilderService } from './builder/builder.service.js';
 export { CatalogService } from './catalog/catalog.service.js';
+export { CdnService } from './cdn/cdn.service.js';
 
 // ---------------------------------------------------------------------------- contracts
 
+export * from './api/contracts/api.contract.js';
 export * from './builder/contracts/artifact.contract.js';
 export * from './catalog/contracts/part.contract.js';
+export * from './cdn/contracts/release.contract.js';
 export * from './cdn/contracts/site.contract.js';
 export * from './identity/contracts/identity.contract.js';
 
