@@ -17,7 +17,7 @@ Sizes are **S** (an afternoon), **M** (a day or two), **L** (longer, or unknown 
 | `identity` | **built, and written the wrong way.** Zero `defineCrud`, 8 hand-written contracts, a 160-line hand-rolled store. Moved in from mesh-identity verbatim. |
 | `builder` | **built, untested against a real repository.** Service, 3 tools, esbuild, descriptor, content addressing. GridFS is wrong and comes out. |
 | `cdn` | **pure functions only.** Site record, hostname rules, resolve, page generation. No service, no port, no edge. |
-| `catalog` | **empty.** Three `.gitkeep` files. |
+| `catalog` | **collections, resolver and tools written.** Immutability enforced in `publish`. The tools have never run against a broker. |
 | `api` | **empty.** Three `.gitkeep` files. |
 | `fleet` | **empty.** Three `.gitkeep` files. |
 
@@ -60,18 +60,28 @@ These are wrong now, and everything built on top of them inherits the mistake.
 
 Nothing resolves until this exists. Every version a site names is a row here.
 
-- [ ] **B1 ★★ `part` and `partVersion`.** One `part` collection with
+- [x] **B1 ★★ `part` and `partVersion`.** *(built 2026-09-06)* One `part` collection with
       `kind: 'kernel' | 'application' | 'extension'` — they are the same shape, and three collections
       would be three copies of one resolver. Versions are **their own rows**, never an array on the
       part: an embedded array grows without bound, rewrites the whole document per publish, and
-      cannot answer the only query that matters. **M**
-- [ ] **B2 ★ A version is immutable.** `(partId, version)` unique. A second publish either matches
-      the recorded commit — idempotent, fine — or is refused **naming both commits**. This is what
-      makes `^1.4` safe, and without it a range resolves to bytes that can change underneath it. **S**
-      · ⛔ B1
-- [ ] **B3 The resolver.** Ranges in, exact versions out. A pure function — catalog contents in,
-      resolved set out — which makes the hardest logic in the system the most testable thing in it.
-      **M** · ⛔ B1
+      cannot answer the only query that matters.
+      A version starts `declared` — the row exists and is buildable before any bytes do — and can go
+      `gone`, which is not an error but the signal to rebuild.
+- [x] **B2 ★ A version is immutable.** *(built 2026-09-06)* Enforced in `catalog.publish`: the same
+      commit is idempotent, because a CI job that runs twice is not an error, and a different commit
+      is refused **naming both**. Without it `^1.4` resolves to bytes that change underneath it and
+      every site pinning that range silently gets different code.
+      The part's own identity is fixed at first publish too — `mesh.json` is the genesis object, and
+      a repository that later changes `kind` is describing a different part.
+- [x] **B3 The resolver.** *(built 2026-09-06)* `methods/semver.ts`, pure, 26 tests. The two that
+      carry the weight: **the 0.x caret rule**, since the kernel is 0.2.0 and `^0.2` must not match
+      0.3.0 — that is the live case, not a corner one — and **prereleases staying out of ranges**,
+      since getting it wrong ships a release candidate to every site tracking `^1.0`.
+      An unsupported range is reported as unsupported rather than matching nothing, because a range
+      nobody implemented looks exactly like a part nobody published.
+- [ ] **B3a Neither tool has run against a broker.** `publish` and `resolve` typecheck and their pure
+      halves are tested; the CRUD calls in them have never executed. This is the same gap that made
+      the declaration reader look finished. **S** · ⛔ A6
 - [ ] **B4 Contract descriptors, so a build can verify.** A site's `mesh[]` names contracts as
       strings; with an imported `ToolContract` a wrong name was a compile error, and now nothing
       catches it. The catalog holds each package's exported contracts, the build asks, and the
@@ -137,11 +147,31 @@ Nothing resolves until this exists. Every version a site names is a row here.
 - [ ] **D4 The exposure hash.** The API reports it, the generated client carries it, a mismatch is an
       error rather than a confusing 404 three calls later. *A client generated from one exposure and
       pointed at an API serving another is a lie the compiler vouches for.* **S** · ⛔ D1, D2
-- [ ] **D5 The client generator has to live in mesh-web, not here.** A part repository already
-      depends on the browser framework and must never depend on the server — putting it here makes
-      every UI repository install a web server to get types. mesh-auth is waiting on it right now:
-      it hand-writes `IssueReply` and `WhoamiReply`, a second copy of this repository's identity
-      output schemas with nothing checking they agree. **M** · ⛔ D1
+- [x] **D5 `mesh-serve client` — a part's `mesh.json` into typed API code.** *(built 2026-09-06)*
+      mesh-api's `describeExposure`, `emitClient` and the JSON-Schema-to-TypeScript emitter salvaged
+      into `src/api/`; the missing half — producing a descriptor **from what a part declares it
+      calls** — is `src/api/client-cli.ts`. mesh-auth's `IssueReply` and `WhoamiReply` are generated
+      now instead of hand-written.
+      Two things it found on its first real run, which is the argument for running things:
+      **`identity.ticket_revoke` is `internal` and the extension called it** — correctly internal,
+      because it takes `{ token?, userId? }` and `userId` revokes everyone else's tickets. Sign-out
+      needs its own narrow contract. See D5b.
+      And the CLI's own first version read `parts[].mesh[]` by hand and reported *"declares no
+      contracts"* for a file that plainly declared three — because mesh-auth uses the flat
+      single-part form. It uses `parseDescriptor` now: one parser, so a shape either half can write
+      is a shape both understand.
+- [ ] **D5a It still lives in the wrong repository.** A part repository must never depend on the
+      server, and running this today means mesh-auth installs mesh-serve to get types — exactly what
+      `spec/exposure.md` §4 objects to. The split that fixes it: **descriptor generation stays here**
+      (it needs the contracts), and **descriptor → types moves to mesh-web**, so a part regenerates
+      offline from its committed `descriptor.json`. **M**
+- [ ] **D5b `identity.sign_out`, public and narrow.** Revokes *the calling ticket* and nothing else,
+      takes no input. `ticket_revoke` cannot be the browser's sign-out because it can name a
+      `userId`. Until it exists, mesh-auth's `signOut` posts to a path it declares nowhere. **S**
+- [ ] **D5c A part's exposure hash is not the site's.** The descriptor a part generates uses one
+      placeholder gate for every entry, because a part must never choose its own — so its hash is
+      over shapes, not over the real exposure, and cannot be compared with what an API reports. The
+      check belongs at **compose time**, where the site's grants are known. **S** · ⛔ D4, C1
 
 ## Track E — Fleet
 
@@ -164,9 +194,15 @@ Shape decided, nothing built. See [fleet.md](./fleet.md).
 
 The first thing that could actually be looked at, in order:
 
-**B1 → B2 → C1 → A1 → A2 → C3** — a catalog with immutable versions, a release that names them, bytes
-on disk instead of in mongo, a page generated per request, and an edge that binds a port and serves
-it. A6 belongs anywhere in there and the sooner the better, because the builder has still never run.
+~~B1 → B2 → B3~~ **→ C1 → A1 → A2 → C3** — a catalog with immutable versions ✓, a release that names
+them, bytes on disk instead of in mongo, a page generated per request, and an edge that binds a port
+and serves it. A6 belongs anywhere in there and the sooner the better, because the builder has still
+never run — and B3a is the same gap in the catalog.
+
+One thing the catalog surfaced that has to be answered before anyone but us publishes: **part names
+are a flat global namespace.** Two publishers both wanting `auth` collide, and renaming a part breaks
+every site that names it. npm answers with `@scope/name`. Whatever the answer is, it is cheap now and
+expensive later.
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.

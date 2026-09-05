@@ -3,8 +3,9 @@ import { Command } from 'commander';
 import { MeshApp, C, RegistryModule, NetworkModule, BrokerModule, JSONSerializer, Logger } from '@flybyme/mesh';
 import { WSTransport, ZodToCliMapper } from '@flybyme/mesh/node';
 import * as Contract_0 from '../../builder/contracts/artifact.contract.js';
-import * as Contract_1 from '../../cdn/contracts/site.contract.js';
-import * as Contract_2 from '../../identity/contracts/identity.contract.js';
+import * as Contract_1 from '../../catalog/contracts/part.contract.js';
+import * as Contract_2 from '../../cdn/contracts/site.contract.js';
+import * as Contract_3 from '../../identity/contracts/identity.contract.js';
 
 async function executeCommand(toolName: string, args: Record<string, unknown>, contract: any, options: any) {
     const logger = new Logger(3);
@@ -245,167 +246,350 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_build_buildCrud_delete_delete, Contract_0.buildCrud['delete'].inputSchema);
+    const catalog = program.command('catalog').description('catalog tools');
+    const cmd_catalog_publishContract_publish = catalog.command('publish').description(`Publish one version of a part, creating the part on first publish.`);
+    cmd_catalog_publishContract_publish.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('catalog.publish', o, Contract_1.publishContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_catalog_publishContract_publish, Contract_1.publishContract.inputSchema);
+    const cmd_catalog_resolveContract_resolve = catalog.command('resolve').description(`Resolve version requirements against published versions.`);
+    cmd_catalog_resolveContract_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('catalog.resolve', o, Contract_1.resolveContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_catalog_resolveContract_resolve, Contract_1.resolveContract.inputSchema);
+    const part = program.command('part').description('part tools');
+    const cmd_part_partCrud_create_create = part.command('create').description(`CRUD create for part (partCrud)`);
+    cmd_part_partCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.create', o, Contract_1.partCrud['create'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_create_create, Contract_1.partCrud['create'].inputSchema);
+    const cmd_part_partCrud_find_find = part.command('find').description(`CRUD find for part (partCrud)`);
+    cmd_part_partCrud_find_find.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.find', o, Contract_1.partCrud['find'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_find_find, Contract_1.partCrud['find'].inputSchema);
+    const cmd_part_partCrud_findOne_find_one = part.command('find_one').description(`CRUD findOne for part (partCrud)`);
+    cmd_part_partCrud_findOne_find_one.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.find_one', o, Contract_1.partCrud['findOne'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_findOne_find_one, Contract_1.partCrud['findOne'].inputSchema);
+    const cmd_part_partCrud_count_count = part.command('count').description(`CRUD count for part (partCrud)`);
+    cmd_part_partCrud_count_count.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.count', o, Contract_1.partCrud['count'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_count_count, Contract_1.partCrud['count'].inputSchema);
+    const cmd_part_partCrud_get_get = part.command('get').description(`CRUD get for part (partCrud)`);
+    cmd_part_partCrud_get_get.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.get', o, Contract_1.partCrud['get'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_get_get, Contract_1.partCrud['get'].inputSchema);
+    const cmd_part_partCrud_resolve_resolve = part.command('resolve').description(`CRUD resolve for part (partCrud)`);
+    cmd_part_partCrud_resolve_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.resolve', o, Contract_1.partCrud['resolve'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_resolve_resolve, Contract_1.partCrud['resolve'].inputSchema);
+    const cmd_part_partCrud_update_update = part.command('update').description(`CRUD update for part (partCrud)`);
+    cmd_part_partCrud_update_update.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.update', o, Contract_1.partCrud['update'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_update_update, Contract_1.partCrud['update'].inputSchema);
+    const cmd_part_partCrud_delete_delete = part.command('delete').description(`CRUD delete for part (partCrud)`);
+    cmd_part_partCrud_delete_delete.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('part.delete', o, Contract_1.partCrud['delete'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_part_partCrud_delete_delete, Contract_1.partCrud['delete'].inputSchema);
+    const partVersion = program.command('partVersion').description('partVersion tools');
+    const cmd_partVersion_partVersionCrud_create_create = partVersion.command('create').description(`CRUD create for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.create', o, Contract_1.partVersionCrud['create'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_create_create, Contract_1.partVersionCrud['create'].inputSchema);
+    const cmd_partVersion_partVersionCrud_find_find = partVersion.command('find').description(`CRUD find for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_find_find.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.find', o, Contract_1.partVersionCrud['find'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_find_find, Contract_1.partVersionCrud['find'].inputSchema);
+    const cmd_partVersion_partVersionCrud_findOne_find_one = partVersion.command('find_one').description(`CRUD findOne for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_findOne_find_one.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.find_one', o, Contract_1.partVersionCrud['findOne'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_findOne_find_one, Contract_1.partVersionCrud['findOne'].inputSchema);
+    const cmd_partVersion_partVersionCrud_count_count = partVersion.command('count').description(`CRUD count for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_count_count.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.count', o, Contract_1.partVersionCrud['count'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_count_count, Contract_1.partVersionCrud['count'].inputSchema);
+    const cmd_partVersion_partVersionCrud_get_get = partVersion.command('get').description(`CRUD get for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_get_get.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.get', o, Contract_1.partVersionCrud['get'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_get_get, Contract_1.partVersionCrud['get'].inputSchema);
+    const cmd_partVersion_partVersionCrud_resolve_resolve = partVersion.command('resolve').description(`CRUD resolve for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_resolve_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.resolve', o, Contract_1.partVersionCrud['resolve'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_resolve_resolve, Contract_1.partVersionCrud['resolve'].inputSchema);
+    const cmd_partVersion_partVersionCrud_update_update = partVersion.command('update').description(`CRUD update for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_update_update.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.update', o, Contract_1.partVersionCrud['update'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_update_update, Contract_1.partVersionCrud['update'].inputSchema);
+    const cmd_partVersion_partVersionCrud_delete_delete = partVersion.command('delete').description(`CRUD delete for partVersion (partVersionCrud)`);
+    cmd_partVersion_partVersionCrud_delete_delete.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('partVersion.delete', o, Contract_1.partVersionCrud['delete'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_partVersion_partVersionCrud_delete_delete, Contract_1.partVersionCrud['delete'].inputSchema);
     const cdn = program.command('cdn').description('cdn tools');
     const cmd_cdn_siteComposeContract_site_compose = cdn.command('site_compose').description(`Resolve a site's parts, generate its page, and record what it now serves.`);
     cmd_cdn_siteComposeContract_site_compose.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('cdn.site_compose', o, Contract_1.siteComposeContract, cmd.optsWithGlobals());
+            await executeCommand('cdn.site_compose', o, Contract_2.siteComposeContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_cdn_siteComposeContract_site_compose, Contract_1.siteComposeContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_cdn_siteComposeContract_site_compose, Contract_2.siteComposeContract.inputSchema);
     const site = program.command('site').description('site tools');
     const cmd_site_siteCrud_create_create = site.command('create').description(`CRUD create for site (siteCrud)`);
     cmd_site_siteCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.create', o, Contract_1.siteCrud['create'], cmd.optsWithGlobals());
+            await executeCommand('site.create', o, Contract_2.siteCrud['create'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_create_create, Contract_1.siteCrud['create'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_create_create, Contract_2.siteCrud['create'].inputSchema);
     const cmd_site_siteCrud_find_find = site.command('find').description(`CRUD find for site (siteCrud)`);
     cmd_site_siteCrud_find_find.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.find', o, Contract_1.siteCrud['find'], cmd.optsWithGlobals());
+            await executeCommand('site.find', o, Contract_2.siteCrud['find'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_find_find, Contract_1.siteCrud['find'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_find_find, Contract_2.siteCrud['find'].inputSchema);
     const cmd_site_siteCrud_findOne_find_one = site.command('find_one').description(`CRUD findOne for site (siteCrud)`);
     cmd_site_siteCrud_findOne_find_one.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.find_one', o, Contract_1.siteCrud['findOne'], cmd.optsWithGlobals());
+            await executeCommand('site.find_one', o, Contract_2.siteCrud['findOne'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_findOne_find_one, Contract_1.siteCrud['findOne'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_findOne_find_one, Contract_2.siteCrud['findOne'].inputSchema);
     const cmd_site_siteCrud_count_count = site.command('count').description(`CRUD count for site (siteCrud)`);
     cmd_site_siteCrud_count_count.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.count', o, Contract_1.siteCrud['count'], cmd.optsWithGlobals());
+            await executeCommand('site.count', o, Contract_2.siteCrud['count'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_count_count, Contract_1.siteCrud['count'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_count_count, Contract_2.siteCrud['count'].inputSchema);
     const cmd_site_siteCrud_get_get = site.command('get').description(`CRUD get for site (siteCrud)`);
     cmd_site_siteCrud_get_get.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.get', o, Contract_1.siteCrud['get'], cmd.optsWithGlobals());
+            await executeCommand('site.get', o, Contract_2.siteCrud['get'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_get_get, Contract_1.siteCrud['get'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_get_get, Contract_2.siteCrud['get'].inputSchema);
     const cmd_site_siteCrud_resolve_resolve = site.command('resolve').description(`CRUD resolve for site (siteCrud)`);
     cmd_site_siteCrud_resolve_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.resolve', o, Contract_1.siteCrud['resolve'], cmd.optsWithGlobals());
+            await executeCommand('site.resolve', o, Contract_2.siteCrud['resolve'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_resolve_resolve, Contract_1.siteCrud['resolve'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_resolve_resolve, Contract_2.siteCrud['resolve'].inputSchema);
     const cmd_site_siteCrud_update_update = site.command('update').description(`CRUD update for site (siteCrud)`);
     cmd_site_siteCrud_update_update.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.update', o, Contract_1.siteCrud['update'], cmd.optsWithGlobals());
+            await executeCommand('site.update', o, Contract_2.siteCrud['update'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_update_update, Contract_1.siteCrud['update'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_update_update, Contract_2.siteCrud['update'].inputSchema);
     const cmd_site_siteCrud_delete_delete = site.command('delete').description(`CRUD delete for site (siteCrud)`);
     cmd_site_siteCrud_delete_delete.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('site.delete', o, Contract_1.siteCrud['delete'], cmd.optsWithGlobals());
+            await executeCommand('site.delete', o, Contract_2.siteCrud['delete'], cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_site_siteCrud_delete_delete, Contract_1.siteCrud['delete'].inputSchema);
+    ZodToCliMapper.applyOptions(cmd_site_siteCrud_delete_delete, Contract_2.siteCrud['delete'].inputSchema);
     const identity = program.command('identity').description('identity tools');
     const cmd_identity_ticketIssueContract_ticket_issue = identity.command('ticket_issue').description(`Exchange credentials for an opaque ticket.`);
     cmd_identity_ticketIssueContract_ticket_issue.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.ticket_issue', o, Contract_2.ticketIssueContract, cmd.optsWithGlobals());
+            await executeCommand('identity.ticket_issue', o, Contract_3.ticketIssueContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_ticketIssueContract_ticket_issue, Contract_2.ticketIssueContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_ticketIssueContract_ticket_issue, Contract_3.ticketIssueContract.inputSchema);
     const cmd_identity_ticketValidateContract_ticket_validate = identity.command('ticket_validate').description(`Is this ticket valid, and whose is it.`);
     cmd_identity_ticketValidateContract_ticket_validate.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.ticket_validate', o, Contract_2.ticketValidateContract, cmd.optsWithGlobals());
+            await executeCommand('identity.ticket_validate', o, Contract_3.ticketValidateContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_ticketValidateContract_ticket_validate, Contract_2.ticketValidateContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_ticketValidateContract_ticket_validate, Contract_3.ticketValidateContract.inputSchema);
     const cmd_identity_ticketRevokeContract_ticket_revoke = identity.command('ticket_revoke').description(`Revoke one ticket, or every ticket a principal holds.`);
     cmd_identity_ticketRevokeContract_ticket_revoke.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.ticket_revoke', o, Contract_2.ticketRevokeContract, cmd.optsWithGlobals());
+            await executeCommand('identity.ticket_revoke', o, Contract_3.ticketRevokeContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_ticketRevokeContract_ticket_revoke, Contract_2.ticketRevokeContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_ticketRevokeContract_ticket_revoke, Contract_3.ticketRevokeContract.inputSchema);
     const cmd_identity_revocationsSinceContract_revocations_since = identity.command('revocations_since').description(`Revocations after a given epoch, for an API instance catching up.`);
     cmd_identity_revocationsSinceContract_revocations_since.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.revocations_since', o, Contract_2.revocationsSinceContract, cmd.optsWithGlobals());
+            await executeCommand('identity.revocations_since', o, Contract_3.revocationsSinceContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_revocationsSinceContract_revocations_since, Contract_2.revocationsSinceContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_revocationsSinceContract_revocations_since, Contract_3.revocationsSinceContract.inputSchema);
     const cmd_identity_whoamiContract_whoami = identity.command('whoami').description(`Who the caller is, and which organizations they belong to.`);
     cmd_identity_whoamiContract_whoami.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.whoami', o, Contract_2.whoamiContract, cmd.optsWithGlobals());
+            await executeCommand('identity.whoami', o, Contract_3.whoamiContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_whoamiContract_whoami, Contract_2.whoamiContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_whoamiContract_whoami, Contract_3.whoamiContract.inputSchema);
     const cmd_identity_registerContract_register = identity.command('register').description(`Create an account.`);
     cmd_identity_registerContract_register.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.register', o, Contract_2.registerContract, cmd.optsWithGlobals());
+            await executeCommand('identity.register', o, Contract_3.registerContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_registerContract_register, Contract_2.registerContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_registerContract_register, Contract_3.registerContract.inputSchema);
     const cmd_identity_permitsContract_permits = identity.command('permits').description(`Whether a caller holding these roles may call a contract.`);
     cmd_identity_permitsContract_permits.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
-            await executeCommand('identity.permits', o, Contract_2.permitsContract, cmd.optsWithGlobals());
+            await executeCommand('identity.permits', o, Contract_3.permitsContract, cmd.optsWithGlobals());
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             console.error(C.red + 'Error:' + C.reset, message);
         }
     });
-    ZodToCliMapper.applyOptions(cmd_identity_permitsContract_permits, Contract_2.permitsContract.inputSchema);
+    ZodToCliMapper.applyOptions(cmd_identity_permitsContract_permits, Contract_3.permitsContract.inputSchema);
 }

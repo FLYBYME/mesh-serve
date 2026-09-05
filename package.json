@@ -13,7 +13,11 @@
         },
         "./package.json": "./package.json"
     },
+    "bin": {
+        "mesh-serve": "./bin/mesh-serve.mjs"
+    },
     "files": [
+        "bin",
         "dist",
         "README.md"
     ],
@@ -28,7 +32,8 @@
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.1.1",
         "esbuild": "^0.28.2",
-        "zod": "^3.25.76"
+        "zod": "^3.25.76",
+        "zod-to-json-schema": "^3.25.2"
     },
     "devDependencies": {
         "@types/node": "^22.0.0",

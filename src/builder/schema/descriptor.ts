@@ -78,21 +78,43 @@ export const DescribedPartSchema = z.object({
     version: z.string().min(1),
     /** The **source** entry — `src/app.ts`. esbuild reads types; it does not check them. */
     entry: innerPath,
+
+    /**
+     * The packages this part was written against, name → range.
+     *
+     * **Not an instruction to install.** A build fetches a commit and runs esbuild; it has no
+     * `node_modules` and never will, because that is what made a build 95 to 125 seconds. These are
+     * a declaration of what the *author* typechecked against, mirroring the repository's own
+     * `devDependencies`.
+     *
+     * Which makes the honest question: what reads it? Two candidates, and they want different
+     * things — a **build-time check** that the framework range here agrees with `kernel` above, and
+     * a **vendoring rule**, since "vendored or external" means anything that is not the framework
+     * has to be committed, and a package named here that is neither is a build that will fail on a
+     * missing import with no explanation. Neither is implemented. Recorded rather than guessed at.
+     */
+    dependencies: z.record(z.string(), z.string()).default({}),
+
     mesh: z.array(RequiredPackageSchema).default([]),
 });
 export type DescribedPart = z.infer<typeof DescribedPartSchema>;
 
-export const DescriptorSchema = z.object({
-    /**
-     * Which kernel these parts are built against, as a requirement.
-     *
-     * Repository-level because it is a property of the tree — one `node_modules`, one set of types —
-     * and it is copied into each part's declaration, which is where something eventually compares it.
-     *
-     * Absent when this repository *is* the kernel, which is the one thing that has no kernel.
-     */
-    kernel: z.string().min(1).optional(),
+/**
+ * Which kernel a part is built against, as a requirement.
+ *
+ * A property of the tree — one `node_modules`, one set of types — and it is copied into each part's
+ * declaration, which is where something eventually compares it. Absent when this repository *is* the
+ * kernel, which is the one thing that has no kernel.
+ */
+const KernelRange = z.string().min(1).optional();
 
+/**
+ * A repository that builds **several** parts.
+ *
+ * `surfdns-console` is the real case: a chrome extension and an application in one tree.
+ */
+const NestedDescriptorSchema = z.object({
+    kernel: KernelRange,
     parts: z.array(DescribedPartSchema).min(1)
         .superRefine((parts, ctx) => {
             const seen = new Set<string>();
@@ -110,7 +132,38 @@ export const DescriptorSchema = z.object({
             });
         }),
 }).strict();
-export type Descriptor = z.infer<typeof DescriptorSchema>;
+
+/**
+ * A repository that builds **one** part, written flat.
+ *
+ * The common case, and nesting a single part inside an array to say so is noise. This is
+ * `package.json`'s `bin` — accepted in two shapes, normalised to one immediately, so nothing
+ * downstream ever branches on which was written.
+ *
+ * **Not both.** A file carrying flat fields *and* a `parts` array says two contradictory things about
+ * what this repository builds, and `.strict()` on each branch is what makes that unrepresentable
+ * rather than resolved by whichever the parser happened to try first.
+ */
+const FlatDescriptorSchema = DescribedPartSchema.extend({ kernel: KernelRange }).strict();
+
+/** Normalised. Nothing downstream ever branches on which shape was written. */
+export interface Descriptor {
+    readonly kernel?: string;
+    readonly parts: readonly DescribedPart[];
+}
+
+/**
+ * Which shape a file is, decided before it is parsed.
+ *
+ * **Not `z.union`**, and the reason is the whole point of this parser. Zod reports a failed union as
+ * one `invalid_union` issue at the root, so *"parts.1.kind must be application or extension"* becomes
+ * *"invalid input"* — and this file is written by hand, by someone who is not watching the builder's
+ * logs. Choosing the branch first keeps every message pointing at the field that is wrong.
+ *
+ * `parts` is the discriminator because it is the one key that only ever appears in the nested form.
+ */
+const isNested = (value: unknown): boolean =>
+    typeof value === 'object' && value !== null && 'parts' in value;
 
 /**
  * `400`: the repository's own file is wrong, and whoever asked for the build is the one who can fix
@@ -139,8 +192,22 @@ export function parseDescriptor(text: string): Descriptor {
         );
     }
 
-    const parsed = DescriptorSchema.safeParse(value);
-    if (parsed.success) return parsed.data;
+    const nested = isNested(value);
+    const parsed = nested
+        ? NestedDescriptorSchema.safeParse(value)
+        : FlatDescriptorSchema.safeParse(value);
+
+    if (parsed.success) {
+        if ('parts' in parsed.data) {
+            const { kernel, parts } = parsed.data;
+            return { ...(kernel === undefined ? {} : { kernel }), parts };
+        }
+
+        // The flat form's `kernel` is repository-level in both shapes, so it comes off the part and
+        // the normalised value has exactly one place it can live.
+        const { kernel, ...part } = parsed.data;
+        return { ...(kernel === undefined ? {} : { kernel }), parts: [part] };
+    }
 
     const where = (path: readonly (string | number)[]): string =>
         path.length === 0 ? DESCRIPTOR_FILE : `${DESCRIPTOR_FILE} ${path.map(String).join('.')}`;
