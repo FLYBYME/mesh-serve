@@ -22,8 +22,50 @@ not whether they are conceptually similar.
 - **`api`** — binds a port and turns exposed contracts into REST, SSE and WebSockets. A listener and
   a cache: across requests it holds the exposure map and the ticket cache, and nothing else.
 - **`identity`** — users, organizations, roles as records, opaque tickets.
+- **`catalog`** — what parts and kernels exist, at which versions and hashes, and what each is
+  compatible with. Named `catalog` rather than `store`, which means persistence in every service
+  here, or `registry`, which is already the mesh's node registry.
 
-Three of the four bind a port. All four are ordinary ServiceModules: contracts and tools on a broker.
+All are ordinary ServiceModules: contracts and tools on a broker. Some bind a port.
+
+## What a build is
+
+**No install.** A part's repository is bundled exactly as it arrives: fetch the commit, run esbuild,
+hash the output. No `npm i`, no network, no `node_modules`. This is possible because **esbuild does
+not typecheck** — it strips types and emits — so a part whose only dependency is the framework needs
+nothing installed at all.
+
+Two rules make it hold:
+
+- **The framework is `external`.** It is never bundled into a part; the page's import map resolves it
+  to the one mounted kernel artifact. `mesh-ui` got this wrong in the one line that mattered — its
+  `external` list named node builtins and server packages, and aliased `@flybyme/mesh` to a browser
+  build that esbuild then **inlined into every extension**. That is one kernel per part, which is one
+  of every singleton per part.
+- **Everything else is vendored.** A part that uses a third-party library commits it. There is no
+  resolution step, so a missing dependency is a build failure rather than a network round trip.
+
+Typechecking is the author's job, in their own repository, before they push. A build server is the
+slowest place to discover that a type is wrong.
+
+## What the CDN generates
+
+A site's page is not written by anyone. The CDN composes it from the catalog — a compatible kernel
+and a set of parts — and emits:
+
+- **`index.html`** — the shell, with the import map pointing at the mounted kernel
+- **the boot module** — which parts to load and in what order, from the composition
+- **the theme** — token *values*, which come from the composition rather than from any bundle
+
+It links what the kernel and the parts already carry: the kernel ships the CSS rules, and esbuild
+emits a part's own stylesheet beside its module.
+
+**Generated when the composition changes, not per request.** The output is hashed and stored like any
+other artifact, or it becomes the one thing in the system that is not content-addressed and needs its
+caching special-cased.
+
+The CDN is also where **policy** is enforced, which is why policy belongs to a composition rather than
+to a build: changing it should not mean rebuilding a part that did not change.
 
 ## Layout
 
