@@ -100,6 +100,19 @@ export const DeclarationSchema = z.object({
     kernel: z.string().min(1).optional(),
     /** Every contract this part calls, by key. A requirement — never a grant. See `mesh.json`. */
     requires: z.array(z.string().min(1)),
+
+    /**
+     * Other parts this one needs on the page.
+     *
+     * Carried on the artifact as well as in the catalog, for the same reason the declaration exists
+     * at all: an artifact copied to another node arrives already able to say what it is. A node
+     * holding the bytes can answer *what does this need* without a catalog lookup.
+     */
+    requiredParts: z.array(z.object({
+        id: z.string().min(1),
+        version: z.string().min(1),
+        optional: z.boolean(),
+    })).default([]),
     builtAgainst: z.array(ResolvedDependencySchema),
 });
 export type Declaration = z.infer<typeof DeclarationSchema>;

@@ -40,6 +40,7 @@ const artifact = (...paths: string[]): Artifact => ({
     declaration: {
         part: { kind: 'application', id: 'a', version: '1.0.0', entry: 'index.js' },
         requires: [],
+        requiredParts: [],
         builtAgainst: [],
     },
 });

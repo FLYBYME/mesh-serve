@@ -62,6 +62,7 @@ export async function publishPart(
             // against, which is the only thing standing between a stale part and a browser.
             ...(part.kind === 'kernel' || kernel === undefined ? {} : { kernel }),
             requires: [...requirementsOf(part)],
+            requiredParts: part.requiredParts.map((required) => ({ ...required })),
             builtAgainst: [...builtAgainst],
         };
 

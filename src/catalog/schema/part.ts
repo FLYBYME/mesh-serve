@@ -129,6 +129,19 @@ export const PartVersionSchema = z.object({
     /** Contract keys this version calls, by name. Checked against the site's grants at compose time. */
     requires: z.array(z.string()).default([]),
 
+    /**
+     * Other parts this one needs on the page, as ranges.
+     *
+     * Resolved transitively: composing a site pulls in what its parts need, and what *those* need.
+     * The failure this prevents is an application that consumes `AUTH` loading onto a page with no
+     * auth Extension — which is a blank panel and a console error, not a message anybody can act on.
+     */
+    requiredParts: z.array(z.object({
+        id: z.string().min(1),
+        version: z.string().min(1),
+        optional: z.boolean().default(false),
+    })).default([]),
+
     capabilities: CapabilitiesSchema,
 
     state: VersionStateSchema,

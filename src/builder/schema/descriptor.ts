@@ -63,6 +63,30 @@ export const RequiredPackageSchema = z.object({
 export type RequiredPackage = z.infer<typeof RequiredPackageSchema>;
 
 /**
+ * Another part this one needs installed beside it.
+ *
+ * A **requirement**, resolved by the catalog like any other range, and checked when a site composes:
+ * an application that consumes `AUTH` does not work on a page with no auth Extension, and finding
+ * that out at compose time is the difference between a refused deploy and a blank screen.
+ *
+ * It is not a *grant*. Declaring `auth` here says this part will not function without it; it does not
+ * install it, does not choose its version for the site, and does not decide what auth may reach.
+ * A site's release is still what says which parts are actually loaded.
+ */
+export const RequiredPartSchema = z.object({
+    id: z.string().min(1),
+    version: z.string().min(1).describe('A range, or * for any'),
+    /**
+     * A part that is nice to have rather than necessary.
+     *
+     * The honest case: a part that lights up an extra view when something else is present but works
+     * without it. Composing reports an unmet optional and refuses an unmet required one.
+     */
+    optional: z.boolean().default(false),
+});
+export type RequiredPart = z.infer<typeof RequiredPartSchema>;
+
+/**
  * One part this repository builds.
  *
  * **`mesh` is per part, not per repository.** A repository-level list would make every part in the
@@ -94,6 +118,19 @@ export const DescribedPartSchema = z.object({
      * missing import with no explanation. Neither is implemented. Recorded rather than guessed at.
      */
     dependencies: z.record(z.string(), z.string()).default({}),
+
+    /**
+     * Other parts this one needs on the page.
+     *
+     * **Named `requiredParts` and not `parts`**, which reads worse and is the only option. In the
+     * flat single-part form a part's own fields sit at the root, so a root `parts` would mean both
+     * *what this repository builds* and *what this part needs* — and `parts` is exactly what tells
+     * the two file shapes apart. One key cannot be the discriminator and an ordinary field at once.
+     *
+     * A kernel may declare these too. A kernel that ships no chrome and expects one is stating a real
+     * requirement, and the alternative is a bare kernel rendering nothing with no explanation.
+     */
+    requiredParts: z.array(RequiredPartSchema).default([]),
 
     mesh: z.array(RequiredPackageSchema).default([]),
 });
