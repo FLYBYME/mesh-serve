@@ -199,6 +199,30 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     throw new Error('ticket_revoke needs a token or a userId.');
                 }
 
+                case 'identity.sign_out': {
+                    const { token } = input as { token: string };
+
+                    /**
+                     * Always the same answer.
+                     *
+                     * Signing out with a live ticket, an expired one, or one that was never issued
+                     * all return `{ signedOut: true }` — because the difference is information about
+                     * a credential the caller is claiming not to want any more, and an endpoint that
+                     * distinguished them would tell an attacker holding a guessed token whether it
+                     * was real.
+                     *
+                     * The revocation row is only appended for a ticket that existed, so a caller
+                     * cannot make this collection grow by presenting nonsense.
+                     */
+                    const held = await store.getTicket(token);
+                    if (held !== undefined && held.revokedAt === undefined) {
+                        await store.markRevoked(token, now(), 'signed out');
+                        await revoke('ticket', token, 'signed out');
+                    }
+
+                    return { signedOut: true as const };
+                }
+
                 case 'identity.revocations_since': {
                     const { epoch, limit } = input as { epoch: number; limit?: number };
                     const range = await store.epochRange();

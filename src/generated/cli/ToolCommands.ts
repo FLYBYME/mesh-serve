@@ -666,6 +666,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_identity_ticketRevokeContract_ticket_revoke, Contract_5.ticketRevokeContract.inputSchema);
+    const cmd_identity_signOutContract_sign_out = identity.command('sign_out').description(`End the calling session.`);
+    cmd_identity_signOutContract_sign_out.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('identity.sign_out', o, Contract_5.signOutContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_identity_signOutContract_sign_out, Contract_5.signOutContract.inputSchema);
     const cmd_identity_revocationsSinceContract_revocations_since = identity.command('revocations_since').description(`Revocations after a given epoch, for an API instance catching up.`);
     cmd_identity_revocationsSinceContract_revocations_since.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {

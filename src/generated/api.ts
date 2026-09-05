@@ -69,6 +69,7 @@ declare global {
         'identity.ticket_issue': { params: z.input<typeof Contract_5.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketIssueContract['outputSchema']> };
         'identity.ticket_validate': { params: z.input<typeof Contract_5.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketValidateContract['outputSchema']> };
         'identity.ticket_revoke': { params: z.input<typeof Contract_5.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketRevokeContract['outputSchema']> };
+        'identity.sign_out': { params: z.input<typeof Contract_5.signOutContract['inputSchema']>, returns: z.infer<typeof Contract_5.signOutContract['outputSchema']> };
         'identity.revocations_since': { params: z.input<typeof Contract_5.revocationsSinceContract['inputSchema']>, returns: z.infer<typeof Contract_5.revocationsSinceContract['outputSchema']> };
         'identity.whoami': { params: z.input<typeof Contract_5.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_5.whoamiContract['outputSchema']> };
         'identity.register': { params: z.input<typeof Contract_5.registerContract['inputSchema']>, returns: z.infer<typeof Contract_5.registerContract['outputSchema']> };

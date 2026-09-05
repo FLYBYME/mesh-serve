@@ -73,6 +73,60 @@ export const ticketRevokeContract = defineContract({
 });
 
 /**
+ * End **this** session, and nothing else.
+ *
+ * `ticket_revoke` cannot be a browser's sign-out and must stay internal: it takes a `userId`, so it
+ * ends every ticket a *named person* holds. That is a real operation — an operator suspending an
+ * account — and it is not one a page may perform.
+ *
+ * The generator found this rather than a review. mesh-auth declared `identity.ticket_revoke` among
+ * the contracts it calls, and `describeExposure` refused it: *marked internal by its own domain and
+ * cannot be exposed*. The check working is the story; the extension had been posting to that path
+ * since it was written.
+ *
+ * ## Why it takes a token and not nothing
+ *
+ * *No input at all* was the first draft, on the reasoning that the ticket is already on the request
+ * and a contract whose only possible target is the caller cannot be pointed at anybody else. It does
+ * not work: `Caller` is `{ userId, roles }`, so what crosses the broker is **who** the ticket belongs
+ * to and never the ticket. Making it work would mean putting a live credential in `meta`, where every
+ * handler on the mesh would receive it — and *an Application never handles a credential* is a
+ * property this system spends real effort on. Weakening it so that one contract can take no argument
+ * is a bad trade.
+ *
+ * So the token is named, and the safety comes from what a token *is*: **presenting one proves you
+ * hold it, and revoking a ticket you hold is strictly less powerful than using it.** The dangerous
+ * parameter on `ticket_revoke` was never `token` — it was `userId`, which acts on a person rather
+ * than on a credential, and it is absent here.
+ *
+ * `public`, because signing out cannot require being signed in any more than signing in can: a
+ * caller holding an expired or already-revoked ticket must still be able to say *I am done* and get
+ * the same answer as one holding a live one.
+ */
+export const signOutContract = defineContract({
+    domain: 'identity',
+    action: 'sign_out',
+    description: 'End the calling session.',
+    inputSchema: z.object({
+        /** The ticket to end. Yours by definition: you had to hold it to send it. */
+        token: z.string().min(1),
+    }),
+    outputSchema: z.object({
+        /**
+         * Always true, and deliberately not *whether a ticket was revoked*.
+         *
+         * Signing out with no ticket, an expired one, or one already revoked all answer the same,
+         * because the difference is information about a credential the caller does not hold.
+         */
+        signedOut: z.literal(true),
+    }),
+    rest: { method: 'POST', path: '/identity/sign_out' },
+    visibility: 'public',
+    destructive: true,
+    print: () => 'signed out',
+});
+
+/**
  * What changed since an API instance last looked.
  *
  * **The contract that makes revocation correct** rather than likely. mesh-web spec/auth.md §3.1: the
@@ -177,6 +231,7 @@ export const identityContracts = [
     ticketIssueContract,
     ticketValidateContract,
     ticketRevokeContract,
+    signOutContract,
     revocationsSinceContract,
     whoamiContract,
     registerContract,
