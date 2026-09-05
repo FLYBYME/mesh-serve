@@ -27,12 +27,19 @@ import type { Artifact } from '../builder/schema/artifact.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
-import { siteCrud, type Site } from './contracts/site.contract.js';
+import { resolveSiteContract, siteCrud, type Site } from './contracts/site.contract.js';
+import { SiteSchema } from './schema/site.js';
 import { assertTenant, hostOf, TenantMismatch } from './methods/hostname.js';
 import { generatePage } from './methods/page.js';
 import { headersFor, pathOf, resolveFile, resolveRequest } from './methods/resolve.js';
 import { cdn_compose } from './tools/compose.js';
 import { cdn_deploy } from './tools/deploy.js';
+import { cdn_resolve_site } from './tools/resolve_site.js';
+
+/** Only what `resolve_site` needs: one query, bounded. Deliberately not the whole repository. */
+export interface SiteRepo {
+    find(options: { query: Record<string, unknown>; limit: number }): Promise<readonly unknown[]>;
+}
 
 export interface CdnServiceOptions {
     /** `0` picks one, which is what a test wants. */
@@ -68,6 +75,7 @@ export class CdnService extends ServiceModule {
     public port: number | undefined;
 
     private broker: IServiceBroker | undefined;
+    private database: { repo(schema: unknown, domain: string): SiteRepo } | undefined;
     private readonly ttl: number;
 
     /**
@@ -93,6 +101,7 @@ export class CdnService extends ServiceModule {
 
         this.mountTool(composeContract, cdn_compose);
         this.mountTool(deployContract, cdn_deploy);
+        this.mountTool(resolveSiteContract, cdn_resolve_site);
 
         // Every node drops the hostname it was told about, including the one that published it —
         // which costs a single lookup and means there is no "was it me?" branch to get wrong.
@@ -103,6 +112,7 @@ export class CdnService extends ServiceModule {
 
     async onStart(broker: IServiceBroker): Promise<void> {
         this.broker = broker;
+        this.database = broker.getProvider('database');
         const root = this.options.blobRoot ?? process.env['MESH_BLOB_ROOT'] ?? './.artifacts';
         this.blobs = this.options.blobs ?? fileBlobStore({ root });
 
@@ -120,6 +130,15 @@ export class CdnService extends ServiceModule {
         this.listener = undefined;
         if (open === undefined) return;
         await new Promise<void>((done) => { open.close(() => { done(); }); });
+    }
+
+    /**
+     * The site collection, read directly — see `tools/resolve_site.ts` for why, and for the
+     * invariant that makes it defensible. Nothing else in this service may use it.
+     */
+    siteRepo(): SiteRepo {
+        if (this.database === undefined) throw new Error('The cdn is not started.');
+        return this.database.repo(SiteSchema, 'site');
     }
 
     private listen(port: number, host: string): Promise<Server> {
@@ -258,7 +277,11 @@ export class CdnService extends ServiceModule {
         const held = this.sites.get(host);
         if (held !== undefined && held.expires > Date.now()) return held.site;
 
-        const found = await this.call<Site | null>('site.find_one', { query: { host } });
+        // Its own contract rather than the collection, for the reason that contract exists: `site`
+        // has to become scope-restricted, and this call carries no caller because a browser is
+        // anonymous. Serving and managing are two operations, so they get two doors.
+        const found = await this.call<Site | null>('cdn.resolve_site', { host })
+            .catch(() => null);
         const site = found ?? undefined;
 
         // A miss is cached too. A node asked repeatedly for a hostname nobody configured is

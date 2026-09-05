@@ -210,6 +210,39 @@ Nothing resolves until this exists. Every version a site names is a row here.
       cdn resolves Host → site → artifact. Same cache, same invalidation. It makes the gate **per
       site**: one site may expose `domains.zone_find` as public while another requires `user`. **M** ·
       ⛔ C1, D1
+- [x] **D3 ★ Scope reaches `defineCrud`.** *(mesh v2.2.0, adopted 2026-09-06)* `siteCrud` declares
+      `scopedBy: 'tenantId'`, so every generated read and write is inside the caller's organization —
+      `find` is scoped, `create` stamps the field, `update` cannot reparent a row, and a cross-scope
+      `get` answers **404** rather than 403. *Never expose an unbounded find* stopped being a
+      discipline and became a mechanism, which is the difference between this and the 100,000 lines it
+      is replacing.
+- [x] **D3a ★★ Adopting `scopedBy` breaks the serving path, and that was the interesting part.**
+      *(closed 2026-09-06)* `cdn.resolve_site` is the second door: public, one site by exact hostname,
+      nothing to enumerate with.
+      **The first version of it did not work, and the reason is worth keeping.** It called
+      `site.find_one`, which is scope-restricted — so every page request 404'd, because the caller is
+      a browser and a browser has no organization. *A door that opens into the same locked room is not
+      a second door.* So the tool reads the collection directly, and that bypass is confined to four
+      lines with a stated invariant rather than granted to the whole serving path: one function can be
+      reviewed, a serving path with database access cannot.
+- [ ] **~~D3a~~ superseded — original entry**
+      *(found 2026-09-06, reviewing mesh `dispatch/2`)* The framework change is built and good — reads
+      and writes both scoped, `create` stamps the field, `update` strips it so a patch cannot reparent
+      a row, a cross-scope `get` answers **404 not 403**. It fails closed twice over: a caller with no
+      scope is refused, and so is an internal call carrying no caller.
+      **That second decision is the one that bites here.** `cdn.service.ts:261` and
+      `api.service.ts:272` both resolve `site.find_one({ query: { host } })` with **no caller at
+      all**, because a browser fetching a page is anonymous. Put `scopedBy: 'tenantId'` on `siteCrud`
+      and every page request is refused with 401.
+      The dispatch's own answer — *internal callers use `Database.repo()` directly* — works and costs
+      too much: the serving path would stop going through contracts, which is the thing that lets any
+      node serve any site.
+      **The better answer is already this repository's rule**: anything with an invariant is an
+      explicit contract. Resolving a hostname *for serving* is a different operation from *listing my
+      sites*, and its invariant is exactly that it returns one site by hostname and can never
+      enumerate. So `cdn.resolve_site` is public and unscoped by construction, `site.find` becomes
+      scoped and is never exposed, and the two callers stop sharing one door.
+      **S**, and it must land in the same change as D3 rather than after it. **⛔** mesh `dispatch/2`
 - [ ] **D3 ★ Scope must reach `defineCrud`. *This is a change to mesh, not to the api.*** The api can
       resolve a caller's organization into `meta`; it cannot make a generated `find` use it, because
       the query is built inside the framework's CRUD path. Writing the filter in the api instead

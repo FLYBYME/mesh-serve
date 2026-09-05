@@ -269,7 +269,13 @@ export class ApiService extends ServiceModule {
         const held = this.sites.get(host);
         if (held !== undefined && held.expires > Date.now()) return held.site;
 
-        const found = await this.call<Site | null>('site.find_one', { query: { host } });
+        // **Through `cdn.resolve_site`, not `site.find_one`.** The site collection is the cdn's, and
+        // it is the one that has to become scope-restricted — an unbounded `site.find` enumerates
+        // every hostname on the platform. This call carries no caller, because a browser is anonymous,
+        // so a scoped find would refuse it and every page request with it. Resolving a hostname for
+        // serving is a different operation from listing my sites, and it has its own door.
+        const found = await this.call<Site | null>('cdn.resolve_site', { host })
+            .catch(() => null);
         const site = found ?? undefined;
 
         // A miss is cached too: a node asked repeatedly for a hostname nobody configured is

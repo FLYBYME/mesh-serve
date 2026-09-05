@@ -22,7 +22,7 @@
  * platform is exactly the shape of that mistake.
  */
 
-import { defineCrud, defineEvent, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { SiteSchema } from '../schema/site.js';
 
@@ -53,6 +53,25 @@ export const siteCrud = defineCrud('site', SiteSchema, {
      * idiomatically and never hooked. A generated handler that quietly reached into identity would
      * be a dependency nothing declared and no scheduler could see.
      */
+    /**
+     * **Every generated read and write is inside the caller's organization.**
+     *
+     * This is the mechanism that replaces a discipline. Until mesh 2.2.0 the rule was *never expose
+     * an unbounded find*, kept by whoever remembered — and an unbounded `site.find` enumerates every
+     * hostname on the platform, which is exactly the shape of the mistake that ran through 100,000
+     * lines of the previous generation. Authorization could refuse a *caller* and never narrow a
+     * *result set*, so no contract could have said otherwise.
+     *
+     * Now `find` is always within the caller's scope, `create` stamps it, `update` cannot reparent a
+     * row, and a `get` across the boundary answers **404** — because *"it exists, but not for you"*
+     * is itself a disclosure.
+     *
+     * It refuses a call carrying no caller, which is why `cdn.resolve_site` exists: the serving path
+     * asks *what does this hostname serve* on behalf of a browser, and a browser is anonymous.
+     * Serving and managing are two operations and they get two doors.
+     */
+    scopedBy: 'tenantId',
+
     dependencies: [],
 });
 /**
@@ -65,6 +84,47 @@ export const siteCrud = defineCrud('site', SiteSchema, {
  * two that agree until they do not.
  */
 export type Site = z.infer<typeof siteCrud.outputSchema>;
+
+/**
+ * One site, by hostname, for serving.
+ *
+ * **This exists so that `site` can be scope-restricted without taking every page down.**
+ *
+ * mesh 2.2.0 lets a collection declare `scopedBy`, so a generated `find` is always within the
+ * caller's resolved scope — which is the mechanism that turns *never expose an unbounded find* from
+ * a discipline into something a contract enforces. Adopting it on `site` refuses any call carrying
+ * no caller, and the two calls that matter most carry none: the cdn and the api both resolve
+ * `Host → site` for a **browser**, which is anonymous by definition.
+ *
+ * The tempting fix is to let the serving path bypass CRUD and read the collection directly. That
+ * works and costs too much — the serving path would stop going through contracts, which is the thing
+ * that lets any node serve any site.
+ *
+ * So this is the repository's own rule applied instead: anything with an invariant is an explicit
+ * contract. **Resolving a hostname for serving is a different operation from listing my sites**, and
+ * its invariant is exactly that it returns *one* site by hostname and can never enumerate. Two
+ * callers, two doors:
+ *
+ * | | who | what it can do |
+ * | --- | --- | --- |
+ * | `cdn.resolve_site` | anyone, including a browser | one site, by exact hostname |
+ * | `site.find` | a signed-in caller, scoped | their own sites, never exposed |
+ *
+ * `public` because it must be callable with no ticket, and it discloses only what the hostname
+ * already serves to anyone who visits it.
+ */
+export const resolveSiteContract = defineContract({
+    domain: 'cdn',
+    action: 'resolve_site',
+    description: 'One site, by hostname, for serving.',
+    inputSchema: z.object({ host: z.string().min(1) }),
+    // The collection's own output shape, so a field added to `SiteSchema` appears here and the two
+    // cannot drift.
+    outputSchema: siteCrud.get.outputSchema,
+    rest: { method: 'GET', path: '/sites/:host' },
+    visibility: 'public',
+    print: (o) => `${o.host} → ${o.releaseHash ?? 'not deployed'}`,
+});
 
 /**
  * A site now serves a different release.
