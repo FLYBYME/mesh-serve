@@ -54,41 +54,39 @@ export const buildCrud = defineCrud('build', BuildSchema, {
 export const buildStartContract = defineContract({
     domain: 'builder',
     action: 'build_start',
-    description: 'Build the parts a repository declares, and publish each as its own artifact.',
+    description: 'Build one published version of a part into its artifact.',
+    /**
+     * **A part and a version — never a repository URL.**
+     *
+     * It took one until a credential existed, and then the shape was a hole: the caller named the
+     * repository, so a node holding a token that can read a private repository would clone it for
+     * whoever asked, bundle it, and publish an artifact addressed by a digest that same caller could
+     * fetch. Not a flaw in the token; a flaw in accepting an arbitrary URL while holding one.
+     *
+     * The catalog already had the answer. A `part` row carries `repository` and `publisher`, so the
+     * repository comes from the catalog and the caller is checked against the publisher — and there
+     * is no longer a field in which to name somebody else's repository.
+     *
+     * It also makes a build reproducible from the catalog alone, which is exactly what an artifact
+     * that has gone `gone` needs in order to be rebuilt. The security fix and the durability path
+     * turn out to be the same change.
+     */
     inputSchema: z.object({
-        /**
-         * A branch or tag is accepted here and resolved to a commit before a build record exists.
-         * The record itself only ever holds a commit: a branch hashes to itself while the code moves
-         * underneath it, so a cache keyed on one would serve a stale artifact indefinitely.
-         */
-        source: z.union([
-            SourceRefSchema,
-            z.object({
-                kind: z.literal('git'),
-                repository: z.string().min(1),
-                ref: z.string().min(1),
-                subdirectory: z.string().min(1).optional(),
-            }).strict(),
-        ]),
+        part: z.string().min(1).describe('→ part.name'),
+        version: z.string().min(1).describe('An exact published version, never a range'),
     }),
     outputSchema: z.object({
-        /**
-         * One per part the repository declares — a repository with a chrome extension and an
-         * application produces two artifacts, and they are versioned and replaced separately from
-         * then on. That is the whole point of building parts rather than sites.
-         */
-        builds: z.array(z.object({
-            partId: z.string(),
-            buildId: z.string(),
-            state: z.string(),
-            artifactDigest: z.string().optional(),
-            /** True when an identical input hash was already built and nothing ran. */
-            cached: z.boolean(),
-        })),
+        part: z.string(),
+        version: z.string(),
+        buildId: z.string(),
+        state: z.string(),
+        artifactDigest: z.string().optional(),
+        /** True when an identical input hash was already built and nothing ran. */
+        cached: z.boolean(),
     }),
     rest: { method: 'POST', path: '/builder/builds' },
     destructive: true,
-    print: (o) => o.builds.map((b) => `${b.partId}: ${b.state}`).join(', '),
+    print: (o) => `${o.part}@${o.version}: ${o.state}${o.cached ? ' (cached)' : ''}`,
 });
 
 /**

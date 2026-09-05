@@ -54,7 +54,12 @@ export interface Bundled {
  */
 export async function bundlePart(
     root: string,
-    part: DescribedPart,
+    /**
+     * Only what a bundle actually depends on: where the source starts, what to call the output, and
+     * whether this is the kernel. Deliberately *not* a whole descriptor — the catalog is what a
+     * build reads now, and a parameter that accepted a descriptor would invite reading one.
+     */
+    part: Pick<DescribedPart, 'kind' | 'id' | 'entry'>,
     maxBytes: number = DEFAULT_MAX_BYTES,
 ): Promise<Bundled> {
     const outdir = join(root, '.mesh-out');

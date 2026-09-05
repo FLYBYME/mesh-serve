@@ -23,6 +23,11 @@ if (command === 'client') {
     process.exit(await run(rest));
 }
 
+if (command === 'publish') {
+    const { run_ } = await import('../dist/api/publish-cli.js');
+    process.exit(await run_(rest));
+}
+
 if (command === 'dev') {
     const root = process.cwd();
     const descriptor = parseDescriptor(readFileSync(value('--descriptor', 'mesh.json'), 'utf8'));
@@ -39,9 +44,10 @@ if (command === 'dev') {
     }
 } else {
     process.stderr.write(
-        'usage: mesh-serve client [--descriptor mesh.json] [--out src/generated/api.ts]\n' +
-        '                         [--descriptor-out descriptor.json] [--check]\n' +
-        '       mesh-serve dev    [--descriptor mesh.json] [--port 8080] [--no-serve]\n',
+        'usage: mesh-serve client  [--descriptor mesh.json] [--out src/generated/api.ts]\n' +
+        '                          [--descriptor-out descriptor.json] [--check]\n' +
+        '       mesh-serve dev     [--descriptor mesh.json] [--port 8080] [--no-serve]\n' +
+        '       mesh-serve publish --publisher <org> [--repository <url>] [--dry-run]\n',
     );
     process.exit(command === undefined ? 1 : 2);
 }

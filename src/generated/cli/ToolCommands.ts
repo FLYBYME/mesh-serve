@@ -54,7 +54,7 @@ async function executeCommand(toolName: string, args: Record<string, unknown>, c
 
 export function registerGeneratedCommands(program: Command) {
     const builder = program.command('builder').description('builder tools');
-    const cmd_builder_buildStartContract_build_start = builder.command('build_start').description(`Build the parts a repository declares, and publish each as its own artifact.`);
+    const cmd_builder_buildStartContract_build_start = builder.command('build_start').description(`Build one published version of a part into its artifact.`);
     cmd_builder_buildStartContract_build_start.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
             await executeCommand('builder.build_start', o, Contract_0.buildStartContract, cmd.optsWithGlobals());

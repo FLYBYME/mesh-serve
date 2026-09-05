@@ -15,29 +15,49 @@ import type { BuilderService } from '../builder.service.js';
 import type { buildStartContract } from '../contracts/artifact.contract.js';
 import type { Artifact, Declaration, ResolvedDependency } from '../schema/artifact.js';
 import type { SourceRef } from '../schema/build.js';
-import { requirementsOf, type DescribedPart } from '../schema/descriptor.js';
 import { bundlePart } from './bundle.js';
 import { artifactDigest, inputHash } from './content.js';
 
 /** Bumped when a change in the builder could change the output. It is part of the cache key. */
 export const BUILDER_VERSION = '2';
 
-/** One entry of what `build_start` returns, taken off the contract so it cannot drift from it. */
-type PartResult = z.infer<typeof buildStartContract['outputSchema']>['builds'][number];
+/**
+ * What building one part answers, taken off the contract so it cannot drift from it.
+ *
+ * `part` and `version` are the caller's own input, so they are added there rather than here.
+ */
+type PartResult = Omit<z.infer<typeof buildStartContract['outputSchema']>, 'part' | 'version'>;
 
+/**
+ * What to build, **already resolved from the catalog**.
+ *
+ * Not a `DescribedPart` read out of the repository's `mesh.json`. The descriptor seeded the catalog
+ * at publish time and the collection is authoritative from then on — so a repository that edits its
+ * descriptor cannot change what an already-published version builds, which is the same immutability
+ * that makes a version range safe to depend on.
+ */
 export interface PublishInput {
-    readonly part: DescribedPart;
+    readonly part: {
+        readonly kind: 'kernel' | 'application' | 'extension';
+        readonly id: string;
+        readonly version: string;
+        /** The source entry, relative to `root`. Part of the input hash. */
+        readonly entry: string;
+    };
     /** The workspace the fetcher wrote. Owned and destroyed by the caller. */
     readonly root: string;
     readonly source: SourceRef;
-    /** The repository's kernel requirement, copied onto each part's declaration. */
-    readonly kernel: string | undefined;
+    /** The kernel range this version was published against. Absent on a kernel. */
+    readonly kernel?: string;
+    /** Contract keys this version calls. Already flattened by the catalog. */
+    readonly requires: readonly string[];
+    readonly requiredParts: readonly { readonly id: string; readonly version: string; readonly optional: boolean }[];
     readonly builtAgainst: readonly ResolvedDependency[];
 }
 
 export async function publishPart(
     service: BuilderService,
-    { part, root, source, kernel, builtAgainst }: PublishInput,
+    { part, root, source, kernel, requires, requiredParts, builtAgainst }: PublishInput,
     ctx: IServiceContext,
 ): Promise<PartResult> {
     const startedAt = new Date();
@@ -46,7 +66,7 @@ export async function publishPart(
     const cached = await cachedArtifact(hash, ctx);
     if (cached !== undefined) {
         ctx.logger.info(`[builder] ${part.id}: cached ${cached.artifactDigest}`);
-        return { partId: part.id, ...cached, state: 'succeeded', cached: true };
+        return { ...cached, state: 'succeeded', cached: true };
     }
 
     try {
@@ -61,8 +81,8 @@ export async function publishPart(
             // A kernel has no kernel. Everything else records the requirement it was written
             // against, which is the only thing standing between a stale part and a browser.
             ...(part.kind === 'kernel' || kernel === undefined ? {} : { kernel }),
-            requires: [...requirementsOf(part)],
-            requiredParts: part.requiredParts.map((required) => ({ ...required })),
+            requires: [...requires],
+            requiredParts: requiredParts.map((required) => ({ ...required })),
             builtAgainst: [...builtAgainst],
         };
 
@@ -91,7 +111,7 @@ export async function publishPart(
         );
 
         return {
-            partId: part.id, buildId: build.id, state: 'succeeded',
+            buildId: build.id, state: 'succeeded',
             artifactDigest: artifact.digest, cached: false,
         };
     } catch (error) {
@@ -104,7 +124,7 @@ export async function publishPart(
             source, inputHash: hash, state: 'failed', startedAt, finishedAt: new Date(), error: message,
         });
 
-        return { partId: part.id, buildId: build.id, state: 'failed', cached: false };
+        return { buildId: build.id, state: 'failed', cached: false };
     }
 }
 

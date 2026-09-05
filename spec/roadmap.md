@@ -57,16 +57,25 @@ These are wrong now, and everything built on top of them inherits the mistake.
       the build row and travels with the failure. Redacted from any error that escapes, and a fetch
       that fails with no credential says so, because a private repository is otherwise
       indistinguishable from one that does not exist.
-- [ ] **A5b ★★ `build_start` takes a part, not a URL.** *(found 2026-09-06, immediately)* The caller
-      names the repository, so **a node holding a token that can read `surfdns` will clone it for
-      whoever asks**, bundle it, and publish an artifact the same caller can fetch by digest. That is
-      not a flaw in the token; it is `build_start` accepting an arbitrary URL while holding a
-      credential.
-      The catalog already fixes it: a `part` row carries `repository` and `publisher`, so the input
-      becomes `{ part, version }`, the repository comes from the catalog, and the caller is checked
-      against the publisher. There is then no field in which to name someone else's repository — and
-      a build becomes reproducible from the catalog alone, which is what `gone` → rebuild needs
-      anyway. **M** · ⛔ B1
+- [x] **A5b ★★ `build_start` takes a part, not a URL.** *(found and closed 2026-09-06)* The caller
+      named the repository, so a node holding a token that can read `surfdns` would clone it for
+      whoever asked, bundle it, and publish an artifact the same caller could fetch by digest — not a
+      flaw in the token, a flaw in accepting an arbitrary URL while holding one.
+      Input is `{ part, version }`; repository, commit, entry and requirements come from the catalog,
+      and the caller's tenant is checked against `part.publisher`. A caller with no identity is
+      refused rather than allowed, because defaulting to *allow* is how a check becomes decorative,
+      and a mismatch answers **404 rather than 403** — which organization publishes a part is not
+      something an unrelated caller gets to confirm by probing.
+      Two things fell out. **`mesh.json` is no longer read by a build at all**, so a repository that
+      edits its descriptor cannot change what an already-published version builds — the same
+      immutability that makes a range safe. And a build is now reproducible from the catalog alone,
+      which is exactly what `gone` → rebuild needs: the security fix and the durability path were the
+      same change.
+- [ ] **A5b-i `mesh-serve publish` needs a broker connection.** It reads `mesh.json`, refuses a dirty
+      tree, resolves the commit and remote, and prints what it would publish — but writing it means
+      calling `catalog.publish`, and the CLI opens no broker. Writing rows directly would be a second
+      path into the catalog that skips the immutability check, which is the one thing that collection
+      exists to enforce. **S**
 - [ ] **A5c A tarball source is not durable.** `archive` is in the schema and is the right answer for
       a source the builder cannot reach — no credential, no clone. But everything rests on *the edge
       disk is a cache and git is the archive*, and an uploaded tarball has nothing behind it: lose
