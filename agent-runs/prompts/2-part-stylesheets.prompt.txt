@@ -1,0 +1,111 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**A part cannot ship CSS.** Make it able to.
+
+The kernel can: `mesh-web`'s build copies `src/kernel.css` into its `dist`, the
+builder collects it as a second file in the kernel artifact, and `page.ts`
+emits a `<link>` for it. Every one of those steps exists. **None of them applies
+to a part**, so an Application or Extension with real styling has nowhere to put
+it and writes inline `style` props instead.
+
+That is not hypothetical. `mesh-core`'s `chrome` Extension styles its shell
+inline for exactly this reason, and the comment saying so is in
+`mesh-core/src/chrome/index.ts`. Its layout broke twice in ways that were
+expensive to find, because inline styles are the hardest kind to inspect.
+
+================================================================================
+WHAT IS ALREADY TRUE — CHECK EACH BEFORE BUILDING ANYTHING
+================================================================================
+
+Most of this works and the gap is narrow. Read before writing:
+
+    src/builder/methods/bundle.ts   collects **every** esbuild output file, not
+                                    just index.js — a part importing './x.css'
+                                    should already produce a second artifact file
+    src/builder/methods/content.ts  contentTypeOf already knows text/css
+    src/cdn/methods/page.ts:122     emits a <link> per `kernel.styles`
+    src/cdn/cdn.service.ts:234      builds that list: kernel.files.filter('.css')
+
+So the likely shape of the work is:
+
+1. **Confirm a part's CSS actually reaches its artifact.** Write a part that
+   imports a stylesheet, build it, and look at the artifact's file list. If
+   esbuild already emits it, step one is done and you should say so rather than
+   building something that exists.
+2. **The cdn emits a link for every part's stylesheets**, not only the kernel's.
+   That is the actual gap.
+3. **Order matters.** The kernel's stylesheet must come first, because a part
+   overriding `.window` is a part deliberately restyling something the kernel
+   drew, and CSS resolves ties by order. Parts among themselves are composition
+   order — a release lists them, and that list is already canonical.
+
+================================================================================
+WHAT TO THINK ABOUT, BECAUSE IT IS NOT ONLY PLUMBING
+================================================================================
+
+**Scoping is the open question and it is roadmap M2/C8.** Two parts on one page
+both defining `.card` collide, and one of them will lose in a way neither author
+can see. Options, and you should pick one and argue for it rather than assuming:
+
+- **No scoping.** Simplest, honest, and the collision is real. Every part is
+  styling one shared document and always was — inline styles collide too, they
+  just collide invisibly.
+- **A digest-derived attribute** on everything a part renders, and its stylesheet
+  rewritten to match. Correct, and it means the artifact's bytes depend on where
+  it is mounted, which breaks content addressing — a part's artifact must be the
+  same bytes on every site.
+- **Emit it, and record the collision.** The composition knows every part's
+  stylesheet at compose time; two parts defining the same selector is exactly the
+  shape of problem `checkComposition` already reports.
+
+Whatever you choose, `spec/composition.md` and the roadmap should say what was
+decided and why. **A decision written down is the deliverable here as much as the
+code.**
+
+**`index.html` is generated per request** from site + release, and is cached on
+`(siteId, releaseHash)`. Adding links must not change that key or break the
+cache — a stylesheet is part of the release, so the existing key already covers
+it. Check rather than assume.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not build a CSS-in-JS layer, a theme compiler, or a preprocessor.** A part
+imports a `.css` file and esbuild does what it already does.
+
+**Do not touch `src/identity/`, `src/api/` or `src/catalog/`.**
+
+**Do not change how the kernel's own stylesheet is handled.** It works, and it is
+the reference this is being made to match.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- An integration test in `test/integration/spine.test.ts` that publishes a part
+  with a stylesheet, builds it, composes a release, and asserts the served page
+  contains a `<link>` for **both** the kernel's stylesheet and the part's, in
+  that order. That is the whole feature in one assertion.
+- A test that a part with no stylesheet changes nothing about the page.
+- `npm run typecheck` clean, **zero casts.** `npm test` green — all 275.
+- Roadmap updated with the scoping decision and its reasoning.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/2-part-stylesheets.md`
+
+- which of the four steps already worked, and which you actually had to build
+- **the scoping decision, and the argument for it** — this is the part worth
+  reading in a year
+- what happens today when two parts define the same selector, and what you
+  decided should happen
+- anything you found that belongs in `spec/unread.md` — a field or mechanism
+  written and never read. You are in the builder and the cdn, which is where
+  three of them came from.
