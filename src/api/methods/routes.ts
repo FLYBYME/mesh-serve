@@ -66,16 +66,22 @@ export type ContractLookup = (key: string) => AnyContract | undefined;
  * Deterministic: routes are sorted by key, so the exposure hash depends on **what is exposed and not
  * on the order somebody wrote the list in**. Reordering `mesh` in a site record must not look to a
  * client like the API changed.
+ *
+ * When `requires` is provided (from a deployed release), only contracts required by the release's
+ * composed parts are routed. A contract in `site.mesh` that no composed part provides is an unused
+ * grant, not a route.
  */
 export function routeTable(
     mesh: readonly MeshDependency[],
     lookup: ContractLookup,
     hash: (value: unknown) => string,
+    requires?: readonly string[],
 ): RouteTable {
     const routes: Route[] = [];
     const unknown: string[] = [];
     const seen = new Set<string>();
     const byRoute = new Map<string, string>();
+    const required = requires !== undefined ? new Set(requires) : undefined;
 
     for (const dependency of mesh) {
         for (const exposed of dependency.contracts) {
@@ -85,6 +91,12 @@ export function routeTable(
             // of ordering. The site record's own schema does not prevent it, so this does.
             if (seen.has(key)) continue;
             seen.add(key);
+
+            // A release says what its parts call (requires); a site says what it exposes (mesh).
+            // When a release is present, only contracts required by its composed parts are routed.
+            if (required !== undefined && !required.has(key)) {
+                continue;
+            }
 
             const contract = lookup(key);
             if (contract === undefined) {
