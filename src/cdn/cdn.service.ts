@@ -23,7 +23,9 @@
  * the old page indefinitely.
  */
 
-import { ServiceModule, type IServiceBroker } from '@flybyme/mesh';
+import {
+    ServiceModule, type ICallOptions, type IServiceBroker,
+} from '@flybyme/mesh';
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
@@ -101,6 +103,7 @@ export class CdnService extends ServiceModule {
     private readonly releases = new Map<string, Release>();
     private readonly artifacts = new Map<string, Artifact>();
     private readonly pages = new Map<string, readonly { path: string; content: string }[]>();
+    private readonly inFlightBlobs = new Map<string, Promise<Buffer | undefined>>();
 
     constructor(private readonly options: CdnServiceOptions = {}) {
         super();
@@ -213,6 +216,30 @@ export class CdnService extends ServiceModule {
                 return send(res, 405, { allow: 'GET, HEAD' }, 'Method not allowed');
             }
 
+            // Peer blob fetch endpoint (C5): raw content-addressed blobs over HTTP.
+            if (path.startsWith('/blobs/')) {
+                const raw = path.slice('/blobs/'.length);
+                if (raw === '') return send(res, 404, {}, 'Not found');
+                const digest = raw.startsWith('sha256:') ? raw : `sha256:${raw}`;
+                const hex = digest.slice(digest.indexOf(':') + 1);
+                if (!/^[0-9a-f]{8,}$/.test(hex)) {
+                    return send(res, 404, {}, 'Invalid digest');
+                }
+                const body = await this.blobs.get(digest);
+                if (body === undefined) {
+                    return send(res, 404, {}, 'Not found');
+                }
+                const etag = `"${digest}"`;
+                if (req.headers['if-none-match'] === etag) {
+                    return send(res, 304, { etag, vary: 'Host' }, '');
+                }
+                return send(res, 200, {
+                    'content-type': 'application/octet-stream',
+                    etag,
+                    'cache-control': 'public, max-age=31536000, immutable',
+                }, req.method === 'HEAD' ? '' : body);
+            }
+
             const site = await this.siteFor(host);
             if (site === undefined) return send(res, 404, {}, 'No site is configured for this hostname.');
 
@@ -300,6 +327,13 @@ export class CdnService extends ServiceModule {
             );
             if (partArtifacts.some((entry) => entry.artifact === undefined)) return undefined;
 
+            await Promise.all([
+                this.ensureArtifactBlobs(kernel),
+                ...partArtifacts.map((entry) => (entry.artifact !== undefined
+                    ? this.ensureArtifactBlobs(entry.artifact)
+                    : Promise.resolve())),
+            ]);
+
             const partStyles: Record<string, readonly string[]> = {};
             for (const entry of partArtifacts) {
                 if (entry.artifact !== undefined) {
@@ -361,7 +395,7 @@ export class CdnService extends ServiceModule {
         const file = resolveFile(artifact, path);
         if (file === undefined) return undefined;
 
-        const body = await this.blobFor(file.digest);
+        const body = await this.blobFor(file.digest, artifact);
         return body === undefined ? undefined : { file, body };
     }
 
@@ -374,7 +408,7 @@ export class CdnService extends ServiceModule {
         // Its own contract rather than the collection, for the reason that contract exists: `site`
         // has to become scope-restricted, and this call carries no caller because a browser is
         // anonymous. Serving and managing are two operations, so they get two doors.
-        const found = await this.call<Site | null>('cdn.resolve_site', { host })
+        const found = await this.call('cdn.resolve_site', { host })
             .catch(() => null);
         const site = found ?? undefined;
 
@@ -389,7 +423,8 @@ export class CdnService extends ServiceModule {
         const held = this.releases.get(hash);
         if (held !== undefined) return held;
 
-        const found = await this.call<Release | null>('release.find_one', { query: { hash } });
+        const found = await this.call('release.find_one', { query: { hash } })
+            .catch(() => null);
         // Cached without a TTL, and safely: a release hash is derived from its contents, so a hash
         // can never come to mean a different composition.
         if (found !== null && found !== undefined) this.releases.set(hash, found);
@@ -398,11 +433,11 @@ export class CdnService extends ServiceModule {
 
     private async artifactFor(digest: string): Promise<Artifact | undefined> {
         const held = this.artifacts.get(digest);
-        if (held !== undefined) return held;
+        if (held !== undefined && held.state !== 'gone') return held;
 
         // Through the builder's contract, never into its collection: the day the builder changes how
         // it stores artifacts, this must not break.
-        const found = await this.call<Artifact | undefined>('builder.get_artifact', { digest })
+        const found = await this.call('builder.get_artifact', { digest })
             .catch(() => undefined);
         if (found !== undefined) this.artifacts.set(digest, found);
         return found;
@@ -412,18 +447,177 @@ export class CdnService extends ServiceModule {
      * The bytes, from this node's disk or from whoever has them.
      *
      * A fetch is one hop per file per node, paid once, because content addressed by hash is
-     * cacheable forever. The remote half is **not built** — see roadmap C5 — so today a node that
-     * does not hold a file cannot serve it, which is honest and is why a single node is M1.
+     * cacheable forever.
+     *
+     * - C5: Missing locally -> query registered peer edges over HTTP (/blobs/:digest).
+     * - C6: Nobody has it -> mark artifact and version 'gone', rebuild from catalog commit.
      */
-    private async blobFor(digest: string): Promise<Buffer | undefined> {
-        return this.blobs.get(digest);
+    private async blobFor(digest: string, artifact?: Artifact): Promise<Buffer | undefined> {
+        const held = await this.blobs.get(digest);
+        if (held !== undefined) return held;
+
+        // Coalesce concurrent requests for the same missing digest
+        let inFlight = this.inFlightBlobs.get(digest);
+        if (inFlight === undefined) {
+            inFlight = this.resolveBlob(digest, artifact);
+            this.inFlightBlobs.set(digest, inFlight);
+        }
+
+        try {
+            return await inFlight;
+        } finally {
+            this.inFlightBlobs.delete(digest);
+        }
     }
 
-    private async call<T>(tool: string, params: unknown): Promise<T> {
+    private async resolveBlob(digest: string, artifact?: Artifact): Promise<Buffer | undefined> {
+        // 1. Ask the peers (C5)
+        const fromPeer = await this.fetchBlobFromPeers(digest);
+        if (fromPeer !== undefined) return fromPeer;
+
+        // 2. Nobody has it -> mark gone, rebuild from catalog commit (C6)
+        return await this.rebuildMissingBlob(digest, artifact);
+    }
+
+    private async fetchBlobFromPeers(digest: string): Promise<Buffer | undefined> {
+        const edges = await this.call('edge.find', {}).catch(() => []);
+        const peers = edges.filter((e) => e.id !== this.edgeId && Boolean(e.url));
+
+        for (const peer of peers) {
+            try {
+                const url = `${peer.url.replace(/\/+$/, '')}/blobs/${digest}`;
+                const bytes = await this.httpFetchBlob(url);
+                if (bytes === undefined) continue;
+
+                // Validate before storing: content addressing is a guarantee, not a convention
+                const actual = `sha256:${createHash('sha256').update(bytes).digest('hex').slice(0, 32)}`;
+                if (actual !== digest) {
+                    this.broker?.logger.warn(
+                        `[cdn] Rejecting corrupted blob from peer ${peer.url} for ${digest}: actual hash ${actual}`,
+                    );
+                    continue;
+                }
+
+                await this.blobs.put(digest, bytes);
+                return bytes;
+            } catch {
+                // Reachability is discovered by trying, not by tracking.
+                // An edge that died without removing its row is skipped.
+                continue;
+            }
+        }
+
+        return undefined;
+    }
+
+    private async httpFetchBlob(url: string): Promise<Buffer | undefined> {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => { controller.abort(); }, 2000);
+        try {
+            const res = await fetch(url, { signal: controller.signal });
+            if (res.status === 200) {
+                const buffer = await res.arrayBuffer();
+                return Buffer.from(buffer);
+            }
+            return undefined;
+        } catch {
+            return undefined;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    private async rebuildMissingBlob(digest: string, artifact?: Artifact): Promise<Buffer | undefined> {
+        let targetArtifact: Artifact | undefined = artifact;
+        if (targetArtifact === undefined) {
+            targetArtifact = await this.artifactForBlob(digest);
+        }
+        if (targetArtifact === undefined) {
+            this.broker?.logger.warn(`[cdn] Cannot rebuild blob ${digest}: no artifact found.`);
+            return undefined;
+        }
+
+        const partId = targetArtifact.declaration.part.id;
+        const partVersion = targetArtifact.declaration.part.version;
+
+        this.broker?.logger.warn(
+            `[cdn] Blob ${digest} missing from all edges; marking ${partId}@${partVersion} gone and rebuilding`,
+        );
+
+        // Mark artifact gone in mongo
+        const artDoc = await this.call('artifact.find_one', { query: { digest: targetArtifact.digest } })
+            .catch(() => null);
+        if (artDoc !== null && artDoc !== undefined) {
+            await this.call('artifact.update', { id: artDoc.id, state: 'gone' }).catch(() => undefined);
+        }
+        this.artifacts.delete(targetArtifact.digest);
+
+        // Mark partVersion gone in mongo
+        const versionDoc = await this.call('partVersion.find_one', {
+            query: { partName: partId, version: partVersion },
+        }).catch(() => null);
+        if (versionDoc !== null && versionDoc !== undefined) {
+            await this.call('partVersion.update', { id: versionDoc.id, state: 'gone' }).catch(() => undefined);
+        }
+
+        // Look up publisher from catalog for authorization
+        const partDoc = await this.call('part.find_one', { query: { name: partId } }).catch(() => null);
+        if (partDoc === null || partDoc === undefined) {
+            this.broker?.logger.error(`[cdn] Cannot rebuild: part "${partId}" not found in catalog.`);
+            return undefined;
+        }
+
+        // Re-enter build_start from catalog's commit
+        const buildResult = await this.call(
+            'builder.build_start',
+            { part: partId, version: partVersion },
+            { meta: { tenant_id: partDoc.publisher } },
+        );
+
+        if (buildResult.state !== 'succeeded') {
+            this.broker?.logger.error(`[cdn] Rebuild failed for ${partId}@${partVersion}: ${buildResult.state}`);
+            return undefined;
+        }
+
+        targetArtifact.state = 'available';
+
+        if (buildResult.artifactDigest !== targetArtifact.digest) {
+            throw new Error(
+                `Rebuilt artifact digest "${buildResult.artifactDigest ?? ''}" does not match original ` +
+                `digest "${targetArtifact.digest}". Build determinism failed.`,
+            );
+        }
+
+        // Check if bytes are in local store now (e.g. if builder wrote to shared store)
+        const local = await this.blobs.get(digest);
+        if (local !== undefined) return local;
+
+        // If builder wrote to its own store on a peer node, fetch from peers now that it is built
+        return await this.fetchBlobFromPeers(digest);
+    }
+
+    private async artifactForBlob(digest: string): Promise<Artifact | undefined> {
+        const found = await this.call('artifact.find_one', { query: { 'files.digest': digest } })
+            .catch(() => null);
+        return found ?? undefined;
+    }
+
+    private async ensureArtifactBlobs(artifact: Artifact): Promise<void> {
+        for (const file of artifact.files) {
+            const hasBlob = await this.blobs.has(file.digest);
+            if (!hasBlob || artifact.state === 'gone') {
+                await this.blobFor(file.digest, artifact);
+            }
+        }
+    }
+
+    private async call<K extends keyof IServiceToolRegistry>(
+        tool: K,
+        params: IServiceToolRegistry[K]['params'],
+        options?: ICallOptions,
+    ): Promise<IServiceToolRegistry[K]['returns']> {
         if (this.broker === undefined) throw new Error('The cdn is not started.');
-        return await (this.broker as unknown as {
-            call(tool: string, params: unknown): Promise<T>;
-        }).call(tool, params);
+        return await this.broker.call(tool, params, options);
     }
 }
 

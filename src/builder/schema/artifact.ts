@@ -127,13 +127,29 @@ export type Declaration = z.infer<typeof DeclarationSchema>;
  * a new artifact, never an edit of this one, which is what lets it be cached forever and what makes
  * its digest usable as a URL.
  */
+export const ArtifactStateSchema = z.enum([
+    /** Bytes are available in at least one edge store or cache. */
+    'available',
+    /**
+     * No edge holds these bytes any more.
+     *
+     * An observed fact, never a desired state: an edge's disk is a cache, and pod storage is
+     * ephemeral. This is the signal to rebuild from the catalog's commit, safe because builds
+     * are deterministic.
+     */
+    'gone',
+]);
+export type ArtifactState = z.infer<typeof ArtifactStateSchema>;
+
 export const ArtifactSchema = z.object({
     digest: z.string().min(1),
     files: z.array(ArtifactFileSchema).min(1),
     totalSize: z.number().int().nonnegative(),
-    builtAt: z.date(),
+    builtAt: z.coerce.date(),
     /** → build.id. For tracing back. Not needed to serve it. */
     buildId: z.string().min(1),
     declaration: DeclarationSchema,
+    state: ArtifactStateSchema.default('available'),
 });
 export type Artifact = z.infer<typeof ArtifactSchema>;
+

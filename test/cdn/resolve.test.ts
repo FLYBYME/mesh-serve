@@ -37,6 +37,7 @@ const artifact = (...paths: string[]): Artifact => ({
         requiredParts: [],
         builtAgainst: [],
     },
+    state: 'available',
 });
 
 describe('which artifact answers', () => {
