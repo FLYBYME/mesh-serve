@@ -49,6 +49,21 @@ These are wrong now, and everything built on top of them inherits the mistake.
       chosen mount names. With the page generated on the fly, nobody reads these URLs by hand, so
       they stay content-addressed — but the *rule* changes: a release is a set of artifacts, not a
       packaged site, and `Resolution.page` disappears. **S** · ⛔ A2, B1
+- [ ] **A4a ★★ Identity does not persist anything.** *(found 2026-09-06)* `memoryStore()` is the
+      **only** implementation of `IdentityStore` that exists, and `createIdentityModule()` defaults
+      to it — so `bin/node.mjs` runs a platform whose every user, ticket, organization, membership,
+      role and grant lives in one process's heap and is gone when it exits.
+      Found by signing in to the first console: register, get a ticket, call successfully, restart
+      the node, and the account no longer exists. Nothing errors on the way — a fresh process simply
+      has no users, and a ticket issued a minute earlier is `UNAUTHENTICATED`.
+      This is the reason A4 is not merely tidiness. Four other services persist through `defineCrud`
+      against mongo and this one persists nowhere, so **the only service holding anything a person
+      cannot regenerate is the only one with no storage**. Every other durability property in this
+      repository — content-addressed artifacts, immutable versions, releases, sites — is undone at
+      the login screen.
+      Either A4 lands, or `IdentityStore` gets a mongo implementation first as a smaller step. The
+      second is the honest interim: it is the same interface, and it stops the platform being
+      dev-only. **M** (interim) · **L** (A4)
 - [ ] **A4 Rewrite `identity` on `defineCrud`.** 20 hand-written store methods across 7 record types
       are what `defineCrud` generates. The line count is the smaller problem: **those records are
       closed**, reachable only through the 8 accessors somebody thought to write, so every new
