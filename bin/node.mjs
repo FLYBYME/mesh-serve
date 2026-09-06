@@ -23,7 +23,7 @@ import { ApiService } from '../dist/api/api.service.js';
 import { BuilderService } from '../dist/builder/builder.service.js';
 import { CatalogService } from '../dist/catalog/catalog.service.js';
 import { CdnService } from '../dist/cdn/cdn.service.js';
-import { createIdentityModule } from '../dist/identity/index.js';
+import { createIdentityModule, mongoStore } from '../dist/identity/index.js';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -60,7 +60,8 @@ await app.registerModule(new CatalogService());
 await app.registerModule(new BuilderService({ blobRoot }));
 await app.registerModule(new CdnService({ port: cdnPort, url: cdnUrl, blobRoot }));
 await app.registerModule(new ApiService({ port: apiPort }));
-await app.registerModule(createIdentityModule());
+const database = app.getProvider('database');
+await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
 process.stdout.write(
     `\nmesh-serve is up\n` +

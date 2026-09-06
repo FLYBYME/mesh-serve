@@ -49,7 +49,7 @@ These are wrong now, and everything built on top of them inherits the mistake.
       chosen mount names. With the page generated on the fly, nobody reads these URLs by hand, so
       they stay content-addressed — but the *rule* changes: a release is a set of artifacts, not a
       packaged site, and `Resolution.page` disappears. **S** · ⛔ A2, B1
-- [ ] **A4a ★★ Identity does not persist anything.** *(found 2026-09-06)* `memoryStore()` is the
+- [x] **A4a ★★ Identity does not persist anything.** *(done 2026-09-06)* `memoryStore()` is the
       **only** implementation of `IdentityStore` that exists, and `createIdentityModule()` defaults
       to it — so `bin/node.mjs` runs a platform whose every user, ticket, organization, membership,
       role and grant lives in one process's heap and is gone when it exits.
