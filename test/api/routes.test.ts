@@ -180,3 +180,29 @@ describe('matching a request', () => {
         expect(matchRoute(table, 'DELETE', '/zones')).toBeUndefined();
     });
 });
+
+describe('filtering by release requirements', () => {
+    it('only routes contracts required by the release', () => {
+        const t = routeTable(
+            mesh({ key: 'domains.zone_find' }, { key: 'domains.zone_create' }),
+            lookup,
+            hash,
+            ['domains.zone_find'],
+        );
+
+        expect(t.routes).toHaveLength(1);
+        expect(t.routes[0]?.key).toBe('domains.zone_find');
+    });
+
+    it('routes nothing if release requires no contracts', () => {
+        const t = routeTable(
+            mesh({ key: 'domains.zone_find' }, { key: 'domains.zone_create' }),
+            lookup,
+            hash,
+            [],
+        );
+
+        expect(t.routes).toHaveLength(0);
+    });
+});
+

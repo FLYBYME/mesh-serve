@@ -328,3 +328,176 @@ describe('a site may be called from its own origin', () => {
         expect(answer.headers['access-control-allow-origin']).toBeUndefined();
     });
 });
+
+describe.skipIf(!reachable)('routes come from the record (D2)', () => {
+    const PUBLIC_SITE = 'public-gate.test';
+    const USER_SITE = 'user-gate.test';
+    const DEPLOY_SITE = 'deploy-routes.test';
+    let userTicket: string;
+
+    beforeAll(async () => {
+        // Shared release for gate testing: calls identity.register
+        await world.call('release.create', {
+            hash: 'sha256:rel-gates',
+            name: 'gates-rel',
+            tenantId: ORG,
+            kernel: { version: '0.1.0', digest: 'sha256:kernel-gate' },
+            parts: { 'part-auth': { version: '0.1.0', digest: 'sha256:part-auth' } },
+            requires: ['identity.register'],
+            policy: {},
+            composedAt: new Date(),
+        });
+
+        // Site 1: exposes identity.register at public gate
+        await world.call('site.create', {
+            host: PUBLIC_SITE, application: 'gate-test', tenantId: ORG, api: '/api',
+            releaseHash: 'sha256:rel-gates',
+            mesh: [{
+                package: '@flybyme/mesh-serve',
+                version: '^0.1',
+                contracts: [{ key: 'identity.register', auth: 'public' }],
+            }],
+            theme: {}, policy: {}, title: 'Public Gate Site',
+        });
+
+        // Site 2: exposes the SAME contract (identity.register) at user gate
+        await world.call('site.create', {
+            host: USER_SITE, application: 'gate-test', tenantId: ORG, api: '/api',
+            releaseHash: 'sha256:rel-gates',
+            mesh: [{
+                package: '@flybyme/mesh-serve',
+                version: '^0.1',
+                contracts: [{ key: 'identity.register', auth: 'user' }],
+            }],
+            theme: {}, policy: {}, title: 'User Gate Site',
+        });
+
+        // Releases for deploy testing:
+        // Release 1 only requires identity.ticket_issue
+        await world.call('release.create', {
+            hash: 'sha256:rel-deploy-1',
+            name: 'deploy-rel-1',
+            tenantId: ORG,
+            kernel: { version: '0.1.0', digest: 'sha256:kernel-dep' },
+            parts: { 'part-issue': { version: '0.1.0', digest: 'sha256:part-issue' } },
+            requires: ['identity.ticket_issue'],
+            policy: {},
+            composedAt: new Date(),
+        });
+
+        // Release 2 requires both identity.ticket_issue and identity.register
+        await world.call('release.create', {
+            hash: 'sha256:rel-deploy-2',
+            name: 'deploy-rel-2',
+            tenantId: ORG,
+            kernel: { version: '0.1.0', digest: 'sha256:kernel-dep' },
+            parts: {
+                'part-issue': { version: '0.1.0', digest: 'sha256:part-issue' },
+                'part-reg': { version: '0.1.0', digest: 'sha256:part-reg' },
+            },
+            requires: ['identity.ticket_issue', 'identity.register'],
+            policy: {},
+            composedAt: new Date(),
+        });
+
+        // Deploy site: exposes both in site.mesh, initially deployed with Release 1
+        await world.call('site.create', {
+            host: DEPLOY_SITE, application: 'deploy-test', tenantId: ORG, api: '/api',
+            releaseHash: 'sha256:rel-deploy-1',
+            mesh: [{
+                package: '@flybyme/mesh-serve',
+                version: '^0.1',
+                contracts: [
+                    { key: 'identity.ticket_issue', auth: 'public' },
+                    { key: 'identity.register', auth: 'public' },
+                ],
+            }],
+            theme: {}, policy: {}, title: 'Deploy Routes Site',
+        });
+
+        const issued = await world.call<{ token: string }>('identity.ticket_issue', {
+            email: 'alice@example.com', password: 'correct horse',
+        });
+        userTicket = issued.token;
+    });
+
+    it('proves the gate is per site: two sites on one node expose the same contract at different gates', async () => {
+        // 1. Calling identity.register on public-gated site without authentication succeeds
+        const publicAnswer = await request(port(), 'POST', '/api/identity/register', {
+            host: PUBLIC_SITE,
+            body: { email: 'user-on-public@example.com', password: 'password123', displayName: 'Pub User' },
+        });
+        expect(publicAnswer.status).toBe(200);
+
+        // 2. Calling the exact same contract on user-gated site without authentication is refused
+        const userAnonAnswer = await request(port(), 'POST', '/api/identity/register', {
+            host: USER_SITE,
+            body: { email: 'user-on-user@example.com', password: 'password123', displayName: 'Usr User' },
+        });
+        expect(userAnonAnswer.status).toBe(401);
+        if (typeof userAnonAnswer.body === 'object' && userAnonAnswer.body !== null && 'error' in userAnonAnswer.body) {
+            expect(userAnonAnswer.body.error).toBe('UNAUTHENTICATED');
+        }
+
+        // 3. Calling user-gated site with a valid ticket succeeds
+        const userAuthedAnswer = await request(port(), 'POST', '/api/identity/register', {
+            host: USER_SITE,
+            ticket: userTicket,
+            body: { email: 'user-on-user@example.com', password: 'password123', displayName: 'Usr User' },
+        });
+        expect(userAuthedAnswer.status).toBe(200);
+    });
+
+    it('proves a deploy changes the routes a hostname serves, without a restart', async () => {
+        // Initially on Release 1: identity.ticket_issue is routed, identity.register is not
+        const issueBefore = await request(port(), 'POST', '/api/identity/ticket', {
+            host: DEPLOY_SITE,
+            body: { email: 'alice@example.com', password: 'correct horse' },
+        });
+        expect(issueBefore.status).toBe(200);
+
+        const registerBefore = await request(port(), 'POST', '/api/identity/register', {
+            host: DEPLOY_SITE,
+            body: { email: 'deploy-reg@example.com', password: 'password123', displayName: 'Dep Reg' },
+        });
+        expect(registerBefore.status).toBe(404);
+        if (typeof registerBefore.body === 'object' && registerBefore.body !== null && 'error' in registerBefore.body) {
+            expect(registerBefore.body.error).toBe('NO_ROUTE');
+        }
+
+        // Deploy Release 2 to the same hostname without restarting
+        const deployed = await world.call<{ host: string; release: string; changed: boolean }>(
+            'cdn.deploy', { host: DEPLOY_SITE, release: 'sha256:rel-deploy-2' },
+        );
+        expect(deployed.changed).toBe(true);
+
+        // Now on Release 2: identity.register is served
+        const registerAfter = await request(port(), 'POST', '/api/identity/register', {
+            host: DEPLOY_SITE,
+            body: { email: 'deploy-reg@example.com', password: 'password123', displayName: 'Dep Reg' },
+        });
+        expect(registerAfter.status).toBe(200);
+
+        // identity.ticket_issue is still served
+        const issueAfter = await request(port(), 'POST', '/api/identity/ticket', {
+            host: DEPLOY_SITE,
+            body: { email: 'alice@example.com', password: 'correct horse' },
+        });
+        expect(issueAfter.status).toBe(200);
+    });
+
+    it('returns a clean 404 for an unknown hostname without database queries on repeats', async () => {
+        const first = await request(port(), 'GET', '/api/identity/whoami', { host: 'completely-unknown.test' });
+        expect(first.status).toBe(404);
+        if (typeof first.body === 'object' && first.body !== null && 'error' in first.body) {
+            expect(first.body.error).toBe('NO_SITE');
+        }
+
+        const second = await request(port(), 'GET', '/api/identity/whoami', { host: 'completely-unknown.test' });
+        expect(second.status).toBe(404);
+        if (typeof second.body === 'object' && second.body !== null && 'error' in second.body) {
+            expect(second.body.error).toBe('NO_SITE');
+        }
+    });
+});
+
