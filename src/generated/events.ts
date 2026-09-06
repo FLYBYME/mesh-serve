@@ -35,6 +35,27 @@ declare global {
         'site.created': z.infer<typeof Contract_4.siteCrud['create']['outputSchema']>;
         'site.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_4.siteCrud['update']['outputSchema']> };
         'site.deleted': { id: string };
+        'user.created': z.infer<typeof Contract_6.userCrud['create']['outputSchema']>;
+        'user.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.userCrud['update']['outputSchema']> };
+        'user.deleted': { id: string };
+        'organization.created': z.infer<typeof Contract_6.organizationCrud['create']['outputSchema']>;
+        'organization.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.organizationCrud['update']['outputSchema']> };
+        'organization.deleted': { id: string };
+        'membership.created': z.infer<typeof Contract_6.membershipCrud['create']['outputSchema']>;
+        'membership.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.membershipCrud['update']['outputSchema']> };
+        'membership.deleted': { id: string };
+        'role.created': z.infer<typeof Contract_6.roleCrud['create']['outputSchema']>;
+        'role.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.roleCrud['update']['outputSchema']> };
+        'role.deleted': { id: string };
+        'grant.created': z.infer<typeof Contract_6.grantCrud['create']['outputSchema']>;
+        'grant.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.grantCrud['update']['outputSchema']> };
+        'grant.deleted': { id: string };
+        'ticket.created': z.infer<typeof Contract_6.ticketCrud['create']['outputSchema']>;
+        'ticket.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.ticketCrud['update']['outputSchema']> };
+        'ticket.deleted': { id: string };
+        'apiToken.created': z.infer<typeof Contract_6.apiTokenCrud['create']['outputSchema']>;
+        'apiToken.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.apiTokenCrud['update']['outputSchema']> };
+        'apiToken.deleted': { id: string };
     }
 }
 

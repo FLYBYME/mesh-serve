@@ -64,11 +64,13 @@ These are wrong now, and everything built on top of them inherits the mistake.
       Either A4 lands, or `IdentityStore` gets a mongo implementation first as a smaller step. The
       second is the honest interim: it is the same interface, and it stops the platform being
       dev-only. **M** (interim) · **L** (A4)
-- [ ] **A4 Rewrite `identity` on `defineCrud`.** 20 hand-written store methods across 7 record types
-      are what `defineCrud` generates. The line count is the smaller problem: **those records are
-      closed**, reachable only through the 8 accessors somebody thought to write, so every new
-      question needs a new contract *and* a new store method. It is the model four other services
-      would be copied from. **L**
+- [x] **A4 Rewrite `identity` on `defineCrud`.** *(done 2026-09-06)* All 7 record types (`user`,
+      `organization`, `membership`, `role`, `grant`, `ticket`, `apiToken`) defined on `defineCrud`
+      with `dependencies: []` and all CRUD actions `internal`. `membership` is tenant-scoped by
+      `scopedBy: 'organizationId'`; the other 6 are global. The 8 explicit contracts stay intact
+      as the public door and enforcement layer. MongoDB index names aligned with
+      `Database.ensureDomainIndexes`. Verified tenant isolation on membership CRUD and unscoped caller
+      login and whoami in `test/identity/crud.test.ts`. **L**
 - [ ] **A5 A unique index on every natural key.** `defineCrud` cannot take one (mesh
       DATABASE_INTEGRATION), so `artifact.digest` and `site.host` are ordinary fields beside a minted
       id. **Two rows can claim the same bytes**, which content addressing exists to prevent. Needs
@@ -537,7 +539,7 @@ the duplicate work is harmless. All four durability scenarios proven in `test/in
 *A site exposes contracts and the API refuses what it should.* Host → site → release → routes, with a
 caller's organization resolved and applied.
 
-~~**D1** move the api out of mesh-api~~ · ~~**D2** routes from the record~~ · ~~**D3** scope reaching `defineCrud`~~ · ⛔ **D4** the exposure hash · **A4** identity rewritten on CRUD
+~~**D1** move the api out of mesh-api~~ · ~~**D2** routes from the record~~ · ~~**D3** scope reaching `defineCrud`~~ · ⛔ **D4** the exposure hash · ~~**A4** identity rewritten on CRUD~~
 
 **D3 is the milestone.** Until it lands, *never expose an unbounded find* is a discipline — and a
 discipline is exactly what paas had.
@@ -575,8 +577,7 @@ The durability story holds: an edge wiping its cache or joining cold retrieves m
 peers over HTTP (`/blobs/:digest`), detects and rejects corrupt bytes before writing to storage, and
 falls back to marking `gone` and deterministically rebuilding from git when all edge copies are lost.
 
-**Next**: M3 — Calls are gated and scoped. D1, D2, and D3 closed. D4 (exposure hash) and A4
-(identity CRUD rewrite) remain.
+**Next**: M3 — Calls are gated and scoped. D1, D2, D3, and A4 closed. D4 (exposure hash) remains.
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.

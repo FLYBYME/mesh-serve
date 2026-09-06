@@ -11,9 +11,158 @@
  * (mesh-web spec/service-modules.md §2, C3.2).
  */
 
-import { defineContract, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, type ToolContract, z } from '@flybyme/mesh';
 
-import { ValidationSchema } from '../schema/tickets.js';
+import {
+    ApiTokenSchema,
+    MembershipSchema,
+    OrganizationSchema,
+    UserSchema,
+} from '../schema/principals.js';
+import { GrantSchema, RoleSchema } from '../schema/roles.js';
+import { TicketSchema, ValidationSchema } from '../schema/tickets.js';
+
+// ---------------------------------------------------------------------------- CRUD collections
+
+/**
+ * Global collection of user profiles.
+ *
+ * Scoping: Global. A user is not owned by an organization; a user exists across the deployment
+ * and joins organizations via memberships.
+ */
+export const userCrud = defineCrud('user', UserSchema, {
+    pluralPath: 'users',
+    unique: [{ fields: 'email', scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredUser = z.infer<typeof userCrud.outputSchema>;
+
+/**
+ * Global collection of organizations (tenants).
+ *
+ * Scoping: Global. Organizations are top-level tenant boundaries.
+ */
+export const organizationCrud = defineCrud('organization', OrganizationSchema, {
+    pluralPath: 'organizations',
+    unique: [{ fields: 'slug', scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredOrganization = z.infer<typeof organizationCrud.outputSchema>;
+
+/**
+ * Scoped collection connecting a user to an organization.
+ *
+ * Scoping: Tenant-scoped by `organizationId`. A caller in organization A cannot read
+ * or write memberships of organization B.
+ */
+export const membershipCrud = defineCrud('membership', MembershipSchema, {
+    pluralPath: 'memberships',
+    scopedBy: 'organizationId',
+    unique: [{ fields: 'userId', scope: 'scoped' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredMembership = z.infer<typeof membershipCrud.outputSchema>;
+
+/**
+ * Global collection of roles.
+ *
+ * Scoping: Global. Roles are platform definitions (such as builtin roles `public` and `authenticated`).
+ */
+export const roleCrud = defineCrud('role', RoleSchema, {
+    pluralPath: 'roles',
+    unique: [{ fields: 'key', scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredRole = z.infer<typeof roleCrud.outputSchema>;
+
+/**
+ * Global collection of role-contract grants.
+ *
+ * Scoping: Global. Grants define what contracts a role permits.
+ */
+export const grantCrud = defineCrud('grant', GrantSchema, {
+    pluralPath: 'grants',
+    unique: [{ fields: ['roleKey', 'contract'], scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredGrant = z.infer<typeof grantCrud.outputSchema>;
+
+/**
+ * Global collection of session tickets.
+ *
+ * Scoping: Global. Tickets authenticate a principal across the mesh.
+ */
+export const ticketCrud = defineCrud('ticket', TicketSchema, {
+    pluralPath: 'tickets',
+    unique: [{ fields: 'token', scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredTicket = z.infer<typeof ticketCrud.outputSchema>;
+
+/**
+ * Global collection of API tokens for machine-to-machine authentication.
+ *
+ * Scoping: Global.
+ */
+export const apiTokenCrud = defineCrud('apiToken', ApiTokenSchema, {
+    pluralPath: 'api-tokens',
+    unique: [{ fields: 'tokenHash', scope: 'global' }],
+    visibility: {
+        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'internal',
+    },
+    dependencies: [],
+});
+
+export type StoredApiToken = z.infer<typeof apiTokenCrud.outputSchema>;
+
+export const identityCrudCollections = [
+    userCrud,
+    organizationCrud,
+    membershipCrud,
+    roleCrud,
+    grantCrud,
+    ticketCrud,
+    apiTokenCrud,
+] as const;
+
 
 // ---------------------------------------------------------------------------- tickets
 
@@ -228,7 +377,35 @@ export const permitsContract = defineContract({
     print: (o) => (o.permitted ? 'permitted' : 'denied'),
 });
 
-export const identityContracts = [
+interface CrudContractSet {
+    readonly find: ToolContract;
+    readonly findOne: ToolContract;
+    readonly count: ToolContract;
+    readonly get: ToolContract;
+    readonly resolve: ToolContract;
+    readonly create: ToolContract;
+    readonly createMany: ToolContract;
+    readonly update: ToolContract;
+    readonly replace: ToolContract;
+    readonly delete: ToolContract;
+}
+
+export function extractCrudContracts(crud: CrudContractSet): readonly ToolContract[] {
+    return [
+        crud.find,
+        crud.findOne,
+        crud.count,
+        crud.get,
+        crud.resolve,
+        crud.create,
+        crud.createMany,
+        crud.update,
+        crud.replace,
+        crud.delete,
+    ];
+}
+
+export const identityContracts: readonly ToolContract[] = [
     ticketIssueContract,
     ticketValidateContract,
     ticketRevokeContract,
@@ -237,4 +414,19 @@ export const identityContracts = [
     whoamiContract,
     registerContract,
     permitsContract,
-] as const;
+];
+
+export const identityCrudContracts: readonly ToolContract[] = [
+    ...extractCrudContracts(userCrud),
+    ...extractCrudContracts(organizationCrud),
+    ...extractCrudContracts(membershipCrud),
+    ...extractCrudContracts(roleCrud),
+    ...extractCrudContracts(grantCrud),
+    ...extractCrudContracts(ticketCrud),
+    ...extractCrudContracts(apiTokenCrud),
+];
+
+export const allIdentityContracts: readonly ToolContract[] = [
+    ...identityContracts,
+    ...identityCrudContracts,
+];
