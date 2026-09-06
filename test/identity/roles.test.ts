@@ -10,8 +10,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
     BUILTIN_ROLES, PUBLIC_ROLE, RoleSchema, grantCovers, permits, surfaceOf,
-    type Grant,
+    type Grant, type Role,
 } from '../../src/identity/index.js';
+
+const publicRole = BUILTIN_ROLES.find((r) => r.key === PUBLIC_ROLE)!;
+const authRole = BUILTIN_ROLES.find((r) => r.key === 'authenticated')!;
+const authorRole: Role = { key: 'author', name: 'Author', scope: 'cluster', builtin: false };
+const operatorRole: Role = { key: 'operator', name: 'Operator', scope: 'cluster', builtin: false };
 
 const grants: readonly Grant[] = [
     { roleKey: PUBLIC_ROLE, contract: 'identity.register' },
@@ -24,41 +29,43 @@ describe('public is a role like any other', () => {
     it('is what a caller with no ticket holds', () => {
         // Not a special case in the resolver: one path, and an anonymous caller simply holds the
         // role everyone holds.
-        expect(permits([PUBLIC_ROLE], grants, 'identity.register')).toBe(true);
-        expect(permits([PUBLIC_ROLE], grants, 'identity.whoami')).toBe(false);
+        expect(permits([publicRole], grants, 'identity.register')).toBe(true);
+        expect(permits([publicRole], grants, 'identity.whoami')).toBe(false);
     });
 
     it('ships with identity, and so does exactly one other role', () => {
         // A framework that shipped `editor` would be guessing at a blog, and one that shipped
         // `admin` would repeat the ambiguity in surfdns #26.
         expect(BUILTIN_ROLES.map((r) => r.key)).toEqual([PUBLIC_ROLE, 'authenticated']);
-        expect(BUILTIN_ROLES.every((r) => r.builtin)).toBe(true);
+        // Only public is builtin (not deletable) — see roles.builtin comment and F8a
+        expect(BUILTIN_ROLES.find((r) => r.key === PUBLIC_ROLE)?.builtin).toBe(true);
+        expect(BUILTIN_ROLES.find((r) => r.key === 'authenticated')?.builtin).toBe(false);
     });
 
     it('grants nothing on its own by being authenticated', () => {
         // `authenticated` is a fact, not a permission. Holding it gets you whatever the deployment
         // granted it and no more.
-        expect(permits(['authenticated'], grants, 'post.list')).toBe(false);
+        expect(permits([authRole], grants, 'post.list')).toBe(false);
     });
 });
 
 describe('grants add, and only add', () => {
     it('is the union of every role held', () => {
-        expect(permits([PUBLIC_ROLE, 'author'], grants, 'post.list')).toBe(true);
-        expect(permits([PUBLIC_ROLE, 'author'], grants, 'identity.register')).toBe(true);
+        expect(permits([publicRole, authorRole], grants, 'post.list')).toBe(true);
+        expect(permits([publicRole, authorRole], grants, 'identity.register')).toBe(true);
     });
 
     it('denies anything nothing granted', () => {
         // Deny by default: there is no rule that says yes unless something says no.
-        expect(permits(['author'], grants, 'node.status')).toBe(false);
+        expect(permits([authorRole], grants, 'node.status')).toBe(false);
         expect(permits([], grants, 'identity.register')).toBe(false);
     });
 
     it('has no way for a role to take a permission away', () => {
         // A system where a role could *remove* one is a system where nobody can answer "what can
         // this person do" without evaluating order. Adding a role never shrinks the surface.
-        const alone = surfaceOf(['author'], grants);
-        const withMore = surfaceOf(['author', PUBLIC_ROLE, 'operator'], grants);
+        const alone = surfaceOf([authorRole], grants);
+        const withMore = surfaceOf([authorRole, publicRole, operatorRole], grants);
 
         for (const contract of alone) expect(withMore.has(contract)).toBe(true);
         expect(withMore.size).toBeGreaterThan(alone.size);
@@ -85,7 +92,7 @@ describe('a grant pattern', () => {
         // Deliberate: a role that can call anything is one nobody has to think about, and thinking
         // about it is the point. `*` is not a pattern, so it matches only a contract named `*`.
         expect(grantCovers('*', 'post.list')).toBe(false);
-        expect(permits(['author'], [{ roleKey: 'author', contract: '*' }], 'post.list')).toBe(false);
+        expect(permits([authorRole], [{ roleKey: 'author', contract: '*' }], 'post.list')).toBe(false);
     });
 });
 
@@ -110,5 +117,22 @@ describe('scope is part of a role, which is what fixes #26', () => {
 
     it('rejects a scope that is neither', () => {
         expect(RoleSchema.safeParse({ key: 'x', name: 'X', scope: 'team' }).success).toBe(false);
+    });
+
+    it('enforces scope in permits: cluster grants everywhere, organization grants only within scope', () => {
+        const clusterAdmin = RoleSchema.parse({ key: 'operator', name: 'Operator', scope: 'cluster' });
+        const orgAdmin = RoleSchema.parse({ key: 'admin', name: 'Org admin', scope: 'organization' });
+        const testGrants = [
+            { roleKey: 'operator', contract: 'system.reboot' },
+            { roleKey: 'admin', contract: 'org.settings' },
+        ];
+
+        // Cluster role grants everywhere
+        expect(permits([clusterAdmin], testGrants, 'system.reboot')).toBe(true);
+        expect(permits([clusterAdmin], testGrants, 'system.reboot', 'org-1')).toBe(true);
+
+        // Org role grants only when acting in an organization
+        expect(permits([orgAdmin], testGrants, 'org.settings')).toBe(false);
+        expect(permits([orgAdmin], testGrants, 'org.settings', 'org-1')).toBe(true);
     });
 });

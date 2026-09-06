@@ -30,7 +30,8 @@ export const UserSchema = z.object({
      * Cluster-scoped roles, held everywhere in this deployment.
      *
      * Organization roles are *not* here — they live on the membership, because they are a fact
-     * about that pairing. Putting both in one list is how `admin` came to mean two things.
+     * about that pairing. Enforced on createUser and updateUser: an organization-scoped role key
+     * is refused (F3).
      */
     roles: z.array(z.string()).default([]),
     /** A suspended principal fails validation regardless of any live ticket. */
@@ -44,11 +45,17 @@ export const OrganizationSchema = z.object({
     slug: z.string().min(1).describe('Stable, and what a URL or a header names'),
     name: z.string().min(1),
     /**
-     * Who can re-own it if the last owner leaves.
+     * Who can re-own it if the last owner leaves (surfdns #29, roadmap F8b).
      *
-     * surfdns #29: an organization whose owner leaves cannot be re-owned. Recorded as a field rather
-     * than inferred from memberships so the answer is always available, including when there are no
-     * owners left — which is exactly the case that broke.
+     * Recorded as a field rather than inferred from memberships so the answer is always
+     * available, including when there are no owners left — which is exactly the case that broke.
+     *
+     * Enforcement rules:
+     * 1. Removing the last owner's membership does not leave the organization unadministerable:
+     *    the user recorded in `ownerId` can always re-own it (`reownOrganization`), restoring
+     *    their owner membership. Non-owners are refused.
+     * 2. Transferring ownership (`transferOwnership`) is the *only* way `ownerId` changes, and
+     *    only the current owner may initiate it.
      */
     ownerId: z.string().min(1),
 });
@@ -60,7 +67,8 @@ export type Organization = z.infer<typeof OrganizationSchema>;
  *
  * The join, and the only thing that grants organization-scoped anything. A role named here must be
  * a role whose scope is `organization` — a cluster role on a membership would be a second way to
- * become an operator, which is the ambiguity #26 is about.
+ * become an operator, which is the ambiguity #26 is about. Enforced on createMembership: cluster-scoped
+ * roles are refused (F3).
  */
 export const MembershipSchema = z.object({
     userId: z.string().min(1),
