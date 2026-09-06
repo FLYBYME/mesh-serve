@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 
 import { identityContracts } from './contracts/identity.contract.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './methods/password.js';
-import { BUILTIN_ROLES, permits, PUBLIC_ROLE } from './schema/roles.js';
+import { BUILTIN_ROLES, permits, PUBLIC_ROLE, type Role } from './schema/roles.js';
 import { DEFAULT_TICKET_LIFETIME_MS, isLive, mintToken, type Validation } from './schema/tickets.js';
 import { memoryStore, type IdentityStore } from './store.js';
 
@@ -271,8 +271,23 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                 }
 
                 case 'identity.permits': {
-                    const { roles, contract } = input as { roles: string[]; contract: string };
-                    return { permitted: permits(roles, await store.listGrants(), contract) };
+                    const { roles, contract, organizationId } = input as {
+                        roles: string[];
+                        contract: string;
+                        organizationId?: string;
+                    };
+                    const allRoles = await store.listRoles();
+                    const resolvedRoles = roles
+                        .map((key) => allRoles.find((r) => r.key === key))
+                        .filter((r): r is Role => r !== undefined);
+                    return {
+                        permitted: permits(
+                            resolvedRoles,
+                            await store.listGrants(),
+                            contract,
+                            organizationId,
+                        ),
+                    };
                 }
 
                 default:

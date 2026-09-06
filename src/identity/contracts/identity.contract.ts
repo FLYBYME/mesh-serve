@@ -221,6 +221,7 @@ export const permitsContract = defineContract({
     inputSchema: z.object({
         roles: z.array(z.string()),
         contract: z.string().min(1),
+        organizationId: z.string().optional(),
     }),
     outputSchema: z.object({ permitted: z.boolean() }),
     rest: { method: 'POST', path: '/identity/permits' },

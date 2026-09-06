@@ -343,17 +343,14 @@ task** — each is a decision about the platform's own surface that blocks any U
       default — so catalog has **no** public contract, cdn has only `resolve_site`, builder only
       `get_artifact`. A console cannot list parts, builds or sites: not refused, no route at all.
       Decide the smallest exposable set per service. **M** · ⛔ D1
-- [ ] **F3 ★ `Role.scope` is written and never read, so surfdns #26 is back.** `schema/roles.ts` makes
+- [x] **F3 ★ `Role.scope` is enforced.** *(done 2026-09-06)* `schema/roles.ts` makes
       `scope: 'cluster' | 'organization'` **required**, and says why: #26 exists because `admin` meant
       organization-scoped in one place and cluster-scoped in another, so nobody could be a platform
-      operator. A cluster-scoped role *is* the operator concept — the design is complete. But **no
-      code reads the field**: nothing stops an organization role landing in `user.roles` or a cluster
-      role in `membership.roleKey`, and `permits(roles, grants, contract)` takes bare strings and
-      never loads the `Role` rows, so the deciding call cannot tell them apart. The same string means
-      two things depending on where it is stored — #26 exactly, rebuilt inside the file written to
-      prevent it. Fix: `permits` resolves rows and takes an organization; both write points validate
-      against the record. **Then operator contracts need no new mechanism and `scopedBy` never learns
-      about bypasses** — which is the whole reason to do this before the console. **M**
+      operator. A cluster-scoped role *is* the operator concept — the design is complete. Enforced:
+      `permits` takes resolved `Role` rows and `organizationId`, granting cluster-scoped roles everywhere
+      and organization-scoped roles only in an organization; write points validate against the store
+      (refusing organization-scoped roles in `user.roles` and cluster-scoped roles in `membership.roleKey`).
+      **Operator contracts need no new mechanism and `scopedBy` never learns about bypasses.** **M**
 - [ ] **F5 ★ `partVersion.kernel` is stored and never read, and a live release already violates it.**
       `publish-cli` writes the range a part was built against, with the comment *"the only thing
       standing between a stale part and a browser"*; `build_start` forwards it. **Nothing reads it** —
@@ -382,15 +379,18 @@ task** — each is a decision about the platform's own surface that blocks any U
       from identity — and platform-wide reads go through operator contracts gated by a cluster-scoped
       role (F3). A `--as-tenant` option would be the `scopedBy` bypass managing.md §2 rejects, handed
       out on the command line. **M** · ⛔ F3
-- [ ] **F8 ★ `roles.builtin` and `principals.ownerId` are written and never read.** From the reader
+- [x] **F8 ★ `roles.builtin` and `principals.ownerId` are enforced.** *(done 2026-09-06)* From the reader
       audit, [unread.md](./unread.md). Both are the same shape as F3: a field added to close a named
       incident, holding the right value, consulted by nothing.
       `builtin` says *"not deletable… a deployment with no `public` role has no way to answer an
-      anonymous request at all — a state it should not be possible to configure into."* No delete
-      path checks it, so that state is one `role.delete` away.
+      anonymous request at all — a state it should not be possible to configure into."* Enforced:
+      `deleteRole` rejects builtin roles with `ClientError` (400 `BUILTIN_ROLE`), and `authenticated`
+      was corrected to `builtin: false` matching spec.
       `ownerId` says *"surfdns #29: an organization whose owner leaves cannot be re-owned… including
-      when there are no owners left — which is exactly the case that broke."* The field exists to fix
-      #29 and #29 is not fixed. **S**
+      when there are no owners left — which is exactly the case that broke."* Enforced:
+      `ownerId` is recorded on the organization document as the definitive authority, surviving the
+      removal or departure of owner memberships, and backed by `transferOwnership` (requiring current
+      owner) and `reownOrganization` (allowing the recorded owner to restore membership if all owners leave). **S**
 - [ ] **F9 `site.image` is stored and never rendered.** `page.ts` emits `og:title` and
       `og:description` and no `og:image`. A site sets the field, the tag never appears, and nothing
       says so. One line in the page generator. **S**

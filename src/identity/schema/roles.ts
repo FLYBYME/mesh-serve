@@ -21,13 +21,15 @@ import { z } from 'zod';
 /**
  * Where a role holds.
  *
- * **Required, and this is not decoration.** surfdns issue #26 exists because `admin` means two
+ * **Required, and enforced in code (F3).** surfdns issue #26 exists because `admin` means two
  * different things there — `roleSatisfies('admin')` is organization-scoped while `auth: 'admin'` is
- * cluster-scoped, and nothing connects them, so *nobody can actually be a platform operator*. That
- * ambiguity is only possible because roles are strings in code. Once a role is a record with a
- * required scope the two cannot be confused: they are different records.
+ * cluster-scoped, and nothing connects them, so *nobody can actually be a platform operator*.
  *
- * Making roles data does not fix #26 by itself. It removes the conditions that produced it.
+ * Enforcement:
+ * - A cluster-scoped role grants everywhere; an organization-scoped role grants only when acting
+ *   in an organization (`permits`).
+ * - An organization-scoped key may not enter `user.roles` (`createUser`, `updateUser`).
+ * - A cluster-scoped key may not become a `membership.roleKey` (`createMembership`).
  */
 export const RoleScopeSchema = z.enum(['cluster', 'organization']);
 export type RoleScope = z.infer<typeof RoleScopeSchema>;
@@ -39,10 +41,11 @@ export const RoleSchema = z.object({
     scope: RoleScopeSchema.describe('Where this role holds: the whole deployment, or one organization'),
     description: z.string().optional(),
     /**
-     * Shipped with identity and not deletable.
+     * Shipped with identity and not deletable (F8a).
      *
      * Only `public` is, because a deployment with no `public` role has no way to answer an
      * anonymous request at all — and that is a state it should not be possible to configure into.
+     * Deletion of a builtin role is refused with a ClientError.
      */
     builtin: z.boolean().default(false),
 });
@@ -93,7 +96,7 @@ export const BUILTIN_ROLES: readonly Role[] = [
         name: 'Authenticated',
         scope: 'cluster',
         description: 'Held by every caller with a valid ticket. Grants nothing on its own.',
-        builtin: true,
+        builtin: false,
     },
 ];
 
@@ -114,29 +117,76 @@ export function grantCovers(pattern: string, contract: string): boolean {
 }
 
 /**
+ * Helper to resolve Role records from Role objects or builtin string keys.
+ */
+function resolveRoles(roles: readonly (Role | string)[]): readonly Role[] {
+    const resolved: Role[] = [];
+    for (const r of roles) {
+        if (typeof r === 'string') {
+            const builtin = BUILTIN_ROLES.find((b) => b.key === r);
+            if (builtin) resolved.push(builtin);
+        } else {
+            resolved.push(r);
+        }
+    }
+    return resolved;
+}
+
+/**
  * The contracts these roles may call.
  *
  * Deny by default: a contract not granted to any role you hold is refused, and there is no path
  * here that widens a surface — grants only ever add.
+ *
+ * Cluster roles grant everywhere; organization roles grant only when acting in an organization.
  */
 export function surfaceOf(
-    roles: readonly string[],
+    roles: readonly (Role | string)[],
     grants: readonly Grant[],
+    organizationId?: string,
 ): ReadonlySet<string> {
-    const held = new Set(roles);
+    const resolved = resolveRoles(roles);
     const out = new Set<string>();
     for (const grant of grants) {
-        if (held.has(grant.roleKey)) out.add(grant.contract);
+        const matchingRole = resolved.find((r) => r.key === grant.roleKey);
+        if (!matchingRole) continue;
+        if (matchingRole.scope === 'cluster') {
+            out.add(grant.contract);
+        } else if (matchingRole.scope === 'organization' && organizationId !== undefined && organizationId.length > 0) {
+            out.add(grant.contract);
+        }
     }
     return out;
 }
 
-/** May a caller holding these roles call this contract? */
+/**
+ * May a caller holding these roles call this contract?
+ *
+ * Resolving rows means passing the `Role` rows in rather than bare strings:
+ * keeping `permits` pure and moving the asynchronous store lookup to the caller.
+ * A pure signature is predictable, easily testable, and separates policy evaluation
+ * from storage I/O.
+ *
+ * Scope enforcement (F3):
+ * - A cluster-scoped role grants everywhere (the operator concept).
+ * - An organization-scoped role grants only within the organization the caller is acting in.
+ *   If no organization is provided (e.g. an unscoped caller), organization grants are refused.
+ */
 export function permits(
-    roles: readonly string[],
+    roles: readonly (Role | string)[],
     grants: readonly Grant[],
     contract: string,
+    organizationId?: string,
 ): boolean {
-    const held = new Set(roles);
-    return grants.some((grant) => held.has(grant.roleKey) && grantCovers(grant.contract, contract));
+    const resolved = resolveRoles(roles);
+    return grants.some((grant) => {
+        if (!grantCovers(grant.contract, contract)) return false;
+        const matchingRole = resolved.find((r) => r.key === grant.roleKey);
+        if (!matchingRole) return false;
+        if (matchingRole.scope === 'cluster') return true;
+        if (matchingRole.scope === 'organization' && organizationId !== undefined && organizationId.length > 0) {
+            return true;
+        }
+        return false;
+    });
 }

@@ -9,6 +9,8 @@
  * below is what the tests use, and it is also a perfectly good single-node deployment.
  */
 
+import { ClientError } from '@flybyme/mesh';
+
 import type { ApiToken, Membership, Organization, User } from './schema/principals.js';
 import type { Grant, Role } from './schema/roles.js';
 import type { Revocation, Ticket } from './schema/tickets.js';
@@ -23,12 +25,17 @@ export interface IdentityStore {
 
     createOrganization(org: Organization): Promise<Stored<Organization>>;
     getOrganization(id: string): Promise<Stored<Organization> | undefined>;
+    transferOwnership(organizationId: string, currentOwnerId: string, newOwnerId: string): Promise<void>;
+    reownOrganization(organizationId: string, userId: string): Promise<Stored<Membership>>;
 
     createMembership(membership: Membership): Promise<Stored<Membership>>;
     membershipsOf(userId: string): Promise<readonly Membership[]>;
+    deleteMembership(organizationId: string, userId: string): Promise<void>;
 
     listRoles(): Promise<readonly Role[]>;
+    getRole(key: string): Promise<Role | undefined>;
     upsertRole(role: Role): Promise<void>;
+    deleteRole(key: string): Promise<void>;
     listGrants(): Promise<readonly Grant[]>;
     addGrant(grant: Grant): Promise<void>;
 
@@ -81,6 +88,21 @@ export function memoryStore(): IdentityStore {
 
     return {
         async createUser(user) {
+            if (user.roles && user.roles.length > 0) {
+                for (const roleKey of user.roles) {
+                    const role = roles.get(roleKey);
+                    if (role === undefined) {
+                        throw new ClientError(`Role "${roleKey}" does not exist.`, 'ROLE_NOT_FOUND', 404);
+                    }
+                    if (role.scope !== 'cluster') {
+                        throw new ClientError(
+                            `Role "${roleKey}" is organization-scoped and cannot be added to user.roles. user.roles only holds cluster-scoped roles.`,
+                            'INVALID_ROLE_SCOPE',
+                            400,
+                        );
+                    }
+                }
+            }
             const key = id('u');
             users.set(key, user);
             return { id: key, value: user };
@@ -97,7 +119,25 @@ export function memoryStore(): IdentityStore {
         },
         async updateUser(key, patch) {
             const existing = users.get(key);
-            if (existing !== undefined) users.set(key, { ...existing, ...patch });
+            if (existing === undefined) {
+                throw new ClientError(`User "${key}" does not exist.`, 'USER_NOT_FOUND', 404);
+            }
+            if (patch.roles !== undefined) {
+                for (const roleKey of patch.roles) {
+                    const role = roles.get(roleKey);
+                    if (role === undefined) {
+                        throw new ClientError(`Role "${roleKey}" does not exist.`, 'ROLE_NOT_FOUND', 404);
+                    }
+                    if (role.scope !== 'cluster') {
+                        throw new ClientError(
+                            `Role "${roleKey}" is organization-scoped and cannot be added to user.roles. user.roles only holds cluster-scoped roles.`,
+                            'INVALID_ROLE_SCOPE',
+                            400,
+                        );
+                    }
+                }
+            }
+            users.set(key, { ...existing, ...patch });
         },
 
         async createOrganization(org) {
@@ -109,17 +149,114 @@ export function memoryStore(): IdentityStore {
             const value = organizations.get(key);
             return value === undefined ? undefined : { id: key, value };
         },
+        async transferOwnership(organizationId, currentOwnerId, newOwnerId) {
+            const org = organizations.get(organizationId);
+            if (org === undefined) {
+                throw new ClientError(`Organization "${organizationId}" does not exist.`, 'ORG_NOT_FOUND', 404);
+            }
+            if (org.ownerId !== currentOwnerId) {
+                throw new ClientError(
+                    `Caller "${currentOwnerId}" is not the owner of organization "${organizationId}". Only the current owner can transfer ownership.`,
+                    'NOT_OWNER',
+                    403,
+                );
+            }
+            const newOwner = users.get(newOwnerId);
+            if (newOwner === undefined) {
+                throw new ClientError(`User "${newOwnerId}" does not exist.`, 'USER_NOT_FOUND', 404);
+            }
+
+            organizations.set(organizationId, { ...org, ownerId: newOwnerId });
+
+            const existingMembership = memberships.find(
+                (m) => m.organizationId === organizationId && m.userId === newOwnerId,
+            );
+            if (existingMembership !== undefined) {
+                existingMembership.roleKey = 'owner';
+            } else {
+                memberships.push({
+                    userId: newOwnerId,
+                    organizationId,
+                    roleKey: 'owner',
+                    joinedAt: Date.now(),
+                });
+            }
+        },
+        async reownOrganization(organizationId, userId) {
+            const org = organizations.get(organizationId);
+            if (org === undefined) {
+                throw new ClientError(`Organization "${organizationId}" does not exist.`, 'ORG_NOT_FOUND', 404);
+            }
+            if (org.ownerId !== userId) {
+                throw new ClientError(
+                    `User "${userId}" is not the recorded owner of organization "${organizationId}".`,
+                    'NOT_OWNER',
+                    403,
+                );
+            }
+
+            const existingMembership = memberships.find(
+                (m) => m.organizationId === organizationId && m.userId === userId,
+            );
+            if (existingMembership !== undefined) {
+                existingMembership.roleKey = 'owner';
+                return { id: id('m'), value: existingMembership };
+            }
+
+            const newMembership: Membership = {
+                userId,
+                organizationId,
+                roleKey: 'owner',
+                joinedAt: Date.now(),
+            };
+            memberships.push(newMembership);
+            return { id: id('m'), value: newMembership };
+        },
 
         async createMembership(membership) {
+            const role = roles.get(membership.roleKey);
+            if (role === undefined) {
+                throw new ClientError(`Role "${membership.roleKey}" does not exist.`, 'ROLE_NOT_FOUND', 404);
+            }
+            if (role.scope !== 'organization') {
+                throw new ClientError(
+                    `Role "${membership.roleKey}" is cluster-scoped and cannot be used as a membership roleKey. Memberships only hold organization-scoped roles.`,
+                    'INVALID_ROLE_SCOPE',
+                    400,
+                );
+            }
             memberships.push(membership);
             return { id: id('m'), value: membership };
         },
         async membershipsOf(userId) {
             return memberships.filter((m) => m.userId === userId);
         },
+        async deleteMembership(organizationId, userId) {
+            const idx = memberships.findIndex(
+                (m) => m.organizationId === organizationId && m.userId === userId,
+            );
+            if (idx !== -1) {
+                memberships.splice(idx, 1);
+            }
+        },
 
         async listRoles() { return [...roles.values()]; },
+        async getRole(key) { return roles.get(key); },
         async upsertRole(role) { roles.set(role.key, role); },
+        async deleteRole(key) {
+            const role = roles.get(key);
+            if (role === undefined) {
+                throw new ClientError(`Role "${key}" does not exist.`, 'ROLE_NOT_FOUND', 404);
+            }
+            if (role.builtin) {
+                throw new ClientError(
+                    `Cannot delete builtin role "${key}": builtin roles are shipped with identity and not deletable.`,
+                    'BUILTIN_ROLE',
+                    400,
+                );
+            }
+            roles.delete(key);
+        },
         async listGrants() { return [...grants]; },
         async addGrant(grant) { grants.push(grant); },
 
