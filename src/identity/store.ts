@@ -435,16 +435,23 @@ export function mongoStore(database: Database | Db): IdentityStore {
             readyPromise = (async () => {
                 const cols = getCollections();
                 await Promise.all([
-                    cols.users.createIndex({ email: 1 }, { unique: true }),
-                    cols.tickets.createIndex({ token: 1 }, { unique: true }),
+                    cols.users.createIndex({ email: 1 }, { unique: true, name: 'uniq_user_email' }),
+                    cols.tickets.createIndex({ token: 1 }, { unique: true, name: 'uniq_ticket_token' }),
                     cols.tickets.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }),
                     cols.tickets.createIndex({ userId: 1 }),
                     cols.revocations.createIndex({ epoch: 1 }, { unique: true }),
-                    cols.roles.createIndex({ key: 1 }, { unique: true }),
-                    cols.apiTokens.createIndex({ tokenHash: 1 }, { unique: true }),
-                    cols.organizations.createIndex({ slug: 1 }),
+                    cols.roles.createIndex({ key: 1 }, { unique: true, name: 'uniq_role_key' }),
+                    cols.apiTokens.createIndex({ tokenHash: 1 }, { unique: true, name: 'uniq_apiToken_tokenHash' }),
+                    cols.organizations.createIndex({ slug: 1 }, { unique: true, name: 'uniq_organization_slug' }),
                     cols.memberships.createIndex({ userId: 1 }),
-                    cols.memberships.createIndex({ organizationId: 1, userId: 1 }),
+                    cols.memberships.createIndex(
+                        { organizationId: 1, userId: 1 },
+                        { unique: true, name: 'uniq_membership_organizationId_userId' },
+                    ),
+                    cols.grants.createIndex(
+                        { roleKey: 1, contract: 1 },
+                        { unique: true, name: 'uniq_grant_roleKey_contract' },
+                    ),
                 ]);
             })().catch((err: unknown) => {
                 readyPromise = undefined;
