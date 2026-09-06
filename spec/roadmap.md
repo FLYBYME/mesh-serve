@@ -313,7 +313,15 @@ Nothing resolves until this exists. Every version a site names is a row here.
       enumerate. So `cdn.resolve_site` is public and unscoped by construction, `site.find` becomes
       scoped and is never exposed, and the two callers stop sharing one door.
       **S**, and it must land in the same change as D3 rather than after it. **⛔** mesh `dispatch/2`
-- [ ] **D3 ★ Scope must reach `defineCrud`. *This is a change to mesh, not to the api.*** The api can
+- [x] **~~D3~~ superseded — original entry, kept for the argument it makes.** *(closed by the
+      entry above, mesh v2.2.0, 2026-09-06.)* **Left unchecked for half a day after it shipped, and
+      that cost something**: reading this file top-down found this entry before the closed one, so
+      D3 was reported as still blocking and written into `surfdns/architecture/rules.md` as the gate
+      before the third generation could start. It was not. A superseded entry must be struck through
+      the moment its replacement lands — D3a's original was, this one was not, and a roadmap that
+      says a shipped thing is pending is worse than one that omits it.
+      The reasoning below stays because it is the clearest statement of *why*: **This is a change to
+      mesh, not to the api.** The api can
       resolve a caller's organization into `meta`; it cannot make a generated `find` use it, because
       the query is built inside the framework's CRUD path. Writing the filter in the api instead
       would be a second copy of authorization sitting beside a path that bypasses it. The shape the
