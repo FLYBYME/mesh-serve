@@ -140,3 +140,30 @@ explicit contracts, because CRUD is used idiomatically and never hooked.
 - **Where a theme comes from.** The record carries token values today. Whether a theme is also a
   publishable, versioned thing — a third kind of part, with no code — is undecided. It is the one
   case where "switch the styling" is the right verb.
+
+---
+
+## 7. Part stylesheets and the scoping decision — **Decided, built**
+
+An Application or Extension with real styling needs a place to put it. Forcing authors to write inline
+`style` props makes layout issues expensive to debug and impossible to inspect cleanly.
+
+### How CSS travels
+1. A part imports a stylesheet (`import './style.css'`) in its entry module.
+2. `bundlePart` runs esbuild with `bundle: true` and `entryNames: 'index'`, emitting `index.css` alongside `index.js`.
+3. `bundlePart` captures every output file, hashes each content buffer, and registers `.css` files as `text/css; charset=utf-8` in the artifact's file list.
+4. `CdnService.pageFile` collects `.css` files across all composed part artifacts and passes them to `generatePage`.
+5. `generatePage` emits `<link rel="stylesheet">` tags in the document `<head>`.
+
+### Canonical ordering
+Order matters because CSS resolves selector ties by cascade source order:
+1. **Kernel stylesheets first.** The kernel provides the foundational shell rules (`.window`, `.titlebar`). A part overriding a kernel rule is intentionally restyling a kernel element.
+2. **Part stylesheets in canonical composition order.** Parts are ordered deterministically by part ID (`localeCompare`), matching the release composition order.
+3. **Theme custom properties on `:root` last.** The `<style>` block containing the site's theme tokens follows the linked stylesheets, ensuring custom properties are in scope and override any stylesheet defaults.
+
+### The Scoping Decision: Document-Level Cascade (No Artificial Scoping)
+Roadmap M2/C8 weighed three alternatives for CSS scoping across parts:
+- **Digest-derived scoped attributes (rejected):** Rewriting HTML elements and CSS selectors with hash attributes (e.g. `[data-part="..."]`) ties artifact bytes to the mounting location or requires a preprocessor/CSS-in-JS runtime. This violates the core invariant that an artifact is content-addressed and produces identical bytes across all sites.
+- **Compose-time selector collision detection (rejected):** Composing a release is a fast metadata resolution over the catalog (`partVersion`), not an edge operation that downloads artifact blobs and parses CSS ASTs. Furthermore, parts intentionally share utility classes or target kernel elements.
+- **Document-level cascade with canonical ordering (chosen):** Parts style a shared document under standard CSS cascade rules. Authors use BEM or component naming conventions for isolation. Custom properties inherit across boundaries, keeping token-based theming simple and zero-cost.
+

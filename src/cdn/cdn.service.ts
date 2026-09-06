@@ -226,13 +226,38 @@ export class CdnService extends ServiceModule {
             const kernel = await this.artifactFor(release.kernel.digest);
             if (kernel === undefined) return undefined;
 
+            const partArtifacts = await Promise.all(
+                Object.entries(release.parts).map(async ([id, pinned]) => ({
+                    id,
+                    artifact: await this.artifactFor(pinned.digest),
+                })),
+            );
+            if (partArtifacts.some((entry) => entry.artifact === undefined)) return undefined;
+
+            const partStyles: Record<string, readonly string[]> = {};
+            for (const entry of partArtifacts) {
+                if (entry.artifact !== undefined) {
+                    const styles = entry.artifact.files
+                        .filter((f) => f.path.endsWith('.css'))
+                        .map((f) => f.path)
+                        .sort((a, b) => a.localeCompare(b));
+                    if (styles.length > 0) {
+                        partStyles[entry.id] = styles;
+                    }
+                }
+            }
+
             files = generatePage({
                 site,
                 release,
                 kernel: {
                     entry: kernel.declaration.part.entry,
-                    styles: kernel.files.filter((f) => f.path.endsWith('.css')).map((f) => f.path),
+                    styles: kernel.files
+                        .filter((f) => f.path.endsWith('.css'))
+                        .map((f) => f.path)
+                        .sort((a, b) => a.localeCompare(b)),
                 },
+                partStyles,
             });
             this.pages.set(key, files);
         }

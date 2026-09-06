@@ -196,10 +196,16 @@ Nothing resolves until this exists. Every version a site names is a row here.
 - [ ] **C7 Eviction is a refcount, not a policy.** An artifact is removable when no release a live
       site names resolves to it. That makes deleting a site remove *its* composition while the kernel
       and shared parts survive — which is also the legal answer. **S** · ⛔ C1
-- [ ] **C8 Part CSS needs scoping and a token rule.** Decided 2026-09-06 that parts ship their own
-      styles. Two consequences: two parts both shipping `.panel` collide silently, and a part
-      hardcoding `background: #161b22` **cannot be re-themed** — which is the whole point of tokens.
-      Both are checkable at build time. **M**
+- [x] **C8 Part CSS ships with the artifact.** *(built 2026-09-06)* A part imports a `.css` file;
+      esbuild emits it into the artifact alongside `index.js`; `pageFile` collects stylesheets across
+      all composed part artifacts and emits `<link>` tags in the page head.
+      **Order is canonical**: kernel stylesheet first (the baseline rules), followed by part stylesheets
+      in composition order (alphabetical by part ID), followed by the site's theme tokens on `:root`.
+      **The scoping decision**: document-level cascade with canonical composition ordering — **no
+      artificial scoping mechanism**. Rewriting CSS with digest-derived attributes would destroy content
+      addressing (causing bytes to differ depending on mount or requiring preprocessors/CSS-in-JS).
+      Two parts defining the same selector resolve ties via CSS source order; tokens inherit across
+      all parts without Shadow DOM. **M**
 
 ## Track D — The api
 

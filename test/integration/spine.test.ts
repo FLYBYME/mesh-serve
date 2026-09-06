@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BuilderService } from '../../src/builder/builder.service.js';
 import { CatalogService } from '../../src/catalog/catalog.service.js';
 import { CdnService } from '../../src/cdn/cdn.service.js';
+import { slugOf } from '../../src/cdn/methods/resolve.js';
 
 const run = promisify(execFile);
 const MONGO = process.env['MONGODB_URI'] ?? 'mongodb://localhost:27017';
@@ -116,7 +117,9 @@ async function makeRepository(): Promise<{ path: string; commit: string }> {
 
     // The framework is `external`, so this compiles without it being installed. That is the rule
     // under test as much as anything: a build does not install.
+    await writeFile(join(path, 'src/chrome.css'), '.chrome { display: flex; }\n');
     await writeFile(join(path, 'src/chrome.ts'), `
+import './chrome.css';
 import { needs } from '@flybyme/mesh-web';
 export default class FixtureChrome { readonly needs = needs('state'); activate() { return {}; } }
 `);
@@ -143,7 +146,8 @@ async function makeKernelRepository(): Promise<{ path: string; commit: string }>
     await writeFile(join(path, 'mesh.json'), JSON.stringify({
         kind: 'kernel', id: 'fixture-kernel', version: '0.3.0', entry: 'src/index.ts',
     }, null, 4));
-    await writeFile(join(path, 'src/index.ts'), 'export const start = (c) => c;\n');
+    await writeFile(join(path, 'src/kernel.css'), '.window { background: var(--surface); }\n');
+    await writeFile(join(path, 'src/index.ts'), 'import "./kernel.css";\nexport const start = (c) => c;\n');
 
     await run('git', ['init', '--quiet', '-b', 'main'], { cwd: path });
     await run('git', ['config', 'user.email', 'test@example.com'], { cwd: path });
@@ -421,7 +425,11 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
     });
 
     it('serves the site over HTTP once it is deployed', async () => {
-        const composed = await world.call<{ hash: string }>('cdn.compose', {
+        const composed = await world.call<{
+            hash: string;
+            kernel: { version: string; digest: string };
+            parts: Record<string, { version: string; digest: string }>;
+        }>('cdn.compose', {
             kernel: '^0.3',
             parts: [
                 { kind: 'extension', id: 'fixture-chrome', version: '^1.0' },
@@ -450,6 +458,32 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         expect(page.body).toContain('<title>The fixture site</title>');
         expect(page.body).toContain('content="Serving from a real cdn."');
 
+        // Stylesheets: kernel stylesheet comes first, then part stylesheets in canonical composition order.
+        const chromePart = composed.parts['fixture-chrome'];
+        expect(chromePart).toBeDefined();
+        const kernelLink = `<link rel="stylesheet" href="/_a/${slugOf(composed.kernel.digest)}/index.css">`;
+        const chromeLink = `<link rel="stylesheet" href="/_a/${slugOf(chromePart?.digest ?? '')}/index.css">`;
+
+        expect(page.body).toContain(kernelLink);
+        expect(page.body).toContain(chromeLink);
+        expect(page.body.indexOf(kernelLink)).toBeLessThan(page.body.indexOf(chromeLink));
+
+        // A part with no stylesheet changes nothing about the page / emits no link.
+        const appPart = composed.parts['fixture-app'];
+        expect(appPart).toBeDefined();
+        expect(page.body).not.toContain(slugOf(appPart?.digest ?? ''));
+
+        // Stylesheets are fetchable from disk.
+        const kernelCss = await get(port, `/_a/${slugOf(composed.kernel.digest)}/index.css`, 'fixture.test');
+        expect(kernelCss.status).toBe(200);
+        expect(kernelCss.headers['content-type']).toBe('text/css; charset=utf-8');
+        expect(kernelCss.body).toContain('--surface');
+
+        const chromeCss = await get(port, `/_a/${slugOf(chromePart?.digest ?? '')}/index.css`, 'fixture.test');
+        expect(chromeCss.status).toBe(200);
+        expect(chromeCss.headers['content-type']).toBe('text/css; charset=utf-8');
+        expect(chromeCss.body).toContain('.chrome');
+
         // One kernel, one URL. Two would be two module graphs and two of every singleton.
         expect(page.body).toContain('"@flybyme/mesh-web"');
         expect(page.body).toContain('--surface: #161b22;');
@@ -475,6 +509,36 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
 
         const again = await get(port, '/', 'fixture.test', { 'if-none-match': etag });
         expect(again.status).toBe(304);
+    });
+
+    it('a part with no stylesheet changes nothing about the page', async () => {
+        const withAppOnly = await world.call<{
+            hash: string;
+            kernel: { version: string; digest: string };
+        }>('cdn.compose', {
+            kernel: '^0.3',
+            parts: [{ kind: 'application', id: 'fixture-app', version: '^1.0' }],
+        });
+
+        await world.call('cdn.deploy', { host: 'fixture.test', release: withAppOnly.hash });
+        const port = world.cdn.port!;
+        const page = await get(port, '/', 'fixture.test');
+        expect(page.status).toBe(200);
+
+        const kernelLink = `<link rel="stylesheet" href="/_a/${slugOf(withAppOnly.kernel.digest)}/index.css">`;
+        expect(page.body).toContain(kernelLink);
+        expect(page.body).not.toContain('.chrome');
+        expect(page.body).not.toContain('.app');
+
+        // Restore deployed release
+        const fullRelease = await world.call<{ hash: string }>('cdn.compose', {
+            kernel: '^0.3',
+            parts: [
+                { kind: 'extension', id: 'fixture-chrome', version: '^1.0' },
+                { kind: 'application', id: 'fixture-app', version: '^1.0' },
+            ],
+        });
+        await world.call('cdn.deploy', { host: 'fixture.test', release: fullRelease.hash });
     });
 
     it('404s an artifact the release does not contain', async () => {
