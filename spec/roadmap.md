@@ -224,7 +224,13 @@ Nothing resolves until this exists. Every version a site names is a row here.
       **⛔ blocked on mesh, not on effort**: `EventDefinition` is `{ name, schema }`, so an event
       cannot say which field of its payload names an organization, and `decideDelivery` therefore
       refuses every scoped event. Queued as mesh dispatch 4. **M**
-- [ ] **D1 Move it out of mesh-api before mesh-api is deleted.** **Not a port** — the shape is decided
+- [x] **D1 Move it out of mesh-api before mesh-api is deleted.** *(built 2026-09-06; mesh-api archived
+      the same day)* `src/api/api.service.ts` in the shape below — `mountCrud` zero times, `node:http`,
+      `gate.ts` and the ticket cache and revocation poller kept, express and `rest.ts`'s route table
+      dropped. `test/integration/api.test.ts` and `stream.test.ts`, 22 tests.
+      **Left unticked until now**, which is its own small lesson: the deadline in this item's title
+      passed — mesh-api *was* deleted — and nothing noticed, because the item and the work were
+      tracked in different places. **Not a port** — the shape is decided
       in [exposure.md §6a](./exposure.md). The api is the cdn's twin: `Host → site`, bind a port,
       same records, same invalidation; one serves files and the other serves calls.
       **It owns no collections**, which makes it unlike the other three services — `site.mesh` is the
