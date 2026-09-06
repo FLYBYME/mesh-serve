@@ -73,6 +73,12 @@ export interface PageInput {
         /** Every stylesheet the kernel ships. The rules; the site supplies the values. */
         readonly styles: readonly string[];
     };
+    /**
+     * Stylesheets shipped by each part, by part id.
+     *
+     * Like `kernel.styles`, read from each part artifact's file list.
+     */
+    readonly partStyles?: Readonly<Record<string, readonly string[]>>;
 }
 
 /** The URL an artifact's file is served at. See `resolve.ts` — an artifact's URL is its hash. */
@@ -87,7 +93,7 @@ const urlOf = (digest: string, path: string): string =>
  * that matter — non-determinism here would be a new digest on every deploy that changed nothing.
  */
 export function generatePage(input: PageInput): readonly GeneratedFile[] {
-    const { site, release, kernel } = input;
+    const { site, release, kernel, partStyles } = input;
 
     const kernelUrl = urlOf(release.kernel.digest, kernel.entry);
     const parts = Object.entries(release.parts)
@@ -95,7 +101,7 @@ export function generatePage(input: PageInput): readonly GeneratedFile[] {
         .map(([id, artifact], index) => ({ id, index, url: urlOf(artifact.digest, 'index.js') }));
 
     return [
-        { path: 'index.html', content: indexHtml(site, kernel, kernelUrl, release) },
+        { path: 'index.html', content: indexHtml(site, kernel, kernelUrl, release, partStyles) },
         { path: 'boot.js', content: bootModule(site, kernelUrl, parts) },
     ];
 }
@@ -107,6 +113,7 @@ function indexHtml(
     kernel: PageInput['kernel'],
     kernelUrl: string,
     release: Release,
+    partStyles?: PageInput['partStyles'],
 ): string {
     /**
      * Why an import map, and why it is not optional.
@@ -119,9 +126,23 @@ function indexHtml(
      */
     const importMap = JSON.stringify({ imports: { '@flybyme/mesh-web': kernelUrl } }, null, 4);
 
-    const styles = kernel.styles
-        .map((path) => `    <link rel="stylesheet" href="${attr(urlOf(release.kernel.digest, path))}">`)
-        .join('\n');
+    const kernelLinks = kernel.styles
+        .map((path) => `    <link rel="stylesheet" href="${attr(urlOf(release.kernel.digest, path))}">`);
+
+    const partLinks: string[] = [];
+    if (partStyles !== undefined) {
+        const sortedParts = Object.entries(release.parts)
+            .sort(([a], [b]) => a.localeCompare(b));
+        for (const [id, artifact] of sortedParts) {
+            const files = partStyles[id] ?? [];
+            const sortedFiles = [...files].sort((a, b) => a.localeCompare(b));
+            for (const path of sortedFiles) {
+                partLinks.push(`    <link rel="stylesheet" href="${attr(urlOf(artifact.digest, path))}">`);
+            }
+        }
+    }
+
+    const styles = [...kernelLinks, ...partLinks].join('\n');
 
     return `<!doctype html>
 <html lang="en" data-api="${attr(site.api)}">

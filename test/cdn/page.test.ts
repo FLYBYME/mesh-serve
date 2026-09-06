@@ -133,6 +133,38 @@ describe('the page', () => {
             .toContain('href="/_a/kernel/kernel.css"');
     });
 
+    it('links the kernel stylesheet first and part stylesheets in canonical composition order', () => {
+        const withStyles = input({
+            partStyles: {
+                chrome: ['chrome.css'],
+                'process-monitor': ['monitor.css'],
+            },
+        });
+        const html = fileOf(generatePage(withStyles), 'index.html');
+
+        const kernelIndex = html.indexOf('href="/_a/kernel/kernel.css"');
+        const chromeIndex = html.indexOf('href="/_a/chrome/chrome.css"');
+        const monitorIndex = html.indexOf('href="/_a/monitor/monitor.css"');
+
+        expect(kernelIndex).toBeGreaterThan(-1);
+        expect(chromeIndex).toBeGreaterThan(-1);
+        expect(monitorIndex).toBeGreaterThan(-1);
+
+        expect(kernelIndex).toBeLessThan(chromeIndex);
+        expect(chromeIndex).toBeLessThan(monitorIndex);
+    });
+
+    it('a part with no stylesheet changes nothing about the page', () => {
+        const withoutStyles = input();
+        const withEmptyStyles = input({
+            partStyles: {
+                chrome: [],
+                'process-monitor': [],
+            },
+        });
+        expect(generatePage(withEmptyStyles)).toEqual(generatePage(withoutStyles));
+    });
+
     it('writes the theme as custom properties, because the site owns the values', () => {
         const html = fileOf(generatePage(input()), 'index.html');
 

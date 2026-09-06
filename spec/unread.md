@@ -54,6 +54,9 @@ confirmed by reading the call site.
 | `Role.scope` | makes surfdns #26 impossible | Roadmap **F3**. The keystone for Track F. |
 | `site.image` | *"A path within an artifact this release serves, so it is content-addressed like everything else"* | `page.ts` renders `og:title` and `og:description` and **never `og:image`**. A site sets it and the tag never appears. |
 | `descriptor.dependencies` | what a part was built against | Parsed, stored, never verified against what the build resolved. |
+| `artifact.declaration.builtAgainst` | *"A dependency at the version that was actually linked, not the one that was asked for… the point of this record is to be a fact something else can compare against"* | Resolved from lockfile and stored on every artifact declaration. Read nowhere in production code. |
+| `artifact.declaration.requiredParts` | *"A node holding the bytes can answer what does this need without a catalog lookup"* | Stored on the artifact declaration; `cdn.compose` reads requirements from `partVersion` in the catalog instead. |
+| `release.exposure` | *"Recorded here so a mismatch is an error at compose time rather than a confusing 404 three calls later"* | `cdn.compose` never populates it, and nothing in `src/` ever reads it. Roadmap **D5c**. |
 
 `roles.builtin` and `principals.ownerId` are the two new ones, and both are the same shape as `Role.scope`:
 a field added to close a specific named incident, holding the right value, consulted by nothing.
