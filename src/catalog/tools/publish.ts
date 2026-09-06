@@ -117,5 +117,33 @@ async function upsertPart(
         );
     }
 
+    /**
+     * **Where the source is can move, and until now it could not.**
+     *
+     * The comment above has always said `repository` and `description` may change. Nothing wrote
+     * them after `part.create`: this returned `found.id` and dropped both, so the first publish
+     * decided a part's repository permanently.
+     *
+     * That is not cosmetic, because `build_start` reads `part.repository` — not the version's. A
+     * part first published from a working copy on somebody's laptop would be built from that path
+     * forever, on every node, at every version. Publishing a new version could not fix it; there
+     * was no path that could. Found doing exactly that: `clock` and `notes` went into the catalog
+     * pointing at `/home/ubuntu/code/mesh-demos` and stayed there through a republish from GitHub.
+     *
+     * Identity is still fixed — `kind` and `publisher` refuse above, and a version's commit can
+     * never move. This is the other half of that same rule: **what a part *is* cannot change, and
+     * where its source lives is not what it is.**
+     */
+    const moved = found.repository !== input.repository;
+    const renamed = input.description !== undefined && found.description !== input.description;
+
+    if (moved || renamed) {
+        await ctx.call('part.update', {
+            id: found.id,
+            ...(moved ? { repository: input.repository } : {}),
+            ...(renamed ? { description: input.description } : {}),
+        });
+    }
+
     return { id: found.id };
 }

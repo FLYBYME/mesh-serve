@@ -233,6 +233,50 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         })).rejects.toThrow(/immutable|already published/i);
     });
 
+    it('follows a part that moved repositories, because that is not its identity', async () => {
+        /**
+         * `upsertPart`'s own comment has always said `repository` and `description` may change.
+         * Nothing wrote them: the existing-part path returned the id and dropped both, so the
+         * **first** publish fixed a part's repository permanently.
+         *
+         * Not cosmetic, because `build_start` reads `part.repository` rather than the version's. A
+         * part first published from a working copy on somebody's laptop was built from that path
+         * forever, on every node, at every version — and no republish could move it, because there
+         * was no path that wrote the field at all. Found doing exactly that: `clock` and `notes`
+         * went into a live catalog pointing at `/home/ubuntu/code/mesh-demos` and stayed there
+         * through a republish from GitHub.
+         */
+        const moved = 'https://github.com/example/moved.git';
+
+        // The **same** version and commit, so this takes the idempotent path and mints nothing.
+        // `upsertPart` runs before the version check, which is what makes a move expressible at all
+        // without inventing a version whose only purpose is to carry a URL.
+        const again = await world.call<{ existed: boolean }>('catalog.publish', {
+            name: 'fixture-app', kind: 'application', repository: moved, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
+        });
+        expect(again.existed).toBe(true);
+
+        const part = await world.call<{ repository: string }>('part.find_one', {
+            query: { name: 'fixture-app' },
+        });
+        expect(part.repository).toBe(moved);
+
+        // Identity is still fixed. Moving the source does not make it a different part, and the
+        // checks that guard identity are untouched by this.
+        await expect(world.call('catalog.publish', {
+            name: 'fixture-app', kind: 'extension', repository: moved, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
+        })).rejects.toThrow(/kind/i);
+
+        // Put it back: these run in order against one world, and everything after this builds
+        // `fixture-app` from the repository the fixture actually created.
+        await world.call('catalog.publish', {
+            name: 'fixture-app', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
+        });
+    });
+
     it('resolves a range to the published version', async () => {
         const resolved = await world.call<{
             kernel: { version: string }; parts: { name: string; version: string }[];
