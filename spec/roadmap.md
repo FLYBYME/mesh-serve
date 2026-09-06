@@ -276,10 +276,14 @@ Nothing resolves until this exists. Every version a site names is a row here.
       route per contract *at boot*, and a fixed route table known at startup is precisely what D2
       replaces. The cdn proved `node:http` answers *resolve a host, look up a table, reply* without a
       framework. **L**
-- [ ] **D2 ★ Routes come from the record.** Host → site → release → `mesh[]` → routes, exactly as the
-      cdn resolves Host → site → artifact. Same cache, same invalidation. It makes the gate **per
-      site**: one site may expose `domains.zone_find` as public while another requires `user`. **M** ·
-      ⛔ C1, D1
+- [x] **D2 ★ Routes come from the record.** *(built 2026-09-06)* Host → site → release → `mesh[]` → routes,
+      exactly as the cdn resolves Host → site → artifact. Same cache, same invalidation. It makes the gate
+      **per site**: one site may expose `domains.zone_find` as public while another requires `user`.
+      `routeTable()` accepts `release.requires` so only required contracts are routed, omitting unused
+      grants. `ApiService` and `api_describe` resolve host to site via `cdn.resolve_site` (reusing the
+      sole unscoped query) and fetch the release to derive gated route tables. Cached on
+      `${site.id}:${releaseHash}:${site.updatedAt}` with negative caching for unknown hosts and
+      invalidated by `cdn.site_deployed` and `site.updated`. **M** · ⛔ C1, D1
 - [x] **D3 ★ Scope reaches `defineCrud`.** *(mesh v2.2.0, adopted 2026-09-06)* `siteCrud` declares
       `scopedBy: 'tenantId'`, so every generated read and write is inside the caller's organization —
       `find` is scoped, `create` stamps the field, `update` cannot reparent a row, and a cross-scope
@@ -533,8 +537,7 @@ the duplicate work is harmless. All four durability scenarios proven in `test/in
 *A site exposes contracts and the API refuses what it should.* Host → site → release → routes, with a
 caller's organization resolved and applied.
 
-⛔ **D1** move the api out of mesh-api *before it is deleted* · **D2** routes from the record ·
-**D3** scope reaching `defineCrud` · **D4** the exposure hash · **A4** identity rewritten on CRUD
+~~**D1** move the api out of mesh-api~~ · ~~**D2** routes from the record~~ · ~~**D3** scope reaching `defineCrud`~~ · ⛔ **D4** the exposure hash · **A4** identity rewritten on CRUD
 
 **D3 is the milestone.** Until it lands, *never expose an unbounded find* is a discipline — and a
 discipline is exactly what paas had.
@@ -572,8 +575,8 @@ The durability story holds: an edge wiping its cache or joining cold retrieves m
 peers over HTTP (`/blobs/:digest`), detects and rejects corrupt bytes before writing to storage, and
 falls back to marking `gone` and deterministically rebuilding from git when all edge copies are lost.
 
-**Next**: M3 — Calls are gated and scoped. Moving the API out of mesh-api, dynamic route mounting from
-site records, and scoping down to `defineCrud`.
+**Next**: M3 — Calls are gated and scoped. D1, D2, and D3 closed. D4 (exposure hash) and A4
+(identity CRUD rewrite) remain.
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.
