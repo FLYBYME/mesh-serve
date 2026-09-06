@@ -382,6 +382,19 @@ task** — each is a decision about the platform's own surface that blocks any U
       from identity — and platform-wide reads go through operator contracts gated by a cluster-scoped
       role (F3). A `--as-tenant` option would be the `scopedBy` bypass managing.md §2 rejects, handed
       out on the command line. **M** · ⛔ F3
+- [ ] **F7 `--version` collides with commander's own flag, silently.** Any contract with a `version`
+      input is uninvokable from the generated CLI: commander owns `--version` on the program and
+      prints the CLI's version instead of running anything.
+
+      ```
+      $ npx mesh builder build_start --part todo --version 0.1.0
+      1.0.0
+      ```
+
+      **Exit 0, no build, no error** — the failure mode is a command that looks like it worked. It
+      hits `builder.build_start`, `catalog.publish` and all eight `partVersion` commands. The
+      generator must either rename colliding options or stop registering a program-level `--version`.
+      Belongs in mesh's `GenerateCommand`. **S**
 - [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
       because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
       The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
