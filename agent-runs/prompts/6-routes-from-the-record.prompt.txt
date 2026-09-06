@@ -1,0 +1,122 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**D2 — routes come from the record.** Host → site → release → `mesh[]` → routes,
+exactly as the cdn already resolves Host → site → artifact. Same cache, same
+invalidation.
+
+Today the api's routes are not derived from the site. The consequence is the one
+worth fixing: **the gate cannot be per site.** The roadmap's own example is the
+point —
+
+> one site may expose `domains.zone_find` as public while another requires `user`
+
+— and that is not a hypothetical. `site.mesh` exists precisely because *what a
+hostname exposes, and at what gate, is a deployment's decision, not a part's*
+(see C2: `mesh` deliberately survived the release refactor for this reason).
+Right now that field is read by the builder and the page, and **nothing turns it
+into a route**.
+
+================================================================================
+READ FIRST — THE TRAP THIS TASK WILL WALK INTO
+================================================================================
+
+**`site.find_one` is scope-restricted as of D3, and an api caller resolving a
+hostname may have no organization at all.** This exact mistake was made three
+days' worth of work ago, in the cdn, and is written up as **D3a** in
+`spec/roadmap.md`. Read that entry before writing a line.
+
+The short version: `cdn.resolve_site` was written against `site.find_one`, D3
+made that scoped, and **every page request 404'd** — because the caller is a
+browser and a browser belongs to no organization. The fix was not to widen the
+scope. It was a second door: read the collection directly, in four lines, with a
+stated invariant.
+
+> A door that opens into the same locked room is not a second door.
+
+Route resolution has the same shape as page resolution: **public, keyed by exact
+hostname, nothing enumerable.** So either reuse `cdn.resolve_site` — which
+already is that door and already has the invariant written down — or state
+plainly in the report why a second one is needed. **Do not add a third bypass,
+and do not make the serving path unscoped to make this work.** The whole value
+of D3 is that the bypasses are countable.
+
+    src/cdn/tools/resolve_site.ts    the second door, and the invariant it states
+    src/cdn/cdn.service.ts           Host → site → release → artifact, the shape
+                                     to mirror, plus the page cache and the
+                                     `site.updated` handler that invalidates it
+    src/cdn/schema/site.ts           `mesh`, and why it outlived the release refactor
+    src/api/api.service.ts           where routes are served from today
+    src/api/methods/                 input coercion, the exposure surface
+
+================================================================================
+WHAT TO BUILD
+================================================================================
+
+- **Resolution**: a request's Host resolves to a site, the site names a release,
+  the release's parts carry `mesh[]`, and that produces the set of routes this
+  hostname serves — with the gate each contract is exposed at *on this site*.
+- **Caching that matches the cdn's, because it is the same question.** The cdn
+  keys its page cache on `${site.id}:${release.hash}:${site.updatedAt}` and
+  invalidates on the `site.updated` event. A second, differently-shaped cache
+  beside it is two things to be wrong. Use the same key and the same event.
+- **A hostname with no site is a 404, not a 500**, and it must not be a database
+  query per request.
+
+Think about, and answer in the report:
+
+- **What happens to a request that arrives between a deploy and the cache
+  invalidating.** The cdn has an answer; routes must have the same one, or a page
+  and its API disagree about which release is live for a moment.
+- **Whether a route can be exposed that the release does not contain.** A site's
+  `mesh[]` naming a contract no composed part provides is a deployment error, and
+  the question is whether it is caught at compose time, at request time, or never.
+- **What a part's declared `requires` means here.** A part requires contracts; a
+  site exposes them. Those are different lists and the relationship between them
+  is the thing `checkComposition` already checks for composition — say whether
+  routes should be checked the same way.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not widen any scope, and do not add an unscoped read outside the door that
+already exists.** If you need one, that is a finding for the report, argued.
+
+**Do not build the exposure hash.** That is D4 — a separate item about a client
+that describes a surface the API has moved on from.
+
+**Do not change `defineCrud` or anything in the `mesh` package.** This is
+mesh-serve work; D3 already made the framework change this depends on.
+
+**Zero `as any`, zero `as never`, zero casts.** Run every command in the
+**foreground** and commit as you go.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- An integration test with **two sites on one node exposing the same contract at
+  different gates** — one `public`, one `user` — proving the gate is per site.
+  That assertion is the whole milestone and nothing weaker demonstrates it.
+- A test that a deploy changes the routes a hostname serves, without a restart.
+- A test that an unknown hostname is a clean 404.
+- Every existing test still passing — **310 today**, none may regress.
+- `npm run typecheck` clean. `npm test` green.
+- Tick D2 in `spec/roadmap.md`, and update the M3 line if this closes part of it.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/6-routes-from-the-record.md`
+
+- whether you reused `cdn.resolve_site` or added a door, and the argument either way
+- the three questions above
+- **how many unscoped reads now exist in this repository, and where.** After D3
+  the answer should be a small countable list, and if this dispatch grew it, the
+  report is where that gets declared rather than discovered later
+- anything for `spec/unread.md`
