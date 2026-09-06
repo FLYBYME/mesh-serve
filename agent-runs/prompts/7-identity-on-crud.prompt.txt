@@ -1,0 +1,130 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**A4 — rewrite `identity` on `defineCrud`.** Rated **L**. The last structural
+item in M3, and the one everything else in the product sits on.
+
+    src/identity/store.ts     851 lines, 26 hand-written methods
+    src/identity/module.ts    302 lines
+    src/identity/schema/      principals.ts, roles.ts, tickets.ts — 7 record types
+    src/identity/contracts/   8 hand-written contracts
+    src/identity/methods/     the logic
+
+The roadmap states the real problem, and it is not the line count:
+
+> **Those records are closed**, reachable only through the 8 accessors somebody
+> thought to write, so every new question needs a new contract *and* a new store
+> method. It is the model four other services would be copied from.
+
+Four other services in this repository persist through `defineCrud` and get
+find/get/resolve/count/create/update/delete plus events for one line. Identity
+gets 26 methods and answers only the questions already imagined.
+
+**Why now, and it is a business reason.** Measured off Heroku's Platform API this
+morning: `account`, `teams`, `oauth` and `users` are **94 of 301 endpoints —
+nearly a third of a business platform's entire surface.** Identity is not a
+supporting service here; it is a third of the product, and it is the one written
+in a way that resists being asked new questions.
+
+================================================================================
+WHAT ALREADY HAPPENED, AND WHAT IT MEANS FOR THIS
+================================================================================
+
+**A4a landed 2026-09-06**: `mongoStore()` beside `memoryStore()`, both behind
+`IdentityStore`, with an integration test that restarts a `MeshApp` and validates
+a previously issued ticket. Read `agent-runs/reports/4-identity-persists.md`
+first — it was written by the only person to implement this interface against a
+real database, and **its "what only A4 can fix" section is the specification for
+this dispatch.** Do not re-derive that list; start from it.
+
+**D3 landed 2026-09-06**: `defineCrud` takes `scopedBy`, so a generated `find` is
+confined to the caller's organization, `create` stamps the field, `update` cannot
+reparent a row, and a cross-scope `get` answers **404 rather than 403**. This is
+what makes A4 safe to do at all — moving identity onto CRUD without it would have
+exposed every user record to every caller.
+
+**D3a is the trap.** Adopting `scopedBy` on `site` immediately broke the serving
+path: `cdn.resolve_site` called a now-scoped `site.find_one`, and a browser has no
+organization, so every page 404'd. Identity has the *same shape* — **sign-in is
+performed by someone who is not yet anybody.** `ticket_issue`, `register` and
+`ticket_validate` are called by callers with no scope, by definition.
+
+> A door that opens into the same locked room is not a second door.
+
+So decide deliberately, and say it in the report: which identity contracts are
+public doors, what invariant each states, and how many lines of unscoped access
+exist when you are done. **There is exactly one unscoped read in this repository
+today** (`src/cdn/tools/resolve_site.ts:47`). That number is a property worth
+keeping small and countable.
+
+================================================================================
+WHAT TO BUILD
+================================================================================
+
+- **Every record type on `defineCrud`**, scoped where scoping is meaningful.
+  Which of the 7 are tenant-scoped and which are global is a real decision — a
+  `user` is not owned by an organization the way a `membership` is. State it.
+- **The 8 explicit contracts stay explicit** where they carry a side effect that
+  CRUD cannot express: issuing a ticket, hashing a password, revoking. CRUD is
+  for the records; contracts are for the acts. Do not turn `ticket_issue` into a
+  `create`.
+- **`hashApiToken` and password hashing are unchanged.** Not this task.
+- **Revocations stay an append-only log with an epoch**, because the api's poller
+  uses the epoch to know it is caught up. Ordering must survive the rewrite.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not break the contracts above.** `identity.whoami`, `ticket_issue`,
+`ticket_validate`, `sign_out`, `register`, `permits`, `revocations_since` are
+called by live code — the `auth` Extension in mesh-core and the api's gate. Their
+input and output schemas are the boundary; the storage beneath them is what
+changes. If one genuinely must change shape, that is a finding, argued, not a
+quiet edit.
+
+**Do not delete `memoryStore` behaviour without checking what uses it.** Every
+test in `test/identity/` runs against it deliberately: a suite that needs mongo to
+check a password hash is a suite people stop running. If `defineCrud` makes that
+impossible, say so plainly — it is the most important thing you could report.
+
+**Do not expose any identity CRUD action.** F2 says every CRUD action on every
+collection is `internal`, correctly. A generated `user.find` reachable from a
+browser is the worst possible outcome of this dispatch.
+
+**Zero `as any`, zero `as never`, zero casts. Never run a command in the
+background** — foreground only, commit as you go. Two dispatches have died
+mid-turn with uncommitted work.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **All 310 existing tests still passing.** Not 309. This is a rewrite under
+  live contracts and the test suite is the only thing holding the shape.
+- The A4a restart test still passing unchanged — register, issue, restart the
+  app, validate.
+- A test that a caller in organization A cannot read organization B's
+  memberships, through the generated actions, not just through the contracts.
+- A test that sign-in works for a caller with **no** organization, because that
+  is D3a and it is the failure that would take down every site.
+- `npm run typecheck` clean, zero casts.
+- Tick A4 in `spec/roadmap.md` and update the M3 line.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/7-identity-on-crud.md`
+
+- which record types are scoped and which are global, and the argument
+- **the public doors**: every contract callable without an organization, what
+  invariant each states, and the total count of unscoped reads in the repository
+  when you are done
+- what `defineCrud` could not express, if anything — this is the list that tells
+  us whether four other services should follow
+- whether `memoryStore` survived, and what the tests run against now
+- anything for `spec/unread.md`
