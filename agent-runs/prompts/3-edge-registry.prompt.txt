@@ -1,0 +1,114 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**C4, the edge registry** — the first gate of **M2, the milestone that has not
+moved at all.**
+
+    One row per running edge: id and url.
+
+That is genuinely the whole schema, and the restraint is the design. Read the
+item in `spec/roadmap.md` and `spec/serving.md` before writing anything.
+
+================================================================================
+WHY M2 IS THE ONE THAT MATTERS, AND WHY THIS IS ITS FIRST STEP
+================================================================================
+
+M1 is done: a hostname serves a site composed from published parts, on **one
+node**. Everything about surviving anything is unproven — a second edge, a lost
+disk, an artifact nobody holds.
+
+The milestone is *an edge is a cache and git is the archive*: kill an edge's
+storage, restart it, and the site still serves, either because another edge had
+the bytes (**C5**) or because the artifact went `gone` and was rebuilt from the
+catalog's commit (**C6**). Neither is possible without knowing **who the other
+edges are**, which is this.
+
+It is deliberately an **S**. Resist making it more.
+
+================================================================================
+THE ONE DESIGN DECISION, AND IT IS ALREADY MADE
+================================================================================
+
+From the roadmap, and it is the reason this is small:
+
+> **Not liveness** — the mesh already knows which nodes are up, and a second
+> heartbeat beside it is two sources of truth that disagree during exactly the
+> incident where it matters.
+
+So: **no `lastSeen`, no `healthy`, no status field, no heartbeat, no timeout
+sweeper.** If you find yourself wanting one, the answer is `RegistryModule` — the
+mesh already tracks which nodes are connected, and this row exists to answer *at
+what URL can a peer fetch blobs from that node*, which the mesh does not know.
+
+That distinction is the whole item. A registry that also tracks liveness is a
+registry that will disagree with the broker during a partition, and a partition
+is the only time anybody reads it.
+
+**If a field's value can be derived from the mesh, it does not belong here.**
+Say so in your report if you were tempted, and what stopped you.
+
+================================================================================
+WHAT TO BUILD
+================================================================================
+
+- An `edge` collection via `defineCrud`, in `src/cdn/`. `id` and `url`, and think
+  hard before a third field.
+- The cdn registers itself on start and removes itself on stop. A node that dies
+  without removing its row is the ordinary case, not an error — **C5 finds out by
+  trying to fetch and failing**, which is one source of truth rather than two.
+- Read `bin/node.mjs` for how a node knows its own URL. If it does not, that is a
+  finding: an edge that cannot say where it is cannot be in a registry of where
+  edges are. Solve it in the smallest way that is honest, and write down what you
+  chose — a flag with a default is fine, a guess from a network interface is not.
+
+**Scoping.** Look at `siteCrud` and `releaseCrud` and decide deliberately: an
+edge is infrastructure, not a tenant's. Almost certainly global and **not
+exposed** — this is an internal record for C5's benefit, and nothing outside the
+platform has any use for a list of your servers. Say which you chose and why, in
+the schema, the way the other collections do.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not build C5.** No sync, no peer fetch, no blob transfer. This is the row
+C5 will read, and building both at once means the interesting decisions in C5
+get made in a hurry while finishing C4.
+
+**Do not build C6**, `gone`, or any rebuild path.
+
+**Do not touch `src/identity/`, `src/api/` or `src/catalog/`.**
+
+**Do not add a heartbeat.** It is the one thing the item explicitly refuses.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- The collection, the self-registration, and removal on clean shutdown.
+- An integration test in `test/integration/`: **two cdn services on one mesh**,
+  both registered, each able to read the other's row. That is the first time
+  anything in this repository has run two edges, and it is the assertion M2 is
+  built on.
+- A test that a stopped edge's row is gone.
+- `npm run typecheck` clean, **zero `as any`, zero `as never`, zero casts.**
+- `npm test` green — all 278.
+- Tick C4 in `spec/roadmap.md` with what was actually built.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/3-edge-registry.md`
+
+- the schema, and **every field you considered and rejected** — that list is more
+  useful than the two you kept
+- how a node learns its own URL, and what you had to decide
+- what happens today when an edge dies without removing its row, and why that is
+  acceptable rather than a gap
+- what C5 will need from this that is not here yet
+- anything for `spec/unread.md` — you are in the cdn, which has produced four of
+  them
