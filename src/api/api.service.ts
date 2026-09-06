@@ -182,8 +182,20 @@ export class ApiService extends ServiceModule {
         const origin = header(req, 'origin');
 
         try {
+            /**
+             * The preflight resolves the site too, and it has to.
+             *
+             * A browser sends `OPTIONS` *before* the real request and refuses to send that request
+             * at all unless this response allows the origin. Answering the preflight without
+             * knowing which site was addressed means answering it without knowing whether the
+             * origin is allowed — which is how this returned a bare 204 and blocked every call.
+             *
+             * The `Host` header is on the preflight like any other request, so the lookup is the
+             * same one and is already cached.
+             */
             if (req.method === 'OPTIONS') {
-                return send(res, 204, this.cors(origin), '');
+                const preflight = await this.siteFor(host);
+                return send(res, 204, this.cors(origin, preflight), '');
             }
 
             const site = await this.siteFor(host);
@@ -202,7 +214,7 @@ export class ApiService extends ServiceModule {
             const table = await this.tableFor(site);
             const found = matchRoute(table, req.method ?? 'GET', inner);
 
-            const headers = { ...this.cors(origin), [EXPOSURE_HEADER]: table.exposure };
+            const headers = { ...this.cors(origin, site), [EXPOSURE_HEADER]: table.exposure };
 
             if (found === undefined) {
                 return send(res, 404, headers, { error: 'NO_ROUTE', message: 'Not found' });
@@ -282,7 +294,8 @@ export class ApiService extends ServiceModule {
         site: Site,
         origin: string | undefined,
     ): Promise<void> {
-        const headers = this.cors(origin);
+        // The stream is opened for a site, so it is allowed for that site's origin.
+        const headers = this.cors(origin, site);
 
         if (req.method !== 'GET') {
             return send(res, 405, { ...headers, allow: 'GET' }, {
@@ -439,9 +452,47 @@ export class ApiService extends ServiceModule {
      * API that accepts a bearer ticket is the thing that makes every site on the internet a client of
      * this one. A site declares its origins; a page on a port nobody declared is refused.
      */
-    private cors(origin: string | undefined): Record<string, string> {
+    /**
+     * Who may call this api from a browser.
+     *
+     * **A site's own origin is allowed, and that is derived rather than configured.** This was an
+     * allowlist on the *node* — `allowOrigins`, passed to the constructor — and `bin/node.mjs`
+     * passed none, so every cross-origin call from every site was refused with a 204 carrying no
+     * headers. The first console deployed against it showed *"Failed to load catalog parts"* and
+     * nothing else, because the browser had blocked every request before it left.
+     *
+     * Configuring it per node would have worked and is the wrong shape. **The site record already
+     * knows this**: the api resolves `Host → site` on every request, and the origin that should be
+     * allowed to call for a site is the origin that site is served from. An allowlist beside it
+     * means adding a hostname requires restarting every api node with a new flag — which defeats
+     * *a deploy is one field write*, the property the whole deployment model rests on.
+     *
+     * Matched on **hostname**, not on the whole origin string, because a site record stores `host`
+     * and nothing about scheme or port: the cdn may serve `console.localhost` on `:8081` in
+     * development and `:443` behind a proxy, and the site is the same site. What must match is
+     * *which site is asking*, and the hostname is that.
+     *
+     * `allowOrigins` stays, and is now what its name suggests — an escape hatch for an origin that
+     * is **not** one of this platform's own hostnames, such as a console served from somewhere else
+     * entirely during development.
+     */
+    private cors(origin: string | undefined, site?: Site): Record<string, string> {
+        if (origin === undefined) return {};
+
         const allowed = this.options.allowOrigins ?? [];
-        if (origin === undefined || !allowed.includes(origin)) return {};
+        let permitted = allowed.includes(origin);
+
+        if (!permitted && site !== undefined) {
+            try {
+                permitted = new URL(origin).hostname === site.host;
+            } catch {
+                // An unparseable Origin is not a browser we need to satisfy. Refuse rather than
+                // guess: a header that is not a URL is either a bug or somebody probing.
+                permitted = false;
+            }
+        }
+
+        if (!permitted) return {};
 
         return {
             'access-control-allow-origin': origin,

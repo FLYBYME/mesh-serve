@@ -48,7 +48,11 @@ async function request(
     port: number,
     method: string,
     path: string,
-    options: { host?: string; ticket?: string; scope?: string; body?: unknown } = {},
+    options: {
+        host?: string; ticket?: string; scope?: string; body?: unknown;
+        /** A browser sends this on every cross-origin call, and the api answers on it. */
+        origin?: string;
+    } = {},
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
     const { request: send } = await import('node:http');
     const payload = options.body === undefined ? undefined : JSON.stringify(options.body);
@@ -63,6 +67,7 @@ async function request(
                 host: options.host ?? HOST,
                 ...(options.ticket === undefined ? {} : { authorization: `Bearer ${options.ticket}` }),
                 ...(options.scope === undefined ? {} : { [SCOPE_HEADER]: options.scope }),
+                ...(options.origin === undefined ? {} : { origin: options.origin }),
                 ...(payload === undefined ? {} : {
                     'content-type': 'application/json',
                     'content-length': String(Buffer.byteLength(payload)),
@@ -286,5 +291,40 @@ describe.skipIf(!reachable)('api.describe', () => {
 
         const issue = described.calls.find((c) => c.key === 'identity.ticket_issue');
         expect(JSON.stringify(issue?.input)).toContain('password');
+    });
+});
+
+describe('a site may be called from its own origin', () => {
+    /**
+     * CORS was an allowlist on the *node* — `allowOrigins`, passed to the constructor — and
+     * `bin/node.mjs` passed none, so every cross-origin call from every site was refused with a 204
+     * carrying no headers. The first console deployed against it rendered, called nothing, and said
+     * *"Failed to load catalog parts"*: the browser had blocked every request before it left.
+     *
+     * The site record already knew the answer. The api resolves `Host → site` on every request, and
+     * the origin allowed to call for a site is the origin that site is served from. An allowlist
+     * beside it means adding a hostname requires restarting every api node — which defeats *a
+     * deploy is one field write*.
+     */
+    it('allows the origin whose hostname matches the site, without configuration', async () => {
+        // A port the site record knows nothing about, because it stores `host` and not a scheme or
+        // a port: the cdn serves `:8081` in development and `:443` behind a proxy, and it is the
+        // same site. What has to match is *which site is asking*.
+        const answer = await request(port(), 'OPTIONS', '/whoami', {
+            origin: `http://${HOST}:8081`,
+        });
+
+        expect(answer.status).toBe(204);
+        expect(answer.headers['access-control-allow-origin']).toBe(`http://${HOST}:8081`);
+    });
+
+    it('refuses an origin that is not this site', async () => {
+        // The check that makes the one above safe: matching on hostname is not matching on nothing.
+        const answer = await request(port(), 'OPTIONS', '/whoami', {
+            origin: 'http://not-this-site.example',
+        });
+
+        expect(answer.status).toBe(204);
+        expect(answer.headers['access-control-allow-origin']).toBeUndefined();
     });
 });

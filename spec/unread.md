@@ -68,12 +68,12 @@ mesh-web's `Manifest` has nine fields. **One is consumed by production code.**
 | | src | test |
 | --- | --- | --- |
 | `manifest.commands` | 1 | 2 |
-| `manifest.conflicts` | **0** | 6 |
-| `manifest.bindings` | **0** | 6 |
+| ~~`manifest.conflicts`~~ | **1** *(fixed 2026-09-06, mesh-web 0.11.5)* | 6 |
+| ~~`manifest.bindings`~~ | **1** *(fixed 2026-09-06, mesh-web 0.11.0 — the keydown handler)* | 6 |
 | `manifest.views` | **0** | 1 |
 | `manifest.apis` | **0** | 1 |
 | `manifest.menus` | **0** | 0 |
-| `manifest.layouts` | **0** | 0 |
+| ~~`manifest.layouts`~~ | **1** *(fixed 2026-09-06, mesh-web 0.11.3 — applyLayout)* | 0 |
 | `manifest.settings` | **0** | 0 |
 
 `conflicts` is the one that matters. `mergeManifests` detects two contributions claiming the same
