@@ -47,6 +47,7 @@ import { createTicketCache, type TicketCache } from './methods/tickets.js';
 import type { AuthorizeHook } from './methods/gate.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
+export const SHAPE_HEADER = 'x-exposure-shape';
 
 /** Where a browser subscribes. One path per site, not one per event: a stream carries them all. */
 export const EVENTS_PATH = '/events';
@@ -231,7 +232,27 @@ export class ApiService extends ServiceModule {
             const table = await this.tableFor(site, release);
             const found = matchRoute(table, req.method ?? 'GET', inner);
 
-            const headers = { ...this.cors(origin, site), [EXPOSURE_HEADER]: table.exposure };
+            const headers = {
+                ...this.cors(origin, site),
+                [EXPOSURE_HEADER]: table.exposure,
+                [SHAPE_HEADER]: table.shapeHash,
+            };
+
+            const clientExposure = header(req, EXPOSURE_HEADER);
+            if (clientExposure !== undefined && clientExposure !== table.exposure) {
+                return send(res, 409, headers, {
+                    error: 'EXPOSURE_MISMATCH',
+                    message: `Client exposure hash (${clientExposure}) does not match API exposure hash (${table.exposure}).`,
+                });
+            }
+
+            const clientShape = header(req, SHAPE_HEADER);
+            if (clientShape !== undefined && clientShape !== table.shapeHash) {
+                return send(res, 409, headers, {
+                    error: 'EXPOSURE_MISMATCH',
+                    message: `Client shape hash (${clientShape}) does not match API shape hash (${table.shapeHash}).`,
+                });
+            }
 
             if (found === undefined) {
                 return send(res, 404, headers, { error: 'NO_ROUTE', message: 'Not found' });
@@ -513,9 +534,9 @@ export class ApiService extends ServiceModule {
 
         return {
             'access-control-allow-origin': origin,
-            'access-control-allow-headers': `authorization, content-type, ${SCOPE_HEADER}`,
+            'access-control-allow-headers': `authorization, content-type, ${SCOPE_HEADER}, ${EXPOSURE_HEADER}, ${SHAPE_HEADER}`,
             'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-            'access-control-expose-headers': EXPOSURE_HEADER,
+            'access-control-expose-headers': `${EXPOSURE_HEADER}, ${SHAPE_HEADER}`,
             // Not `*`: the response varies by origin, and a cache that missed that would hand one
             // site's allowance to another.
             vary: 'Origin',

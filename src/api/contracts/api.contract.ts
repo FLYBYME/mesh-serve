@@ -36,6 +36,7 @@ export const describeContract = defineContract({
         /** Where routes mount, so a generated client does not have to be told twice. */
         base: z.string(),
         exposure: z.string().describe('The hash a generated client carries and the api reports'),
+        shapeHash: z.string().describe('The site-independent shape hash over contracts and schemas'),
         calls: z.array(z.object({
             key: z.string(),
             method: z.string(),

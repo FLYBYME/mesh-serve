@@ -13,8 +13,9 @@
 import { BrokerModule, DatabaseModule, MeshApp, RegistryModule } from '@flybyme/mesh';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ApiService, EXPOSURE_HEADER } from '../../src/api/api.service.js';
+import { ApiService, EXPOSURE_HEADER, SHAPE_HEADER } from '../../src/api/api.service.js';
 import { SCOPE_HEADER } from '../../src/api/methods/gate.js';
+import { verifyClientExposure, ExposureMismatchError } from '../../src/api/methods/client.js';
 import { CdnService } from '../../src/cdn/cdn.service.js';
 import { createIdentityModule, memoryStore } from '../../src/identity/index.js';
 
@@ -52,6 +53,8 @@ async function request(
         host?: string; ticket?: string; scope?: string; body?: unknown;
         /** A browser sends this on every cross-origin call, and the api answers on it. */
         origin?: string;
+        exposure?: string;
+        shape?: string;
     } = {},
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
     const { request: send } = await import('node:http');
@@ -68,6 +71,8 @@ async function request(
                 ...(options.ticket === undefined ? {} : { authorization: `Bearer ${options.ticket}` }),
                 ...(options.scope === undefined ? {} : { [SCOPE_HEADER]: options.scope }),
                 ...(options.origin === undefined ? {} : { origin: options.origin }),
+                ...(options.exposure === undefined ? {} : { [EXPOSURE_HEADER]: options.exposure }),
+                ...(options.shape === undefined ? {} : { [SHAPE_HEADER]: options.shape }),
                 ...(payload === undefined ? {} : {
                     'content-type': 'application/json',
                     'content-length': String(Buffer.byteLength(payload)),
@@ -291,6 +296,88 @@ describe.skipIf(!reachable)('api.describe', () => {
 
         const issue = described.calls.find((c) => c.key === 'identity.ticket_issue');
         expect(JSON.stringify(issue?.input)).toContain('password');
+    });
+
+    it('reports the shapeHash and gate exposure the api serves under', async () => {
+        const described = await world.call<{ exposure: string; shapeHash: string }>('api.describe', { host: HOST });
+        const served = await request(port(), 'GET', '/api/identity/whoami');
+
+        expect(served.headers[EXPOSURE_HEADER]).toBe(described.exposure);
+        expect(served.headers[SHAPE_HEADER]).toBe(described.shapeHash);
+        expect(described.shapeHash).toMatch(/^sha256:/);
+    });
+
+    it('accepts matching exposure and shape headers from client', async () => {
+        const described = await world.call<{ exposure: string; shapeHash: string }>('api.describe', { host: HOST });
+        const res = await request(port(), 'GET', '/api/identity/whoami', {
+            exposure: described.exposure,
+            shape: described.shapeHash,
+        });
+
+        // 401 Unauthorized because whoami requires 'user' and no ticket was sent, but NOT 409 mismatch
+        expect(res.status).toBe(401);
+    });
+
+    it('rejects mismatched exposure header with 409 EXPOSURE_MISMATCH', async () => {
+        const res = await request(port(), 'GET', '/api/identity/whoami', {
+            exposure: 'sha256:stale_exposure_hash',
+        });
+
+        expect(res.status).toBe(409);
+        expect(res.body).toMatchObject({
+            error: 'EXPOSURE_MISMATCH',
+        });
+    });
+
+    it('rejects mismatched shape header with 409 EXPOSURE_MISMATCH', async () => {
+        const res = await request(port(), 'GET', '/api/identity/whoami', {
+            shape: 'sha256:stale_shape_hash',
+        });
+
+        expect(res.status).toBe(409);
+        expect(res.body).toMatchObject({
+            error: 'EXPOSURE_MISMATCH',
+        });
+    });
+
+    it('verifies client descriptor against running API description', async () => {
+        const described = await world.call<{
+            exposure: string;
+            shapeHash: string;
+            calls: {
+                key: string;
+                gate: string;
+                method: string;
+                path: string;
+                input: unknown;
+                output: unknown;
+            }[];
+        }>('api.describe', { host: HOST });
+
+        expect(() => {
+            verifyClientExposure(described, described);
+        }).not.toThrow();
+
+        const clientWithExtra = {
+            ...described,
+            calls: [
+                ...described.calls,
+                {
+                    key: 'domains.zone_delete',
+                    gate: 'admin',
+                    method: 'DELETE',
+                    path: '/zones/:id',
+                    input: {},
+                    output: {},
+                },
+            ],
+        };
+
+        expect(() => {
+            verifyClientExposure(clientWithExtra, described);
+        }).toThrow(
+            'Exposure mismatch: Contract "domains.zone_delete" is not exposed by the API.',
+        );
     });
 });
 

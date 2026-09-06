@@ -338,9 +338,13 @@ Nothing resolves until this exists. Every version a site names is a row here.
       result set**, so an unbounded `find` returns every row there is and no contract could have said
       otherwise. Until this lands, "never expose an unbounded find" is a discipline, and disciplines
       are what paas had. **L** · ⛔ D1
-- [ ] **D4 The exposure hash.** The API reports it, the generated client carries it, a mismatch is an
-      error rather than a confusing 404 three calls later. *A client generated from one exposure and
-      pointed at an API serving another is a lie the compiler vouches for.* **S** · ⛔ D1, D2
+- [x] **D4 The exposure hash.** *(built 2026-09-06)* The API reports it (`x-exposure` and `x-exposure-shape`),
+      the generated client carries both gate and shape hashes, and an exposure mismatch is an immediate error
+      naming the exact contract and difference rather than a confusing 404 three calls later.
+      Resolved the core contradiction: releases are site-independent (C1) and cannot hold per-site gates (D2).
+      Separated into two distinct hashes: `shapeHash` (gate-independent hash over contracts, methods, paths, and schemas;
+      answers *is this generated client stale?*) and `exposure` (gate hash over what a site exposes and at what level).
+      Releases track required contracts via `release.requires`, verified at deploy time. **S** · ⛔ D1, D2
 - [x] **D5 `mesh-serve client` — a part's `mesh.json` into typed API code.** *(built 2026-09-06)*
       mesh-api's `describeExposure`, `emitClient` and the JSON-Schema-to-TypeScript emitter salvaged
       into `src/api/`; the missing half — producing a descriptor **from what a part declares it
@@ -539,7 +543,7 @@ the duplicate work is harmless. All four durability scenarios proven in `test/in
 *A site exposes contracts and the API refuses what it should.* Host → site → release → routes, with a
 caller's organization resolved and applied.
 
-~~**D1** move the api out of mesh-api~~ · ~~**D2** routes from the record~~ · ~~**D3** scope reaching `defineCrud`~~ · ⛔ **D4** the exposure hash · ~~**A4** identity rewritten on CRUD~~
+~~**D1** move the api out of mesh-api~~ · ~~**D2** routes from the record~~ · ~~**D3** scope reaching `defineCrud`~~ · ~~**D4** the exposure hash~~ · ~~**A4** identity rewritten on CRUD~~
 
 **D3 is the milestone.** Until it lands, *never expose an unbounded find* is a discipline — and a
 discipline is exactly what paas had.
@@ -577,7 +581,9 @@ The durability story holds: an edge wiping its cache or joining cold retrieves m
 peers over HTTP (`/blobs/:digest`), detects and rejects corrupt bytes before writing to storage, and
 falls back to marking `gone` and deterministically rebuilding from git when all edge copies are lost.
 
-**Next**: M3 — Calls are gated and scoped. D1, D2, D3, and A4 closed. D4 (exposure hash) remains.
+~~D1 → D2 → D3 → D4 → A4~~ — **all of M3, done 2026-09-06.** Calls are gated, scoped, and exposure-verified.
+
+**Next**: M4 — Somebody who is not us can publish a part.
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.

@@ -56,7 +56,7 @@ confirmed by reading the call site.
 | `descriptor.dependencies` | what a part was built against | Parsed, stored, never verified against what the build resolved. |
 | `artifact.declaration.builtAgainst` | *"A dependency at the version that was actually linked, not the one that was asked for… the point of this record is to be a fact something else can compare against"* | Resolved from lockfile and stored on every artifact declaration. Read nowhere in production code. |
 | `artifact.declaration.requiredParts` | *"A node holding the bytes can answer what does this need without a catalog lookup"* | Stored on the artifact declaration; `cdn.compose` reads requirements from `partVersion` in the catalog instead. |
-| `release.exposure` | *"Recorded here so a mismatch is an error at compose time rather than a confusing 404 three calls later"* | `cdn.compose` never populates it, and nothing in `src/` ever reads it. Roadmap **D5c**. |
+| ~~`release.exposure`~~ | *"Recorded here so a mismatch is an error at compose time rather than a confusing 404 three calls later"* | **Resolved in D4**: Removed from `ReleaseSchema`. A release is site-independent and cannot hold per-site gates. Replaced by `RouteTable.exposure` / `x-exposure` (gate hash) and `RouteTable.shapeHash` / `ExposureDescriptor.shapeHash` / `x-exposure-shape` (shape hash). `release.requires` is checked against `site.mesh` at deploy time. |
 
 `roles.builtin` and `principals.ownerId` are the two new ones, and both are the same shape as `Role.scope`:
 a field added to close a specific named incident, holding the right value, consulted by nothing.

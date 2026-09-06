@@ -11,8 +11,26 @@
  * so it cannot break because a dependency changed its inference.
  */
 
-import type { DescribedCall, ExposureDescriptor } from '../schema/descriptor.js';
+import {
+    assertExposureMatch,
+    diffExposure,
+    ExposureMismatchError,
+    type CheckExposureOptions,
+    type DescribedCall,
+    type ExposureDescriptor,
+    type ExposureDifference,
+    type ExposureTarget,
+} from '../schema/descriptor.js';
 import { emitType, pascal } from './json-schema.js';
+
+export {
+    assertExposureMatch,
+    diffExposure,
+    ExposureMismatchError,
+    type CheckExposureOptions,
+    type ExposureDifference,
+    type ExposureTarget,
+};
 
 export interface EmitOptions {
     /** The exported constant's name, e.g. `surfdnsApi`. Defaults from the application name. */
@@ -22,6 +40,20 @@ export interface EmitOptions {
 }
 
 export const DEFAULT_IMPORT = '@flybyme/mesh-web';
+
+/**
+ * Verify that a generated client matches an API surface.
+ *
+ * Checks contract schemas, HTTP methods, paths, and gates. Throws ExposureMismatchError
+ * naming the exact contract and difference if any mismatch is found.
+ */
+export function verifyClientExposure(
+    client: ExposureTarget,
+    api: ExposureTarget,
+    options?: CheckExposureOptions,
+): void {
+    assertExposureMatch(client, api, options);
+}
 
 export function emitClient(descriptor: ExposureDescriptor, options: EmitOptions = {}): string {
     const name = options.name ?? `${camel(descriptor.application)}Api`;
@@ -48,6 +80,7 @@ export function emitClient(descriptor: ExposureDescriptor, options: EmitOptions 
         `export const ${name} = defineApi({`,
         `    id: ${JSON.stringify(descriptor.application)},`,
         `    exposure: ${JSON.stringify(descriptor.exposure)},`,
+        `    shapeHash: ${JSON.stringify(descriptor.shapeHash)},`,
         `    base: ${JSON.stringify(descriptor.base)},`,
         '    calls: {',
         ...entries,
@@ -85,9 +118,10 @@ function header(descriptor: ExposureDescriptor): string {
         '//',
         `// Emitted from ${descriptor.application}'s mesh.json by \`mesh-serve client\`.`,
         `// Exposure: ${descriptor.exposure}`,
+        `// ShapeHash: ${descriptor.shapeHash}`,
         '//',
-        '// Regenerate rather than editing. The exposure hash above is checked at run time against',
-        '// the one the API reports, so a hand-edited client is a client that lies about a surface',
+        '// Regenerate rather than editing. The exposure and shape hashes above are checked at run time',
+        '// against what the API reports, so a hand-edited client is a client that lies about a surface',
         '// nobody can verify.',
         '',
     ].join('\n');
