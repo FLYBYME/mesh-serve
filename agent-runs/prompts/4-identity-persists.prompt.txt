@@ -1,0 +1,97 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**Identity does not persist anything.** Give `IdentityStore` a real
+implementation. Roadmap **A4a**.
+
+`memoryStore()` in `src/identity/store.ts` is the **only** implementation that
+exists, and `createIdentityModule()` defaults to it — so `bin/node.mjs` runs a
+platform whose every user, ticket, organization, membership, role and grant lives
+in one process's heap and is gone when it exits.
+
+Found by signing in to the first console: register, get a ticket, call
+successfully, restart the node, and the account no longer exists. **Nothing
+errors on the way** — a fresh process simply has no users, and a ticket issued a
+minute earlier comes back `UNAUTHENTICATED`.
+
+Four other services persist through `defineCrud` against mongo. This one persists
+nowhere, so **the only service holding something a person cannot regenerate is
+the only one with no storage.** Every durability property in this repository —
+content-addressed artifacts, immutable versions, releases, sites — is undone at
+the login screen.
+
+================================================================================
+THE SHAPE, AND WHY IT IS NOT A4
+================================================================================
+
+**A4 is the rewrite onto `defineCrud` and it is an L.** This is the interim and
+it is an M: `IdentityStore` is already an interface with ~20 methods, and this
+adds a second implementation behind it. Nothing above the interface changes.
+
+    src/identity/store.ts        the interface and memoryStore()
+    src/identity/module.ts       createIdentityModule({ store })
+    bin/node.mjs                 constructs it with no store today
+
+Read `src/cdn/cdn.service.ts` for how a service reaches the database in this
+repository — `broker.getProvider('database')` — and follow it rather than opening
+a mongo client of your own.
+
+**Do not rewrite identity onto `defineCrud`.** That is A4, it changes every
+contract above it, and doing it in a hurry alongside this is how both get done
+badly. If you find something that only A4 can fix, write it in the report.
+
+**`memoryStore()` stays.** Every test in `test/identity/` uses it and should keep
+using it: a suite that needs mongo to check a password hash is a suite people
+stop running. The new store is what `bin/node.mjs` gets.
+
+================================================================================
+WHAT TO THINK ABOUT
+================================================================================
+
+**Indexes.** `email` must be unique or two accounts can claim one login, and that
+is the same class of bug as `site.host` — which mesh 2.4.0 made a real unique
+index for exactly this reason. Tickets are looked up by token on every gated
+request, so that is an index too, not a scan.
+
+**Ticket expiry.** `memoryStore` can afford to keep every ticket forever because
+the process ends. A database cannot. Decide what happens to expired tickets and
+say why — a TTL index is the obvious answer and it is worth stating that mongo
+does the sweeping rather than a timer somebody has to remember to start.
+
+**Revocations are an append-only log with an epoch**, read by the api's poller to
+catch up. That ordering has to survive being in a database: the epoch is what
+tells a caught-up node it is caught up.
+
+**`hashApiToken` and password hashing are unchanged.** They are in `module.ts`
+and they are not this task.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- A `mongoStore(database)` beside `memoryStore()`, satisfying the same interface.
+- `bin/node.mjs` uses it, so a restart keeps accounts.
+- **An integration test that restarts.** Register a user, issue a ticket, build a
+  second `MeshApp` against the same database, and validate that ticket. That
+  assertion is the entire point and nothing weaker proves it.
+- A test that two accounts cannot share an email.
+- Every existing `test/identity/` test still passing against `memoryStore`.
+- `npm run typecheck` clean, **zero `as any`, zero `as never`, zero casts.**
+- `npm test` green — all 293.
+- Tick A4a in `spec/roadmap.md`.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/4-identity-persists.md`
+
+- what the two stores now differ in, if anything, beyond where the bytes live
+- what you decided about expired tickets and revocation ordering
+- **what only A4 can fix** — you are the first person to write against this
+  interface with a real database behind it, and that list is the argument for
+  doing A4 at all
+- anything for `spec/unread.md`
