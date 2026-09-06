@@ -328,6 +328,30 @@ Nothing resolves until this exists. Every version a site names is a row here.
       over shapes, not over the real exposure, and cannot be compared with what an API reports. The
       check belongs at **compose time**, where the site's grants are known. **S** · ⛔ D4, C1
 
+## Track F — Managing the platform
+
+Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
+task** — each is a decision about the platform's own surface that blocks any UI at all.
+
+- [ ] **F1 No event can be streamed.** All four — `catalog.version_published`, `cdn.release_composed`,
+      `cdn.site_deployed`, `builder.artifact_published` — declare no `scopedBy`, and an event that
+      cannot be scoped is delivered to nobody, so the api refuses every one at subscribe. **Two of
+      the payloads carry no tenant field to scope by**: `site_deployed` has `host`/`release`,
+      `release_composed` has `hash`/`kernel`/`partCount`. They were written for another *service* to
+      consume; a browser is a different audience. **S**
+- [ ] **F2 Nothing is exposable.** Every CRUD action on every collection is `internal`, correctly by
+      default — so catalog has **no** public contract, cdn has only `resolve_site`, builder only
+      `get_artifact`. A console cannot list parts, builds or sites: not refused, no route at all.
+      Decide the smallest exposable set per service. **M** · ⛔ D1
+- [ ] **F3 An operator cannot see across organizations.** `site` is `scopedBy: 'tenantId'`, and
+      `resolveCallerScope` has no notion of a role that sees past the boundary — so `auth: 'admin'`
+      would admit the *call* and still return one tenant's rows. `delivery.ts` has an `operator`
+      concept; nothing equivalent reaches CRUD. Three shapes in managing.md §2; explicit operator
+      contracts are the one consistent with `cdn.resolve_site`. **M**
+- [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
+      because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
+      The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
+
 ## Track E — Fleet
 
 Shape decided, nothing built. See [fleet.md](./fleet.md).
