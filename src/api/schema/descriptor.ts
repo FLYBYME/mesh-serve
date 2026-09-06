@@ -44,20 +44,39 @@ export interface DescribedCall {
     readonly errors: readonly string[];
 }
 
+/**
+ * The structural shape of an exposed call: keys, methods, paths, input/output schemas.
+ *
+ * Site-independent, gate-independent.
+ */
+export interface CallShape {
+    readonly key: string;
+    readonly method: string;
+    readonly path: string;
+    readonly input: unknown;
+    readonly output: unknown;
+    readonly destructive?: boolean;
+    readonly stream?: boolean;
+    readonly errors?: readonly string[];
+}
+
 export interface ExposureDescriptor {
     /** The site this exposure belongs to, e.g. `surfdns.console`. */
     readonly application: string;
     /** Where the routes mount. Both the router and the generated client read this one value. */
     readonly base: string;
     /**
-     * A hash of everything below.
+     * A hash of what is exposed and at what gate level.
      *
-     * mesh-web spec/network.md §6: a client generated from one exposure and pointed at an API
-     * serving another is a lie the compiler vouches for, which is worse than no types at all. The
-     * API reports this, the client carries it, and a mismatch is an error rather than a confusing
-     * 404 three calls later.
+     * The site's gate hash. Changes when a gate changes or when routes change.
      */
     readonly exposure: string;
+    /**
+     * The site-independent, gate-independent shape hash over contracts and schemas.
+     * Identical across all sites and releases calling the same contract shapes.
+     * Answers: is this generated client stale?
+     */
+    readonly shapeHash: string;
     readonly calls: readonly DescribedCall[];
 }
 
@@ -145,7 +164,222 @@ export function describeExposure(
     // write the list in. Reordering the file must not look like a change to the API.
     calls.sort((a, b) => a.key.localeCompare(b.key));
 
-    return { application: options.application, base, exposure: hash({ application: options.application, base, calls }), calls };
+    const shapeHash = hashShape(calls);
+    const exposure = hash({ application: options.application, base, calls });
+
+    return { application: options.application, base, exposure, shapeHash, calls };
+}
+
+/**
+ * A stable shape hash of contracts and their request/response schemas.
+ *
+ * Stable across runs, machines, key orderings, and independent of gates or site identity.
+ * Answers: is this generated client stale?
+ */
+export function hashShape(
+    calls: readonly CallShape[],
+    hasher: (value: unknown) => string = hash,
+): string {
+    const sorted = [...calls].sort((a, b) => a.key.localeCompare(b.key));
+    const entries = sorted.map((call) => [
+        call.key,
+        call.method,
+        call.path,
+        call.input,
+        call.output,
+        call.destructive === true,
+        call.stream === true,
+        [...(call.errors ?? [])].sort(),
+    ]);
+    return hasher(entries);
+}
+
+export interface ExposureDifference {
+    /** The contract key that differed, e.g. `domains.zone_find`. */
+    readonly contract: string;
+    /** What aspect changed. */
+    readonly kind: 'missing' | 'method' | 'path' | 'input' | 'output' | 'gate';
+    /** Human-readable explanation of what changed. */
+    readonly message: string;
+}
+
+export class ExposureMismatchError extends Error {
+    public readonly contract: string;
+    public readonly difference: string;
+    public readonly differences: readonly ExposureDifference[];
+
+    constructor(
+        contract: string,
+        difference: string,
+        differences: readonly ExposureDifference[],
+    ) {
+        super(`Exposure mismatch: ${difference}`);
+        this.name = 'ExposureMismatchError';
+        this.contract = contract;
+        this.difference = difference;
+        this.differences = differences;
+    }
+}
+
+export interface DescribedCallShape {
+    readonly key: string;
+    readonly method: string;
+    readonly path: string;
+    readonly input: unknown;
+    readonly output: unknown;
+    readonly gate?: Gate | string;
+    readonly destructive?: boolean;
+    readonly stream?: boolean;
+    readonly errors?: readonly string[];
+}
+
+export interface ExposureSource {
+    readonly calls: readonly DescribedCallShape[];
+    readonly exposure?: string;
+    readonly shapeHash?: string;
+}
+
+export interface RouteSource {
+    readonly key: string;
+    readonly contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny>;
+    readonly gate: Gate;
+    readonly method: string;
+    readonly path: string;
+}
+
+export interface RouteTableSource {
+    readonly routes: readonly RouteSource[];
+    readonly exposure?: string;
+    readonly shapeHash?: string;
+}
+
+export type ExposureTarget = ExposureSource | RouteTableSource;
+
+export interface CheckExposureOptions {
+    /**
+     * Whether to check gates in addition to schemas and shapes.
+     * Defaults to true if both sides define gates.
+     */
+    readonly checkGates?: boolean;
+}
+
+function formatGate(gate: Gate | string | undefined): string | undefined {
+    if (gate === undefined) return undefined;
+    if (typeof gate === 'string') return gate;
+    if (gate.kind === 'auth') return gate.level;
+    return `permission:${gate.permission}`;
+}
+
+export function diffExposure(
+    client: ExposureTarget,
+    api: ExposureTarget,
+    options: CheckExposureOptions = {},
+): readonly ExposureDifference[] {
+    const differences: ExposureDifference[] = [];
+    const clientMap = new Map<string, DescribedCallShape>();
+
+    if ('calls' in client) {
+        for (const call of client.calls) clientMap.set(call.key, call);
+    } else {
+        for (const route of client.routes) {
+            clientMap.set(route.key, {
+                key: route.key,
+                method: route.method,
+                path: route.path,
+                input: schemaOf(route.contract, 'inputSchema'),
+                output: schemaOf(route.contract, 'outputSchema'),
+                gate: route.gate,
+            });
+        }
+    }
+
+    const apiMap = new Map<string, DescribedCallShape>();
+    if ('calls' in api) {
+        for (const call of api.calls) apiMap.set(call.key, call);
+    } else {
+        for (const route of api.routes) {
+            apiMap.set(route.key, {
+                key: route.key,
+                method: route.method,
+                path: route.path,
+                input: schemaOf(route.contract, 'inputSchema'),
+                output: schemaOf(route.contract, 'outputSchema'),
+                gate: route.gate,
+            });
+        }
+    }
+
+    for (const [key, clientCall] of clientMap) {
+        const apiCall = apiMap.get(key);
+        if (apiCall === undefined) {
+            differences.push({
+                contract: key,
+                kind: 'missing',
+                message: `Contract "${key}" is not exposed by the API.`,
+            });
+            continue;
+        }
+
+        if (clientCall.method.toUpperCase() !== apiCall.method.toUpperCase()) {
+            differences.push({
+                contract: key,
+                kind: 'method',
+                message: `Contract "${key}" method changed from ${clientCall.method} to ${apiCall.method}.`,
+            });
+        }
+
+        if (clientCall.path !== apiCall.path) {
+            differences.push({
+                contract: key,
+                kind: 'path',
+                message: `Contract "${key}" path changed from ${clientCall.path} to ${apiCall.path}.`,
+            });
+        }
+
+        if (canonical(clientCall.input) !== canonical(apiCall.input)) {
+            differences.push({
+                contract: key,
+                kind: 'input',
+                message: `Contract "${key}" input schema changed.`,
+            });
+        }
+
+        if (canonical(clientCall.output) !== canonical(apiCall.output)) {
+            differences.push({
+                contract: key,
+                kind: 'output',
+                message: `Contract "${key}" output schema changed.`,
+            });
+        }
+
+        if (options.checkGates !== false) {
+            const clientGate = formatGate(clientCall.gate);
+            const apiGate = formatGate(apiCall.gate);
+            if (clientGate !== undefined && apiGate !== undefined && clientGate !== apiGate) {
+                differences.push({
+                    contract: key,
+                    kind: 'gate',
+                    message: `Contract "${key}" gate changed from ${clientGate} to ${apiGate}.`,
+                });
+            }
+        }
+    }
+
+    return differences;
+}
+
+export function assertExposureMatch(
+    client: ExposureTarget,
+    api: ExposureTarget,
+    options?: CheckExposureOptions,
+): void {
+    const differences = diffExposure(client, api, options);
+    if (differences.length > 0) {
+        const first = differences[0];
+        if (first !== undefined) {
+            throw new ExposureMismatchError(first.contract, first.message, differences);
+        }
+    }
 }
 
 /**
@@ -184,7 +418,7 @@ function canonical(value: unknown): string {
  * about some corner of the type system, and the disagreement would show up as a client that types
  * something the API rejects.
  */
-function schemaOf(
+export function schemaOf(
     contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny>,
     which: 'inputSchema' | 'outputSchema',
 ): unknown {

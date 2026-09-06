@@ -20,8 +20,8 @@
  */
 
 import type { ToolContract, z as Zod } from '@flybyme/mesh';
-
 import type { ExposedContract, MeshDependency } from '../../cdn/schema/site.js';
+import { type CallShape, hashShape, schemaOf } from '../schema/descriptor.js';
 import type { Gate } from '../schema/expose.js';
 
 type AnyContract = ToolContract<Zod.ZodTypeAny, Zod.ZodTypeAny>;
@@ -42,11 +42,15 @@ export interface RouteTable {
     /**
      * A hash of everything reachable, and the gates in front of it.
      *
-     * *A client generated from one exposure and pointed at an API serving another is a lie the
-     * compiler vouches for.* The api reports this; a generated client carries the one it was built
-     * from; a mismatch is an error rather than a confusing 404 three calls later.
+     * The site's gate hash. Changes when a gate changes or when routes change.
      */
     readonly exposure: string;
+    /**
+     * A stable shape hash of reachable contracts and their request/response schemas.
+     *
+     * Site-independent, gate-independent. What actually answers: is this generated client stale?
+     */
+    readonly shapeHash: string;
     /**
      * What the site named and the registry does not have.
      *
@@ -122,6 +126,16 @@ export function routeTable(
 
     routes.sort((a, b) => a.key.localeCompare(b.key));
 
+    const shapes: CallShape[] = routes.map((route) => ({
+        key: route.key,
+        method: route.method,
+        path: route.path,
+        input: schemaOf(route.contract, 'inputSchema'),
+        output: schemaOf(route.contract, 'outputSchema'),
+        destructive: route.contract.destructive === true,
+        stream: route.contract.rest.isStream === true,
+    }));
+
     return {
         routes,
         unknown,
@@ -129,6 +143,7 @@ export function routeTable(
             route.key, route.method, route.path,
             route.gate.kind === 'auth' ? route.gate.level : `permission:${route.gate.permission}`,
         ])),
+        shapeHash: hashShape(shapes, hash),
     };
 }
 
