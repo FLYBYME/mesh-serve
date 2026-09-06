@@ -269,6 +269,23 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
             version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
         })).rejects.toThrow(/kind/i);
 
+        /**
+         * **And the versions it already published still name where they came from.**
+         *
+         * This is the half that makes the move safe rather than merely possible. A rebuild is
+         * `git fetch <repository> <commit>`, and while the repository came from the *part* row a
+         * move repointed every past version at a repository that has never contained its commit.
+         * The failure would not appear at publish time — it would appear on the rebuild path, which
+         * is the durability story, on an artifact that had already been evicted.
+         */
+        const version = await world.call<{ repository?: string; commit: string }>(
+            'partVersion.find_one',
+            { query: { partName: 'fixture-app', version: '1.0.0' } },
+        );
+        expect(version.repository).toBe(world.repository);
+        expect(version.repository).not.toBe(moved);
+        expect(version.commit).toBe(world.commit);
+
         // Put it back: these run in order against one world, and everything after this builds
         // `fixture-app` from the repository the fixture actually created.
         await world.call('catalog.publish', {

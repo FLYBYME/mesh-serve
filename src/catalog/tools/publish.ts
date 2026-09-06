@@ -55,6 +55,9 @@ export async function catalog_publish(
         partName: input.name,
         version: input.version,
         commit: input.commit,
+        // Stamped here, at the one moment the repository and the commit are known to belong
+        // together. `part.repository` can move afterwards; this cannot.
+        repository: input.repository,
         entry: input.entry,
         ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
         ...(input.kernel === undefined ? {} : { kernel: input.kernel }),

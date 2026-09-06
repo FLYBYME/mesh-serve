@@ -117,6 +117,25 @@ export const PartVersionSchema = z.object({
      */
     commit: z.string().regex(/^[0-9a-f]{40}$/),
 
+    /**
+     * Where this version's commit lives, and **why it cannot live on the part**.
+     *
+     * A rebuild is `git fetch <repository> <commit>`, and until now it took the repository from the
+     * *part* row and the commit from the *version* row. Those two can disagree the moment a part
+     * moves repositories — which became possible on 2026-09-06 when `upsertPart` started updating
+     * `part.repository`, and which is exactly what folding `mesh-auth` into a shared core repository
+     * would do. Every previously published version would keep a commit that exists only in the old
+     * repository, and its rebuild would ask the new one for a ref it has never heard of.
+     *
+     * So a version records its own. **A version is `(repository, commit, entry, subdirectory)` and
+     * all four are immutable together** — `part.repository` means *where new versions come from*,
+     * this means *where this one came from*. npm settles it the same way, for the same reason.
+     *
+     * Optional so the rows published before this existed still read; `build_start` falls back to
+     * the part's, which is what those rows have always effectively used.
+     */
+    repository: z.string().min(1).optional(),
+
     /** The source entry within the repository — `src/index.ts`. Part of the build's input hash. */
     entry: z.string().min(1),
 

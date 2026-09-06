@@ -65,7 +65,19 @@ export async function builder_build_start(
     // input hash meaningful and a rebuild reproducible.
     const source: SourceRef = {
         kind: 'git',
-        repository: part.repository,
+        /**
+         * **The version's own repository, falling back to the part's.**
+         *
+         * These were one field until 2026-09-06, taken from the part — so a part that moved
+         * repositories took every one of its published versions with it, and each of them then
+         * named a commit the new repository has never contained. The rebuild path is the whole
+         * durability story (`gone` → rebuild), so that failure would surface at the worst moment,
+         * on an artifact that had been evicted rather than at publish time.
+         *
+         * The fallback is for rows published before the field existed. They have always effectively
+         * used the part's repository, and for them it is still correct.
+         */
+        repository: version.repository ?? part.repository,
         ref: version.commit,
         ...(version.subdirectory === undefined ? {} : { subdirectory: version.subdirectory }),
     };

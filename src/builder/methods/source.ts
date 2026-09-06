@@ -107,6 +107,30 @@ export function createGitFetcher(credentialFor: CredentialFor = credentialsFromE
             await run('git', [...auth, 'fetch', '--quiet', '--depth', '1', 'origin', source.ref], { cwd: into });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+
+            /**
+             * **A commit the remote does not have is not an authentication problem**, and saying so
+             * cost me twenty minutes.
+             *
+             * git answers `upload-pack: not our ref <sha>` when the repository is reachable and the
+             * commit simply is not in it — the ordinary case being a version published from a local
+             * commit that was never pushed. The message below led with *"this builder holds no
+             * credential"*, which is the right diagnosis for a fetch that cannot see the repository
+             * at all and the wrong one here: the real cause was sitting in the git output, under a
+             * paragraph confidently naming something else.
+             *
+             * A wrapper that explains an error it has not identified is worse than no wrapper. So
+             * the unreachable-repository case keeps its explanation, and this one gets its own.
+             */
+            if (/not our ref|couldn't find remote ref|no such ref/i.test(message)) {
+                throw new Error(
+                    `${source.repository} does not contain ${source.ref}. The repository was ` +
+                    `reachable, so this is not a credential problem — the commit is missing, which ` +
+                    `usually means it was published from a local branch that was never pushed. ` +
+                    `${redact(message, token)}`,
+                );
+            }
+
             // Named, because the failure is otherwise an opaque git error about a repository that
             // "does not exist" — which is what a private repository looks like to an anonymous
             // fetch, and is the single most confusing way for this to go wrong.
