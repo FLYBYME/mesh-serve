@@ -294,6 +294,52 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         });
     });
 
+    it('carries presentation on the part and a changelog on the version', async () => {
+        /**
+         * A5c-i. `part.description` existed from the beginning and **nothing filled it**, because
+         * `mesh.json` had no field to fill it from — so a catalog of thirteen parts had thirteen
+         * empty descriptions and a marketplace would have been a grid of bare ids.
+         *
+         * The split under test: **identity is immutable, presentation is not.** A typo in a
+         * description must be fixable with a publish rather than a version bump, because a version
+         * means *this code*. A changelog is the exception — it describes one version and is frozen
+         * with it.
+         */
+        await world.call('catalog.publish', {
+            name: 'fixture-app', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
+            description: 'A fixture.', homepage: 'https://example.test',
+            license: 'MIT', keywords: ['fixture', 'test'], icon: 'icon.svg',
+            changelog: 'The first one.',
+        });
+
+        const part = await world.call<{
+            description: string; homepage?: string; license?: string;
+            keywords: string[]; icon?: string;
+        }>('part.find_one', { query: { name: 'fixture-app' } });
+
+        expect(part.description).toBe('A fixture.');
+        expect(part.homepage).toBe('https://example.test');
+        expect(part.license).toBe('MIT');
+        expect(part.keywords).toEqual(['fixture', 'test']);
+        expect(part.icon).toBe('icon.svg');
+
+        // Corrected without minting a version — the whole point of it living on the part.
+        await world.call('catalog.publish', {
+            name: 'fixture-app', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
+            description: 'A fixture, spelled correctly.',
+        });
+
+        const fixed = await world.call<{ description: string; license?: string }>(
+            'part.find_one', { query: { name: 'fixture-app' } });
+        expect(fixed.description).toBe('A fixture, spelled correctly.');
+
+        // And a field the second publish did not mention is left alone rather than cleared: a
+        // publisher that knows about `description` and not `license` must not erase a license.
+        expect(fixed.license).toBe('MIT');
+    });
+
     it('resolves a range to the published version', async () => {
         const resolved = await world.call<{
             kernel: { version: string }; parts: { name: string; version: string }[];

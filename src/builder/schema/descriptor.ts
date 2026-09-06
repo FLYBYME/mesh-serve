@@ -132,6 +132,30 @@ export const DescribedPartSchema = z.object({
     requiredParts: z.array(RequiredPartSchema).default([]),
 
     mesh: z.array(RequiredPackageSchema).default([]),
+
+    /**
+     * ## What a person needs to choose this, as opposed to what a build needs to make it
+     *
+     * Everything above this line is a *build* input: an entry, a version, what it calls. None of it
+     * helps anybody decide whether they want the thing. `part.description` existed in the catalog
+     * from the beginning and **no field anywhere filled it**, so every part in a live catalog of
+     * thirteen has an empty one.
+     *
+     * All optional, because a part with no description is a part somebody has not written a
+     * description for — not an error. A build must never fail over a missing sentence.
+     *
+     * These are **not** immutable. `catalog.publish` writes them to the `part` row on every publish,
+     * so fixing a typo is a publish rather than a version bump. The one exception is `changelog`,
+     * which describes this version and is frozen with it.
+     */
+    description: z.string().optional(),
+    homepage: z.string().optional(),
+    license: z.string().optional(),
+    keywords: z.array(z.string()).optional(),
+    /** A path inside this part's own artifact, so it is content-addressed. Never a URL. */
+    icon: innerPath.optional(),
+    /** What changed in *this* version. Immutable with it. */
+    changelog: z.string().optional(),
 });
 export type DescribedPart = z.infer<typeof DescribedPartSchema>;
 

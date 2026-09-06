@@ -78,7 +78,16 @@ These are wrong now, and everything built on top of them inherits the mistake.
       immutability that makes a range safe. And a build is now reproducible from the catalog alone,
       which is exactly what `gone` → rebuild needs: the security fix and the durability path were the
       same change.
-- [ ] **A5c-i ★ `mesh.json` carries no description, and a marketplace is a list of names.** A part
+- [x] **A5c-i ★ `mesh.json` now carries presentation.** *(done 2026-09-06)* `description`, `homepage`,
+      `license`, `keywords` and `icon` on the part; `changelog` on the version. The split held up
+      exactly as written below — presentation on the `part` row, updated by every publish; identity
+      and changelog frozen with the version.
+      Proven on the live catalog, and the proof is the interesting part: publishing mesh-demos wrote
+      ten descriptions **while refusing all ten versions as unchanged**, because `upsertPart` runs
+      before the version check. Fixing a typo is a publish, not a version bump, which is the whole
+      claim. A field the descriptor omits is left alone rather than cleared, so a publisher that
+      knows about `description` and not `license` cannot erase a license.
+      Original reasoning, kept because it is why the shape is what it is: A part
       declares `kind`, `id`, `version`, `entry` and what it calls — everything a *build* needs and
       nothing a *person choosing one* needs. `part.description` exists in the catalog and there is no
       field anywhere that fills it.

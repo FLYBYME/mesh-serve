@@ -209,6 +209,18 @@ export async function run_(argv: readonly string[]): Promise<number> {
                     kind: part.kind,
                     repository,
                     publisher: args.publisher,
+
+                    // Presentation, straight through from the descriptor. This is the link that was
+                    // missing: `part.description` has existed in the catalog since the beginning and
+                    // nothing filled it, so a live catalog of thirteen parts had thirteen empty
+                    // descriptions and a marketplace would have been a grid of bare ids.
+                    ...(part.description === undefined ? {} : { description: part.description }),
+                    ...(part.homepage === undefined ? {} : { homepage: part.homepage }),
+                    ...(part.license === undefined ? {} : { license: part.license }),
+                    ...(part.keywords === undefined ? {} : { keywords: part.keywords }),
+                    ...(part.icon === undefined ? {} : { icon: part.icon }),
+                    ...(part.changelog === undefined ? {} : { changelog: part.changelog }),
+
                     version: version.version,
                     commit: version.commit,
                     entry: version.entry,

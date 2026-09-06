@@ -52,7 +52,45 @@ export const PartSchema = z.object({
      */
     publisher: z.string().min(1),
 
+    /**
+     * ## Presentation — everything a person choosing a part needs, and nothing a build does
+     *
+     * **Identity is immutable; presentation is not**, and that distinction decides which row each
+     * field lives on. `name` and `kind` are fixed at first publish and a version's `commit` can
+     * never move — but a typo in a description, a new icon, a changed homepage must all be fixable
+     * *without minting a version*, because a version means **this code**. Forcing a version bump to
+     * fix a sentence would make version numbers meaningless as a record of what changed.
+     *
+     * So presentation lives here, on the part, and `catalog.publish` updates it on every publish.
+     * The one exception is `changelog`, which belongs to a version and is immutable with it — see
+     * `PartVersionSchema`.
+     *
+     * Worth having before a marketplace exists rather than after: a store showing a grid of bare
+     * ids is exactly what makes people write descriptions into names.
+     */
     description: z.string().default(''),
+
+    /** Where to read more. A project page, a README, a docs site. */
+    homepage: z.string().optional(),
+
+    /** An SPDX identifier — `MIT`, `Apache-2.0`, `UNLICENSED`. A string, because it is a label. */
+    license: z.string().optional(),
+
+    /**
+     * How somebody finds this without knowing its name.
+     *
+     * Free-form and lowercase by convention rather than by validation: a curated vocabulary is a
+     * decision nobody can make correctly before there is anything to curate.
+     */
+    keywords: z.array(z.string()).default([]),
+
+    /**
+     * A path **within this part's artifact**, so an icon is content-addressed like everything else.
+     *
+     * Not a URL. A URL is a second thing to host, a second thing to expire, and a way for a
+     * marketplace listing to reach off the platform — none of which an icon is worth.
+     */
+    icon: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------- a version
@@ -135,6 +173,16 @@ export const PartVersionSchema = z.object({
      * the part's, which is what those rows have always effectively used.
      */
     repository: z.string().min(1).optional(),
+
+    /**
+     * What changed in this version. **The one piece of presentation that is not on the part.**
+     *
+     * Everything else a person reads — description, icon, homepage — is fixable without minting a
+     * version, because it describes the part rather than this code. A changelog entry is the
+     * opposite: it describes *this* version, so it is immutable with it, and a changelog you can
+     * edit afterwards is a changelog nobody can trust.
+     */
+    changelog: z.string().optional(),
 
     /** The source entry within the repository — `src/index.ts`. Part of the build's input hash. */
     entry: z.string().min(1),

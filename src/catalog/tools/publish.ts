@@ -58,6 +58,7 @@ export async function catalog_publish(
         // Stamped here, at the one moment the repository and the commit are known to belong
         // together. `part.repository` can move afterwards; this cannot.
         repository: input.repository,
+        ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
         entry: input.entry,
         ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
         ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
@@ -100,6 +101,10 @@ async function upsertPart(
             repository: input.repository,
             publisher: input.publisher,
             description: input.description ?? '',
+            ...(input.homepage === undefined ? {} : { homepage: input.homepage }),
+            ...(input.license === undefined ? {} : { license: input.license }),
+            ...(input.keywords === undefined ? {} : { keywords: input.keywords }),
+            ...(input.icon === undefined ? {} : { icon: input.icon }),
         });
         return { id: created.id };
     }
@@ -137,15 +142,30 @@ async function upsertPart(
      * never move. This is the other half of that same rule: **what a part *is* cannot change, and
      * where its source lives is not what it is.**
      */
-    const moved = found.repository !== input.repository;
-    const renamed = input.description !== undefined && found.description !== input.description;
+    /**
+     * Presentation follows the descriptor; identity does not.
+     *
+     * Everything here is *changed only when the descriptor says something different*, and a field
+     * the descriptor omits is left alone rather than cleared. That matters for a mixed
+     * publisher — a CLI that knows about `description` and not `icon` must not silently erase an
+     * icon somebody set another way.
+     */
+    const changes: Record<string, unknown> = {};
+    const follow = <T>(current: T, next: T | undefined, key: string): void => {
+        if (next !== undefined && JSON.stringify(current) !== JSON.stringify(next)) {
+            changes[key] = next;
+        }
+    };
 
-    if (moved || renamed) {
-        await ctx.call('part.update', {
-            id: found.id,
-            ...(moved ? { repository: input.repository } : {}),
-            ...(renamed ? { description: input.description } : {}),
-        });
+    if (found.repository !== input.repository) changes['repository'] = input.repository;
+    follow(found.description, input.description, 'description');
+    follow(found.homepage, input.homepage, 'homepage');
+    follow(found.license, input.license, 'license');
+    follow(found.keywords, input.keywords, 'keywords');
+    follow(found.icon, input.icon, 'icon');
+
+    if (Object.keys(changes).length > 0) {
+        await ctx.call('part.update', { id: found.id, ...changes });
     }
 
     return { id: found.id };

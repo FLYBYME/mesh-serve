@@ -115,7 +115,14 @@ export const publishContract = defineContract({
         kind: PartKindSchema,
         repository: z.string().min(1),
         publisher: z.string().min(1),
+
+        // Presentation. Written to the `part` row on every publish, because a description is
+        // fixable without minting a version — see `PartSchema`.
         description: z.string().optional(),
+        homepage: z.string().optional(),
+        license: z.string().optional(),
+        keywords: z.array(z.string()).optional(),
+        icon: z.string().optional(),
 
         version: z.string().min(1),
         commit: z.string().regex(/^[0-9a-f]{40}$/),
@@ -124,6 +131,8 @@ export const publishContract = defineContract({
         kernel: z.string().min(1).optional(),
         requires: z.array(z.string()).optional(),
         capabilities: CapabilitiesSchema.optional(),
+        /** Frozen with the version, unlike everything above. */
+        changelog: z.string().optional(),
     }),
     outputSchema: z.object({
         partId: z.string(),
