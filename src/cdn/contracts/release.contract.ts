@@ -7,9 +7,17 @@
  *
  * ## What is exposed
  *
- * `release.find` is never exposed. It would enumerate every composition on the platform — which
- * parts each tenant runs, at which versions — and an unbounded find has no notion of the caller's
- * scope, so authorization could refuse the caller but never narrow the result.
+ * This said **`release.find` is never exposed**, and the reason was sound: it would enumerate every
+ * composition on the platform — which parts each tenant runs, at which versions — and an unbounded
+ * find has no notion of the caller's scope, so authorization could refuse the caller and never
+ * narrow the result.
+ *
+ * That last clause stopped being true. `scopedBy` (D3) makes every generated read a read *within*
+ * the caller's organization, so the find that could not be narrowed now cannot be widened. Reads are
+ * public as of 2026-09-06; writes are not, because a release is composed and never hand-written.
+ *
+ * The sentence is rewritten rather than deleted, because the old rule is the reason the new one is
+ * safe, and a reader who only sees `visibility: public` has lost the argument that earns it.
  */
 
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
@@ -23,6 +31,21 @@ export const releaseCrud = defineCrud('release', ReleaseSchema, {
     // The hash is derived from the contents, so two rows under one hash would be two rows describing
     // one composition — and the whole reason a release is *checkable* is that it cannot happen.
     unique: [{ fields: 'hash', scope: 'global' }],
+
+    /**
+     * **Reads only, and safe only because this collection is scoped.**
+     *
+     * `never expose an unbounded find` was a discipline until D3 landed: a release names the exact
+     * parts and versions an organization runs, so an unscoped `find` here would hand every
+     * composition on the platform to anyone who asked. It is exposable *now* because `scopedBy`
+     * makes every generated read a read within the caller's own organization — the mechanism, not
+     * the discipline, is what makes this line safe to write.
+     *
+     * A release is still created only by `cdn.compose`, which resolves ranges against the catalog
+     * and refuses a composition that does not hold together. Writing rows directly would skip
+     * exactly that. Roadmap F2.
+     */
+    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
     // Reading and writing a release record touches no other domain. *Composing* one does — it
     // resolves ranges against the catalog and checks requirements — and that is `compose`'s job,
     // not a hooked create.
@@ -73,6 +96,17 @@ export const composeContract = defineContract({
         problems: z.array(z.object({ kind: z.string(), message: z.string() })),
     }),
     rest: { method: 'POST', path: '/releases' },
+    /**
+     * **Public, because composing is how a release is created and there is no second way.**
+     *
+     * `destructive` below is the honest label — it writes — but composing is *safe* in the way that
+     * matters: it resolves ranges, checks the parts hold together, and returns the problems instead
+     * of a release when they do not. Nothing goes live from it. A site keeps serving whatever it
+     * served until `cdn.deploy` says otherwise, which is the whole reason those are two writes.
+     *
+     * So the blast radius of exposing this is a row in a scoped collection. Roadmap F2.
+     */
+    visibility: 'public',
     destructive: true,
     print: (o) => (o.problems.length === 0
         ? `${o.hash}${o.existed ? ' (existed)' : ''}`
@@ -106,6 +140,20 @@ export const deployContract = defineContract({
         unusedGrants: z.array(z.string()),
     }),
     rest: { method: 'POST', path: '/sites/:host/deploy' },
+    /**
+     * **Public, and the one genuinely dangerous thing on this list.**
+     *
+     * This changes what a hostname serves to the internet. It is exposed because a console that can
+     * show a release list and not deploy one is a viewer, and because **rollback is this same call
+     * backwards** — an operator who cannot deploy also cannot undo a bad deploy, which is the worse
+     * failure of the two.
+     *
+     * What makes it safe to expose is that the checks are *in the handler*, not in who may reach
+     * it: the release must belong to the caller's tenant, and every contract it calls must be one
+     * the site already exposes. A generated `site.update` would have neither, which is why that
+     * stays internal. Roadmap F2.
+     */
+    visibility: 'public',
     destructive: true,
     print: (o) => (o.changed ? `${o.host} → ${o.release}` : `${o.host} already on ${o.release}`),
 });

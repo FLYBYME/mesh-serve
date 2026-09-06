@@ -33,6 +33,21 @@ export const partCrud = defineCrud('part', PartSchema, {
     // Flat and global, which is a decision with a cost recorded on `PartSchema.name`: two publishers
     // both wanting `auth` collide, and there is no scoping yet.
     unique: [{ fields: 'name', scope: 'global' }],
+
+    /**
+     * **Reads only, and the catalog is the one collection where an unbounded `find` is correct.**
+     *
+     * Everywhere else in this repository the rule is *never expose an unbounded find*, because a
+     * `site` find enumerates every hostname on the platform. A part is the opposite: the whole
+     * purpose of a catalog is that anyone may see what has been published and resolve a range
+     * against it. A marketplace that hid its own contents would not be one — which is the same
+     * reasoning that made `catalog.version_published` a global event (F1).
+     *
+     * `create`, `update` and `delete` stay internal. A part is created by `catalog.publish`, which
+     * checks the publisher and enforces version immutability; a second door into this collection
+     * would be a door around both of those. Roadmap F2.
+     */
+    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
     // Reading and writing a part record touches no other domain. Publishing a version does — it
     // checks the publisher and refuses a changed commit — and that is `publish`'s job, not a hooked
     // create.
@@ -59,6 +74,9 @@ export const partVersionCrud = defineCrud('partVersion', PartVersionSchema, {
      * the point of publishing it.
      */
     unique: [{ fields: ['partName', 'version'], scope: 'global' }],
+
+    /** Reads only, for the same reason as `part` above. Versions are what a range resolves against. */
+    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
 
     dependencies: [],
 });
@@ -153,6 +171,12 @@ export const resolveContract = defineContract({
         unsatisfied: z.array(z.object({ name: z.string(), wanted: z.string(), reason: z.string() })),
     }),
     rest: { method: 'POST', path: '/catalog/resolve' },
+    /**
+     * Public and **pure** — ranges in, versions out, no write anywhere. A release creator has to
+     * show what `^1.0` will actually resolve to *before* composing, or the operator is composing
+     * blind and reading the answer out of the result. Roadmap F2.
+     */
+    visibility: 'public',
     print: (o) => (o.unsatisfied.length === 0
         ? `kernel ${o.kernel.version}, ${String(o.parts.length)} part(s)`
         : `${String(o.unsatisfied.length)} unsatisfied`),

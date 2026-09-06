@@ -18,8 +18,16 @@
  * This is the discipline paas did not have, and it is the specific way its 100k lines went wrong:
  * `user.find`, `organization.get` and friends were reachable as though public, and an unbounded
  * `find` has no notion of the caller's scope — authorization can refuse a caller, but it cannot
- * narrow a result set. So: **`site.find` is never exposed.** Enumerating every hostname on the
- * platform is exactly the shape of that mistake.
+ * narrow a result set. So the rule was: **`site.find` is never exposed.** Enumerating every hostname
+ * on the platform is exactly the shape of that mistake.
+ *
+ * **Reads are exposed as of 2026-09-06, and the rule above is why it is safe.** `scopedBy` (D3)
+ * removed the clause the rule rested on: a `find` here is now a find within the caller's own
+ * organization, so there is no unbounded result set left to hand out. paas's mistake was not
+ * exposing a `find` — it was exposing one that *could not be narrowed*.
+ *
+ * Writes stay internal. `create` is a site being provisioned and `update` reaching `releaseHash`
+ * would be a deploy with none of `cdn.deploy`'s checks.
  */
 
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
@@ -71,6 +79,21 @@ export const siteCrud = defineCrud('site', SiteSchema, {
      * Serving and managing are two operations and they get two doors.
      */
     scopedBy: 'tenantId',
+
+    /**
+     * **Reads only, and only because of the `scopedBy` directly above.**
+     *
+     * The comment above this collection says the serving path and the managing path *"get two
+     * doors"*, and this is the managing one. `cdn.resolve_site` answers a browser anonymously and
+     * reads the collection directly; this answers an operator, through the scope, and returns only
+     * their own hostnames.
+     *
+     * `update` stays internal even though a deploy is one field write, because **which release a
+     * hostname serves is `cdn.deploy`'s decision**: it checks that the release belongs to the same
+     * tenant, and that every contract the release calls is one the site exposes. A generated
+     * `site.update` reaching `releaseHash` would be a deploy with neither check. Roadmap F2.
+     */
+    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
 
     /**
      * **`global`, and this is the case that shows the choice cannot be defaulted.**
