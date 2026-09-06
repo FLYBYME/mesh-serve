@@ -5,7 +5,8 @@ import * as Contract_1 from '../builder/contracts/artifact.contract.js';
 import * as Contract_2 from '../catalog/contracts/part.contract.js';
 import * as Contract_3 from '../cdn/contracts/release.contract.js';
 import * as Contract_4 from '../cdn/contracts/site.contract.js';
-import * as Contract_5 from '../identity/contracts/identity.contract.js';
+import * as Contract_5 from '../cdn/contracts/edge.contract.js';
+import * as Contract_6 from '../identity/contracts/identity.contract.js';
 
 declare global {
     interface IServiceToolRegistry {
@@ -47,6 +48,14 @@ declare global {
         'partVersion.resolve': { params: z.input<typeof Contract_2.partVersionCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_2.partVersionCrud['resolve']['outputSchema']> };
         'partVersion.update': { params: z.input<typeof Contract_2.partVersionCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_2.partVersionCrud['update']['outputSchema']> };
         'partVersion.delete': { params: z.input<typeof Contract_2.partVersionCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_2.partVersionCrud['delete']['outputSchema']> };
+        'edge.create': { params: z.input<typeof Contract_5.edgeCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['create']['outputSchema']> };
+        'edge.find': { params: z.input<typeof Contract_5.edgeCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['find']['outputSchema']> };
+        'edge.find_one': { params: z.input<typeof Contract_5.edgeCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['findOne']['outputSchema']> };
+        'edge.count': { params: z.input<typeof Contract_5.edgeCrud['count']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['count']['outputSchema']> };
+        'edge.get': { params: z.input<typeof Contract_5.edgeCrud['get']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['get']['outputSchema']> };
+        'edge.resolve': { params: z.input<typeof Contract_5.edgeCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['resolve']['outputSchema']> };
+        'edge.update': { params: z.input<typeof Contract_5.edgeCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['update']['outputSchema']> };
+        'edge.delete': { params: z.input<typeof Contract_5.edgeCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_5.edgeCrud['delete']['outputSchema']> };
         'cdn.compose': { params: z.input<typeof Contract_3.composeContract['inputSchema']>, returns: z.infer<typeof Contract_3.composeContract['outputSchema']> };
         'cdn.deploy': { params: z.input<typeof Contract_3.deployContract['inputSchema']>, returns: z.infer<typeof Contract_3.deployContract['outputSchema']> };
         'release.create': { params: z.input<typeof Contract_3.releaseCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_3.releaseCrud['create']['outputSchema']> };
@@ -66,14 +75,14 @@ declare global {
         'site.resolve': { params: z.input<typeof Contract_4.siteCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['resolve']['outputSchema']> };
         'site.update': { params: z.input<typeof Contract_4.siteCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['update']['outputSchema']> };
         'site.delete': { params: z.input<typeof Contract_4.siteCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['delete']['outputSchema']> };
-        'identity.ticket_issue': { params: z.input<typeof Contract_5.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketIssueContract['outputSchema']> };
-        'identity.ticket_validate': { params: z.input<typeof Contract_5.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketValidateContract['outputSchema']> };
-        'identity.ticket_revoke': { params: z.input<typeof Contract_5.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_5.ticketRevokeContract['outputSchema']> };
-        'identity.sign_out': { params: z.input<typeof Contract_5.signOutContract['inputSchema']>, returns: z.infer<typeof Contract_5.signOutContract['outputSchema']> };
-        'identity.revocations_since': { params: z.input<typeof Contract_5.revocationsSinceContract['inputSchema']>, returns: z.infer<typeof Contract_5.revocationsSinceContract['outputSchema']> };
-        'identity.whoami': { params: z.input<typeof Contract_5.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_5.whoamiContract['outputSchema']> };
-        'identity.register': { params: z.input<typeof Contract_5.registerContract['inputSchema']>, returns: z.infer<typeof Contract_5.registerContract['outputSchema']> };
-        'identity.permits': { params: z.input<typeof Contract_5.permitsContract['inputSchema']>, returns: z.infer<typeof Contract_5.permitsContract['outputSchema']> };
+        'identity.ticket_issue': { params: z.input<typeof Contract_6.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_6.ticketIssueContract['outputSchema']> };
+        'identity.ticket_validate': { params: z.input<typeof Contract_6.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_6.ticketValidateContract['outputSchema']> };
+        'identity.ticket_revoke': { params: z.input<typeof Contract_6.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_6.ticketRevokeContract['outputSchema']> };
+        'identity.sign_out': { params: z.input<typeof Contract_6.signOutContract['inputSchema']>, returns: z.infer<typeof Contract_6.signOutContract['outputSchema']> };
+        'identity.revocations_since': { params: z.input<typeof Contract_6.revocationsSinceContract['inputSchema']>, returns: z.infer<typeof Contract_6.revocationsSinceContract['outputSchema']> };
+        'identity.whoami': { params: z.input<typeof Contract_6.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_6.whoamiContract['outputSchema']> };
+        'identity.register': { params: z.input<typeof Contract_6.registerContract['inputSchema']>, returns: z.infer<typeof Contract_6.registerContract['outputSchema']> };
+        'identity.permits': { params: z.input<typeof Contract_6.permitsContract['inputSchema']>, returns: z.infer<typeof Contract_6.permitsContract['outputSchema']> };
     }
 }
 
