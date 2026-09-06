@@ -175,5 +175,15 @@ export type ArtifactPublished = z.infer<typeof ArtifactPublishedSchema>;
  * on its own would make every site's composition change without anyone asking — which is the
  * difference between a registry and a deploy, and the reason a site names a version requirement
  * rather than following a branch.
+ *
+ * `scopedBy: 'global'`, and it follows from the collection above rather than being a separate call.
+ * `artifactCrud` is already global on purpose — an artifact is addressed by the hash of its content,
+ * so two organizations building identical source get one row, and pretending otherwise would store
+ * the same bytes twice. An event about a globally-addressed thing is global for the same reason.
+ *
+ * What that leaks is a digest, a part id, a kind and a version — all of which `catalog.resolve`
+ * already answers to anyone. The source behind it does not travel here.
  */
-export const artifactPublishedEvent = defineEvent('builder.artifact_published', ArtifactPublishedSchema);
+export const artifactPublishedEvent = defineEvent('builder.artifact_published', ArtifactPublishedSchema, {
+    scopedBy: 'global',
+});

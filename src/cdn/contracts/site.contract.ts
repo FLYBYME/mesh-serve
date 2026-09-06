@@ -149,6 +149,15 @@ export const resolveSiteContract = defineContract({
  * the TTL is doing real work rather than tidying up after the event.
  */
 export const SiteDeployedSchema = z.object({
+    /**
+     * Whose site, and **the reason this event can be delivered at all**.
+     *
+     * Added 2026-09-06. The payload was `host`, `release`, `previousRelease` — everything a listener
+     * needs *except* who it concerns, because the only listeners were other services and they had
+     * the site record already. An event that cannot be scoped is delivered to nobody, so a live
+     * deploy view was impossible rather than merely unbuilt.
+     */
+    tenantId: z.string().min(1),
     host: z.string(),
     /** → release.hash. */
     release: z.string(),
@@ -157,4 +166,10 @@ export const SiteDeployedSchema = z.object({
 });
 export type SiteDeployed = z.infer<typeof SiteDeployedSchema>;
 
-export const siteDeployedEvent = defineEvent('cdn.site_deployed', SiteDeployedSchema);
+/**
+ * `scopedBy: 'tenantId'` — a hostname going live is the most operationally interesting thing that
+ * happens here, and it is exactly as private as the site record it comes from.
+ */
+export const siteDeployedEvent = defineEvent('cdn.site_deployed', SiteDeployedSchema, {
+    scopedBy: 'tenantId',
+});

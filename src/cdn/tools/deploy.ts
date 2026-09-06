@@ -75,6 +75,9 @@ export async function cdn_deploy(
     await ctx.call('site.update', { id: site.id, releaseHash: input.release });
 
     ctx.emit('cdn.site_deployed', {
+        // From the site record, not from the caller. The caller's scope was already checked to get
+        // here; the event says whose site this is, and that has one source of truth.
+        tenantId: site.tenantId,
         host,
         release: input.release,
         ...(previous === undefined ? {} : { previousRelease: previous }),

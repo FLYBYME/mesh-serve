@@ -126,6 +126,9 @@ export async function cdn_compose(
         });
 
         ctx.emit('cdn.release_composed', {
+            // The same `tenantId` written on the row above, so the event and the record cannot
+            // disagree about who this release belongs to.
+            tenantId,
             hash, kernel: kernel.version, partCount: Object.keys(pinned).length,
         });
     }

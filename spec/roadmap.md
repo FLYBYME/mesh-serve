@@ -339,12 +339,21 @@ Nothing resolves until this exists. Every version a site names is a row here.
 Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
 task** — each is a decision about the platform's own surface that blocks any UI at all.
 
-- [ ] **F1 No event can be streamed.** All four — `catalog.version_published`, `cdn.release_composed`,
-      `cdn.site_deployed`, `builder.artifact_published` — declare no `scopedBy`, and an event that
-      cannot be scoped is delivered to nobody, so the api refuses every one at subscribe. **Two of
-      the payloads carry no tenant field to scope by**: `site_deployed` has `host`/`release`,
-      `release_composed` has `hash`/`kernel`/`partCount`. They were written for another *service* to
-      consume; a browser is a different audience. **S**
+- [x] **F1 Every event can now be streamed.** *(fixed 2026-09-06)* All four declared no `scopedBy`,
+      and an event that cannot be scoped is delivered to nobody, so the api refused every one at
+      subscribe — a live view was impossible rather than unbuilt.
+      Two of the payloads carried **no tenant field to scope by**, which was the real finding: they
+      were written for another *service* to consume, and a service already holds the record. So
+      `cdn.site_deployed` and `cdn.release_composed` gained a `tenantId`, taken from the site and the
+      release row respectively so the event and the record cannot disagree, and both are
+      `scopedBy: 'tenantId'`.
+      `catalog.version_published` and `builder.artifact_published` are `scopedBy: 'global'`, **typed
+      deliberately rather than left off**: a published version is the public fact a marketplace is
+      made of, and an artifact is content-addressed so two organizations building identical source
+      share one row. Omitting it would have read as *not decided yet* and behaved as *silently
+      unsubscribable*.
+      Two tests: that all four declare a scope, and that the two scoped ones **carry the field they
+      name** — a `scopedBy` over an absent field is `unscopable` at run time with a green suite.
 - [ ] **F2 Nothing is exposable.** Every CRUD action on every collection is `internal`, correctly by
       default — so catalog has **no** public contract, cdn has only `resolve_site`, builder only
       `get_artifact`. A console cannot list parts, builds or sites: not refused, no route at all.

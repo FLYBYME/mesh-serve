@@ -173,4 +173,18 @@ export const VersionPublishedSchema = z.object({
  * **Nothing deploys on this.** A build going live on its own would change every site's composition
  * without anyone asking.
  */
-export const versionPublishedEvent = defineEvent('catalog.version_published', VersionPublishedSchema);
+/**
+ * `scopedBy: 'global'` — **anyone may watch anything published, and that is the decision.**
+ *
+ * Typed deliberately rather than left off. An event with no scope is delivered to nobody, so
+ * omitting this would have read as "not thought about yet" and behaved as "silently unsubscribable"
+ * — which is what it did until 2026-09-06.
+ *
+ * Global is right because a published version *is* the public fact: a part name is one flat
+ * namespace, anybody may resolve a range against it, and a marketplace that hid what was published
+ * would be a marketplace nobody could browse. What is not public is the source behind it, and that
+ * is `part.repository`, which is not in this payload.
+ */
+export const versionPublishedEvent = defineEvent('catalog.version_published', VersionPublishedSchema, {
+    scopedBy: 'global',
+});

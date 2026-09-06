@@ -111,6 +111,14 @@ export const deployContract = defineContract({
 });
 
 export const ReleaseComposedSchema = z.object({
+    /**
+     * Who composed it, and **the reason this event can be delivered at all**.
+     *
+     * It was not here until 2026-09-06. The payload carried what another *service* needed — a hash,
+     * a kernel, a count — and nothing else, because no browser had ever subscribed. An event with no
+     * scope is delivered to nobody, so this was unsubscribable rather than merely inconvenient.
+     */
+    tenantId: z.string().min(1),
     hash: z.string(),
     kernel: z.string(),
     partCount: z.number(),
@@ -122,5 +130,10 @@ export const ReleaseComposedSchema = z.object({
  * **Nothing deploys on this.** A new release going live on its own would change what every site
  * serves without anyone asking — which is the difference between composing and deploying, and the
  * reason they are two writes.
+ *
+ * `scopedBy: 'tenantId'` because a composition names the exact parts and versions an organization is
+ * about to run. That is not secret, and it is not anybody else's business either.
  */
-export const releaseComposedEvent = defineEvent('cdn.release_composed', ReleaseComposedSchema);
+export const releaseComposedEvent = defineEvent('cdn.release_composed', ReleaseComposedSchema, {
+    scopedBy: 'tenantId',
+});

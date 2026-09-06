@@ -254,3 +254,47 @@ describe.skipIf(!reachable)('an event that cannot be narrowed', () => {
         expect(answer.frames[0]).toContain('scopedBy');
     });
 });
+
+/**
+ * The events this repository actually emits, checked against the rule the suite above enforces.
+ *
+ * Every one of the four declared no `scopedBy` until 2026-09-06, which meant `decideDelivery`
+ * answered `unscopable` for all of them and the api refused every subscription — so a build monitor
+ * or a live deploy view was impossible, not merely unbuilt (roadmap F1).
+ *
+ * This is a unit test on the contracts rather than a stream test, because the property is a property
+ * of the declarations: an event that cannot be scoped cannot be delivered, and finding that out at
+ * subscribe time in a browser is finding out far too late.
+ */
+describe('every event this repository emits can actually be delivered', () => {
+    it('declares a scope on all four', async () => {
+        const [{ siteDeployedEvent }, { releaseComposedEvent }, { versionPublishedEvent },
+            { artifactPublishedEvent }] = await Promise.all([
+            import('../../src/cdn/contracts/site.contract.js'),
+            import('../../src/cdn/contracts/release.contract.js'),
+            import('../../src/catalog/contracts/part.contract.js'),
+            import('../../src/builder/contracts/artifact.contract.js'),
+        ]);
+
+        for (const event of [siteDeployedEvent, releaseComposedEvent,
+            versionPublishedEvent, artifactPublishedEvent]) {
+            expect(event.scopedBy, `${event.name} has no scopedBy`).toBeDefined();
+        }
+    });
+
+    it('carries the field it says it is scoped by', async () => {
+        // The half that a `scopedBy` alone does not give you. Two of these payloads had no tenant
+        // field at all — they were written for another *service* to consume, and a service already
+        // holds the record. Declaring a scope over a field the payload does not carry would be
+        // `unscopable` at run time with a green test suite.
+        const { siteDeployedEvent } = await import('../../src/cdn/contracts/site.contract.js');
+        const { releaseComposedEvent } = await import('../../src/cdn/contracts/release.contract.js');
+
+        for (const event of [siteDeployedEvent, releaseComposedEvent]) {
+            expect(event.scopedBy).toBe('tenantId');
+            const shape = (event.schema as unknown as { shape: Record<string, unknown> }).shape;
+            expect(shape['tenantId'], `${event.name} is scoped by a field it does not carry`)
+                .toBeDefined();
+        }
+    });
+});
