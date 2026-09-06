@@ -11,7 +11,7 @@
  * (mesh-web spec/service-modules.md §2, C3.2).
  */
 
-import { defineContract, defineCrud, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, type ToolContract, z } from '@flybyme/mesh';
 
 import {
     ApiTokenSchema,
@@ -377,7 +377,35 @@ export const permitsContract = defineContract({
     print: (o) => (o.permitted ? 'permitted' : 'denied'),
 });
 
-export const identityContracts = [
+interface CrudContractSet {
+    readonly find: ToolContract;
+    readonly findOne: ToolContract;
+    readonly count: ToolContract;
+    readonly get: ToolContract;
+    readonly resolve: ToolContract;
+    readonly create: ToolContract;
+    readonly createMany: ToolContract;
+    readonly update: ToolContract;
+    readonly replace: ToolContract;
+    readonly delete: ToolContract;
+}
+
+export function extractCrudContracts(crud: CrudContractSet): readonly ToolContract[] {
+    return [
+        crud.find,
+        crud.findOne,
+        crud.count,
+        crud.get,
+        crud.resolve,
+        crud.create,
+        crud.createMany,
+        crud.update,
+        crud.replace,
+        crud.delete,
+    ];
+}
+
+export const identityContracts: readonly ToolContract[] = [
     ticketIssueContract,
     ticketValidateContract,
     ticketRevokeContract,
@@ -386,4 +414,19 @@ export const identityContracts = [
     whoamiContract,
     registerContract,
     permitsContract,
-] as const;
+];
+
+export const identityCrudContracts: readonly ToolContract[] = [
+    ...extractCrudContracts(userCrud),
+    ...extractCrudContracts(organizationCrud),
+    ...extractCrudContracts(membershipCrud),
+    ...extractCrudContracts(roleCrud),
+    ...extractCrudContracts(grantCrud),
+    ...extractCrudContracts(ticketCrud),
+    ...extractCrudContracts(apiTokenCrud),
+];
+
+export const allIdentityContracts: readonly ToolContract[] = [
+    ...identityContracts,
+    ...identityCrudContracts,
+];

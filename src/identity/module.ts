@@ -14,7 +14,7 @@
 import type { IServiceBroker, IServiceContext, IServiceModule, ToolContract, z } from '@flybyme/mesh';
 import { createHash } from 'node:crypto';
 
-import { identityContracts } from './contracts/identity.contract.js';
+import { allIdentityContracts } from './contracts/identity.contract.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './methods/password.js';
 import { BUILTIN_ROLES, permits, PUBLIC_ROLE, type Role } from './schema/roles.js';
 import { DEFAULT_TICKET_LIFETIME_MS, isLive, mintToken, type Validation } from './schema/tickets.js';
@@ -46,7 +46,17 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
 
     let broker: IServiceBroker | undefined;
 
-    const contracts = identityContracts as unknown as ToolContract<z.ZodTypeAny, z.ZodTypeAny>[];
+    const CRUD_DOMAINS = new Set([
+        'user',
+        'organization',
+        'membership',
+        'role',
+        'grant',
+        'ticket',
+        'apiToken',
+    ]);
+
+    const contracts: ToolContract[] = [...allIdentityContracts];
 
     /**
      * Record a revocation and tell anyone listening.
@@ -109,7 +119,7 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
         store,
 
         getContracts: () => contracts,
-        isCrud: () => false,
+        isCrud: (domain: string, _action: string) => CRUD_DOMAINS.has(domain),
         getEventHandlers: () => new Map(),
         async beforeCrud(_d, _a, input) { return input; },
         async afterCrud(_d, _a, output) { return output; },
@@ -125,6 +135,10 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
         },
 
         async execute(domain: string, action: string, input: unknown, _ctx: IServiceContext): Promise<unknown> {
+            if (CRUD_DOMAINS.has(domain)) {
+                throw new Error(`Engine Error: CRUD action "${action}" for domain "${domain}" was not intercepted.`);
+            }
+
             const key = `${domain}.${action}`;
 
             switch (key) {
