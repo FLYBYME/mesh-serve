@@ -1,0 +1,153 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**M2: an edge is a cache and git is the archive.** Roadmap **C5** and **C6**, together.
+
+Kill an edge's storage, restart it, and the site still serves — either because
+another edge had the bytes, or because the artifact went `gone` and was rebuilt
+from the catalog's commit. That sentence is the milestone. Nothing in this
+repository currently survives losing a disk: `fileBlobStore` writes under
+`./.artifacts`, and if those bytes vanish the release still resolves, the page
+still renders its `<script>` tags, and every one of them 404s.
+
+The two items are one dispatch because they are one lookup with two outcomes.
+An edge needs digest D and does not hold it:
+
+    ask the peers   →  someone has it   →  fetch it          (C5)
+                    →  nobody has it    →  mark it gone,
+                                           rebuild from the
+                                           catalog's commit   (C6)
+
+Splitting them across two dispatches means two agents writing that same
+"who has D" traversal, and the second one deleting the first one's.
+
+================================================================================
+WHAT ALREADY EXISTS — READ BEFORE BUILDING
+================================================================================
+
+    src/cdn/schema/edge.ts        the edge registry (C4, built yesterday). One row
+                                  per running edge: `id` and `url`. Read its header
+                                  comment in full — it explains why there is no
+                                  liveness field, and that decision is load-bearing
+                                  for C5. Do not add `lastSeen`/`healthy`/`status`.
+    src/cdn/cdn.service.ts        binds the port. `this.blobs`, `this.url`,
+                                  `artifactFor`, `artifactFile`, the `/_a/<digest>/`
+                                  route, the in-memory projection kept fresh by
+                                  events + a `resync` tool.
+    src/builder/blobs.ts          `BlobStore` — `stat`/`get`/`put`, `fileBlobStore`,
+                                  `memoryBlobStore`. `memoryBlobStore` is how you
+                                  test an edge that has lost its disk.
+    src/builder/tools/artifact_blob.ts
+                                  **Read this one carefully — it is the pattern.**
+                                  It returns a *URL*, not bytes, and its header says
+                                  why: the mesh answers questions, content moves over
+                                  HTTP. C5 obeys the same rule.
+    src/builder/schema/artifact.ts
+                                  `digest`, `files[]` (each with its own `digest`),
+                                  `declaration`, `buildId`.
+    src/builder/tools/build_start.ts
+                                  what a rebuild has to re-enter.
+
+================================================================================
+C5 — SYNC BETWEEN EDGES
+================================================================================
+
+**Announce at artifact granularity, fetch at blob granularity.** This is in the
+roadmap and it is the whole design: `ArtifactFileSchema` already carries a
+per-file `digest` precisely so a one-line change to `index.js` does not re-fetch
+a megabyte of kernel. An edge missing one file asks for one file.
+
+**Fetch over HTTP, never over the broker.** The broker is for control messages;
+a kernel bundle is megabytes and base64 adds a third again. The mesh call asks
+*who has this and at what URL*; the bytes come over `fetch`.
+
+**Reachability is discovered by trying, not by tracking.** An edge that died
+without removing its row is the ordinary case, not an error — C4's header says
+so. A peer that does not answer is skipped and the next one is tried. Do not add
+a health field to make this cheaper; two sources of truth that disagree during a
+partition is the exact failure this avoids.
+
+Think about, and say what you decided in the report:
+
+- **What happens to the request that discovered the miss.** A browser is waiting.
+  Fetching from a peer may be fast; a rebuild is not. These are not the same
+  answer and should not pretend to be.
+- **Two requests missing the same digest at once.** Fetching it twice is wasteful
+  but harmless; the failure mode worth avoiding is two writers to one blob path.
+- **A peer that answers with the wrong bytes.** The digest is the whole
+  validator — verify what arrives before it is stored, or content addressing is
+  a naming convention rather than a guarantee.
+
+================================================================================
+C6 — GONE, AND REBUILD
+================================================================================
+
+No edge holds it → mark the artifact `gone` → rebuild from the catalog's commit.
+
+**Safe because the build is deterministic.** Ten edges discovering the same miss
+simultaneously all produce the same digest, so the duplicate work is wasted and
+harmless. That property is what makes this cheap, and it is already proved: the
+spine test asserts a version is idempotent from the same commit.
+
+**`ArtifactSchema` has no state field today.** Adding one is part of this task and
+it is the part to think hardest about, because `declared / desired / observed` is
+the vocabulary this repository already uses and `gone` has to fit it honestly:
+`gone` is an *observed* fact about bytes, not a *desired* state of the artifact.
+An artifact row that says `gone` and an artifact row that says nothing must not
+both mean "we do not know". Say in the report what the field means when the
+process that wrote it has since restarted.
+
+**The rebuild input is the catalog's commit**, not a path and not a tarball —
+`partVersion` carries it. If the rebuild needs something the catalog does not
+have, that is a finding and it belongs in the report; do not invent a source.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not add a liveness heartbeat to `edge`.** See above; it is decided.
+
+**Do not move bytes over the broker.** Not "just for small files" — a rule with a
+size threshold is a rule nobody can predict.
+
+**Do not build eviction.** That is C7, it is a refcount over live sites, and it
+is a different question. An artifact this task marks `gone` is not one it deletes.
+
+**Do not touch `identity` or the api's gating.** Different milestone.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **A test that loses a disk.** Two `CdnService` instances, real ports, real
+  mongo. Give the second a `memoryBlobStore` holding nothing, ask it for a page
+  whose artifacts live only on the first, and assert a 200 with the right bytes.
+  That assertion is the milestone; nothing weaker proves it.
+- **A test where nobody has it.** Same shape, no peer holding the digest, and the
+  artifact is rebuilt from the commit and serves. Assert the rebuilt digest
+  **equals the original** — that is the determinism claim, and if it does not
+  hold, stop and report it rather than relaxing the assertion.
+- **A test that a corrupted peer response is rejected**, not stored.
+- Every existing test still passing — **306 today, none of them may regress.**
+- `npm run typecheck` clean, **zero `as any`, zero `as never`, zero casts.**
+- Tick C5 and C6 in `spec/roadmap.md`, and update the M2 line in the Milestones
+  section if both actually land.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/5-artifact-durability.md`
+
+- the three C5 decisions listed above, and what you chose
+- what `gone` means after a restart of the process that wrote it
+- **whether M2 is actually closed**, in the sense of the sentence at the top of
+  this prompt — and if it is not, exactly what is still missing
+- what a second edge would need before this is safe to run on more than one
+  machine — you are the first person to write a peer path here, and that list is
+  worth more than the code
+- anything for `spec/unread.md` — a field you found that nothing reads, or a
+  field this dispatch added that nothing reads yet
