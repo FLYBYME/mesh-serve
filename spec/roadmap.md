@@ -382,6 +382,18 @@ task** — each is a decision about the platform's own surface that blocks any U
       from identity — and platform-wide reads go through operator contracts gated by a cluster-scoped
       role (F3). A `--as-tenant` option would be the `scopedBy` bypass managing.md §2 rejects, handed
       out on the command line. **M** · ⛔ F3
+- [ ] **F8 ★ `roles.builtin` and `principals.ownerId` are written and never read.** From the reader
+      audit, [unread.md](./unread.md). Both are the same shape as F3: a field added to close a named
+      incident, holding the right value, consulted by nothing.
+      `builtin` says *"not deletable… a deployment with no `public` role has no way to answer an
+      anonymous request at all — a state it should not be possible to configure into."* No delete
+      path checks it, so that state is one `role.delete` away.
+      `ownerId` says *"surfdns #29: an organization whose owner leaves cannot be re-owned… including
+      when there are no owners left — which is exactly the case that broke."* The field exists to fix
+      #29 and #29 is not fixed. **S**
+- [ ] **F9 `site.image` is stored and never rendered.** `page.ts` emits `og:title` and
+      `og:description` and no `og:image`. A site sets the field, the tag never appears, and nothing
+      says so. One line in the page generator. **S**
 - [ ] **F7 `--version` collides with commander's own flag, silently.** Any contract with a `version`
       input is uninvokable from the generated CLI: commander owns `--version` on the program and
       prints the CLI's version instead of running anything.
