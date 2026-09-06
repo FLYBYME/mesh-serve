@@ -53,21 +53,38 @@ It also means **a platform operator listing every site on the platform is curren
 role that sees past the boundary. An `auth: 'admin'` gate would let an admin *make the call* and
 still return only their own rows.
 
-The concept exists elsewhere and was written down carefully — `delivery.ts` has an `operator` flag,
-*narrow and explicit, granted by the coarse gate having admitted them to an `auth: 'admin'` stream*.
-Nothing equivalent reaches the CRUD path.
+**The answer is already designed, and it is already inert.** `schema/roles.ts` makes a role a row
+with a **required** `scope: 'cluster' | 'organization'`, and says why in as many words: surfdns #26
+exists because `admin` meant two different things — organization-scoped in one place, cluster-scoped
+in the other — so *nobody could actually be a platform operator*. A cluster-scoped role **is** the
+operator concept. `principals.ts` carries the other half: `user.roles` is documented as cluster-scoped
+and held everywhere, while organization roles live on the membership as `roleKey`, "because they are a
+fact about a membership".
 
-Three ways out, and the choice matters more than it looks:
+So the design is complete and coherent. What is missing is that **`scope` is written and never read —
+not once, anywhere in the repository.**
 
-- **An operator bypass in `scopedBy`.** Smallest change, and it puts a hole in the mechanism that
-  exists to have no holes. Whatever grants it becomes the most security-critical flag in the system.
-- **Explicit operator contracts** — `cdn.list_all_sites`, gated `admin`, unscoped by construction.
-  More code, and the same shape as `cdn.resolve_site`: a second door with a stated invariant, which
-  this repository has already found is reviewable in a way a bypass is not.
-- **A console that is per-organization only.** No platform-wide view at all. Defensible, and it means
-  operating the platform is a CLI job forever.
+- Nothing stops an organization-scoped role key being put in `user.roles`, or a cluster-scoped one
+  being used as a `membership.roleKey`. Neither write point looks at the record.
+- `permits(roles, grants, contract)` takes **bare strings** and never loads the `Role` rows at all, so
+  the one place that decides cannot tell the two apart even in principle.
 
-**The second is most consistent with what is already here.** It is also the most work.
+That is #26 reproduced exactly — the same string meaning different things depending on where it is
+stored — inside the file written to make it impossible. The comment is careful about this and says
+only that making roles data *"removes the conditions that produced it"*. It does, and the conditions
+have been rebuilt above it.
+
+So there is no design choice to make here, only enforcement to write:
+
+- **`permits` resolves roles to rows** and takes the caller's organization, so a cluster role grants
+  everywhere and an organization role grants only within its own.
+- **Both write points validate scope** against the role record, and refuse.
+- **Operator contracts then need no new mechanism**: `cdn.list_all_sites` is granted to a
+  cluster-scoped role, and `scopedBy` never has to learn about bypasses.
+
+The last point is the payoff, and it is why this is worth doing before the console rather than
+alongside it: a `scopedBy` bypass would have been the most security-critical flag in the system, and
+a correctly-read `scope` field means it is never written.
 
 ## 3. Nothing can be streamed — **so a live console is impossible today**
 

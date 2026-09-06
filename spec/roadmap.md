@@ -343,11 +343,17 @@ task** — each is a decision about the platform's own surface that blocks any U
       default — so catalog has **no** public contract, cdn has only `resolve_site`, builder only
       `get_artifact`. A console cannot list parts, builds or sites: not refused, no route at all.
       Decide the smallest exposable set per service. **M** · ⛔ D1
-- [ ] **F3 An operator cannot see across organizations.** `site` is `scopedBy: 'tenantId'`, and
-      `resolveCallerScope` has no notion of a role that sees past the boundary — so `auth: 'admin'`
-      would admit the *call* and still return one tenant's rows. `delivery.ts` has an `operator`
-      concept; nothing equivalent reaches CRUD. Three shapes in managing.md §2; explicit operator
-      contracts are the one consistent with `cdn.resolve_site`. **M**
+- [ ] **F3 ★ `Role.scope` is written and never read, so surfdns #26 is back.** `schema/roles.ts` makes
+      `scope: 'cluster' | 'organization'` **required**, and says why: #26 exists because `admin` meant
+      organization-scoped in one place and cluster-scoped in another, so nobody could be a platform
+      operator. A cluster-scoped role *is* the operator concept — the design is complete. But **no
+      code reads the field**: nothing stops an organization role landing in `user.roles` or a cluster
+      role in `membership.roleKey`, and `permits(roles, grants, contract)` takes bare strings and
+      never loads the `Role` rows, so the deciding call cannot tell them apart. The same string means
+      two things depending on where it is stored — #26 exactly, rebuilt inside the file written to
+      prevent it. Fix: `permits` resolves rows and takes an organization; both write points validate
+      against the record. **Then operator contracts need no new mechanism and `scopedBy` never learns
+      about bypasses** — which is the whole reason to do this before the console. **M**
 - [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
       because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
       The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
