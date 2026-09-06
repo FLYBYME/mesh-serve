@@ -1,0 +1,180 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+Three fields in `src/identity/` are written on every row and **read by nothing**.
+Each was added to close a specific, named incident. Each holds the right value.
+None of them does anything.
+
+Make all three real. Roadmap **F3** and **F8**; the survey is `spec/unread.md`.
+
+    Role.scope             roadmap F3 -- the keystone, do this one first
+    roles.builtin          roadmap F8
+    principals.ownerId     roadmap F8
+
+This is enforcement work, not schema work. **Do not add fields.** Every field
+you need already exists and already holds the right value.
+
+================================================================================
+FIRST — READ THIS, IT IS THE WHOLE ARGUMENT
+================================================================================
+
+    spec/unread.md          why these three are grouped, and the rule they broke
+    spec/roadmap.md         F3, F8, and Track F around them
+    src/identity/schema/roles.ts        the comments that promise what is missing
+    src/identity/schema/principals.ts
+    src/identity/module.ts              where identity actually runs
+
+`spec/unread.md` states the rule these three violate:
+
+> A comment saying *cannot*, *never*, *not deletable*, or *the only thing
+> standing between* is claiming enforcement, and enforcement is code.
+
+You are writing that code. When you are done, each field's comment should be a
+true statement about the system rather than an intention.
+
+================================================================================
+F3 — `Role.scope`, and why it is first
+================================================================================
+
+`schema/roles.ts` makes a role a row with a **required** `scope`, and says why:
+
+> surfdns issue #26 exists because `admin` means two different things there —
+> `roleSatisfies('admin')` is organization-scoped while `auth: 'admin'` is
+> cluster-scoped, and nothing connects them, so *nobody can actually be a
+> platform operator*.
+
+`schema/principals.ts` carries the other half: `user.roles` is documented as
+cluster-scoped and held everywhere, while an organization role lives on the
+membership as `roleKey`, *"because they are a fact about a membership"*.
+
+**The design is complete. Nothing reads `scope`.** So:
+
+- nothing stops an organization-scoped role key being written into `user.roles`
+- nothing stops a cluster-scoped one being used as a `membership.roleKey`
+- `permits(roles, grants, contract)` takes **bare strings** and never loads the
+  `Role` rows at all, so the one place that decides cannot tell them apart even
+  in principle
+
+That is #26 reproduced exactly — one string meaning two things depending on
+where it is stored — inside the file written to make it impossible.
+
+**What to do:**
+
+1. `permits` resolves role keys to `Role` rows, and takes the caller's
+   organization. A cluster role grants everywhere. An organization role grants
+   only within the organization the caller is acting in.
+2. Both write points validate against the role record and **refuse**: an
+   organization-scoped key may not enter `user.roles`; a cluster-scoped key may
+   not become a `membership.roleKey`.
+3. `identity.permits` is a contract with a shape. Changing what it takes changes
+   that contract — say so in the commit, and check who calls it before you do
+   (`src/api/`, and the generated clients).
+
+**Think about the signature.** `permits(roles, grants, contract)` is pure and
+easy to test, which is why it looks like that. Resolving rows means either
+passing the rows in — keeping it pure, moving the lookup to the caller — or
+making it async and doing the lookup inside. **The first is almost certainly
+right**; argue for whichever you pick, in the code.
+
+Do **not** add an operator bypass to `scopedBy`. That is explicitly rejected in
+`spec/managing.md` §2: it would be the most security-critical flag in the system.
+The point of F3 is that a correctly-read `scope` means such a flag is never
+needed.
+
+================================================================================
+F8a — `roles.builtin`
+================================================================================
+
+> Shipped with identity and not deletable.
+>
+> Only `public` is, because a deployment with no `public` role has no way to
+> answer an anonymous request at all — and that is a state it should not be
+> possible to configure into.
+
+`BUILTIN_ROLES` is upserted at start (`module.ts:122`). The flag is stored on
+every builtin row. **No delete path checks it**, so the state that comment calls
+unconfigurable is one `role.delete` away.
+
+Make deleting a builtin role refuse, with an error naming which role and why.
+Use the framework's error types — `ClientError` with a code and a status, as the
+rest of this repository does. Do not throw a bare `Error`.
+
+While you are there: the comment says *"only `public` is"* and `BUILTIN_ROLES`
+marks **both** `public` and `authenticated` as `builtin: true`. One of those two
+is wrong. Work out which, fix it, and say which in your report — a comment and a
+constant disagreeing about an invariant is the same class of bug as the one you
+are here to fix.
+
+================================================================================
+F8b — `principals.ownerId`
+================================================================================
+
+> surfdns #29: an organization whose owner leaves cannot be re-owned. Recorded as
+> a field rather than inferred from memberships so the answer is always
+> available, including when there are no owners left — which is exactly the case
+> that broke.
+
+Written at creation. Read nowhere. **The field exists to fix #29 and #29 is not
+fixed.**
+
+What "fixed" means here is a judgement call and making it is part of the task.
+At minimum:
+
+- removing the last owner, or removing the owner's membership, must not leave an
+  organization no one can administer
+- there must be a way to transfer ownership, and it must be the *only* way
+  `ownerId` changes
+- whatever rule you choose has to hold when there are **no owners left**, since
+  the comment says that is the case that actually broke
+
+Write the rule down where the field is, and make the field's comment true.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not rewrite identity on `defineCrud`.** That is roadmap **A4** — 20
+hand-written store methods across 7 record types — and it is a much larger piece
+of work. You are working inside the hand-rolled version on purpose. If a fix is
+genuinely impossible without A4, say so and stop rather than starting it.
+
+**Do not touch `src/cdn/`, `src/builder/`, `src/catalog/` or `src/api/`** except
+where a caller of `identity.permits` has to change with its signature.
+
+**Do not add fields.** All three already exist and already hold the right value.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **A test per rule that fails before your change.** Write it first and watch it
+  fail. Every one of these bugs survived a green suite, so a test written after
+  the fix proves nothing about the defect.
+  In particular: a test that a cluster role does *not* grant inside another
+  organization, a test that a builtin role cannot be deleted, and a test that an
+  organization cannot be left unadministerable.
+- All 260 existing tests still pass. If one breaks, read it before changing it —
+  it may be asserting the old behaviour, in which case **say so loudly in your
+  report**, because a test defending a defect is the most interesting thing you
+  can find. It has happened twice this week.
+- `npm run typecheck` clean, **zero `as any`, zero `as never`, zero casts.**
+- Roadmap ticks for F3 and F8, dated, one line each on what was actually done.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/1-identity-enforcement.md`  ← `reports/`, and committed.
+`agent-runs/results/` is gitignored and destroyed with the worktree.
+
+- what each of the three enforcement rules turned out to be
+- the `permits` signature you chose and why
+- which of `public` / `authenticated` was wrong about `builtin`
+- what rule you chose for #29, and what happens when the last owner leaves
+- any test you found asserting the old behaviour
+- anything you found that belongs in `spec/unread.md` — another field written and
+  never read. You are already reading this code closely; it is the cheapest time
+  to notice.

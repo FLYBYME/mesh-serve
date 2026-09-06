@@ -5,3 +5,7 @@ dist/
 
 # Artifact bytes cached by a local builder or cdn. A cache, never durable.
 .artifacts/
+
+# Dispatch output. Results are agy stdout and are destroyed with the worktree; reports are committed.
+agent-runs/results/*.result.md
+agent-runs/results/*-verify.log
