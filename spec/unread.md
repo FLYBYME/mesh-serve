@@ -75,6 +75,7 @@ mesh-web's `Manifest` has nine fields. **One is consumed by production code.**
 | `manifest.menus` | **0** | 0 |
 | ~~`manifest.layouts`~~ | **1** *(fixed 2026-09-06, mesh-web 0.11.3 — applyLayout)* | 0 |
 | `manifest.settings` | **0** | 0 |
+| ~~`edge.url`~~ | **1** *(fixed 2026-09-06, C5 — fetchBlobFromPeers)* | 2 |
 
 `conflicts` is the one that matters. `mergeManifests` detects two contributions claiming the same
 command id or the same key binding, records who claimed it, and **reports it to nobody** — the tests

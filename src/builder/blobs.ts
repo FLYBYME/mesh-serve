@@ -135,8 +135,8 @@ export function fileBlobStore(options: FileBlobStoreOptions): BlobStore {
             // Written aside and renamed, because **rename is atomic and a write is not.** A crash
             // halfway through a direct write leaves a short file under a name that says what it
             // should hash to, and every later reader trusts the name. The temp name carries the pid
-            // so two processes writing the same digest do not truncate each other's partial file.
-            const staging = `${path}.${String(process.pid)}.tmp`;
+            // and a random token so concurrent writes to the same digest do not truncate each other.
+            const staging = `${path}.${String(process.pid)}.${Math.random().toString(36).slice(2)}.tmp`;
             try {
                 await writeFile(staging, content);
                 await rename(staging, path);

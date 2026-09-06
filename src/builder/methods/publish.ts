@@ -63,7 +63,7 @@ export async function publishPart(
     const startedAt = new Date();
     const hash = inputHash({ source, entry: part.entry, builderVersion: BUILDER_VERSION });
 
-    const cached = await cachedArtifact(hash, ctx);
+    const cached = await cachedArtifact(hash, service, ctx);
     if (cached !== undefined) {
         ctx.logger.info(`[builder] ${part.id}: cached ${cached.artifactDigest}`);
         return { ...cached, state: 'succeeded', cached: true };
@@ -92,6 +92,7 @@ export async function publishPart(
             totalSize: files.reduce((sum, file) => sum + file.size, 0),
             builtAt: new Date(),
             declaration,
+            state: 'available',
         };
 
         const build = await ctx.call('build.create', {
@@ -125,6 +126,9 @@ export async function publishPart(
                 digest: artifact.digest, partId: part.id, kind: part.kind, version: part.version,
             });
         } else {
+            if (existing.state === 'gone') {
+                await ctx.call('artifact.update', { id: existing.id, state: 'available' });
+            }
             ctx.logger.info(
                 `[builder] ${part.id}: ${artifact.digest} already exists — same bytes, reusing it.`,
             );
@@ -165,6 +169,7 @@ export async function publishPart(
  */
 async function cachedArtifact(
     hash: string,
+    service: BuilderService,
     ctx: IServiceContext,
 ): Promise<{ buildId: string; artifactDigest: string } | undefined> {
     const previous = await ctx.call('build.find_one', {
@@ -179,6 +184,12 @@ async function cachedArtifact(
     // `defineCrud` mints that and nothing can supply one.
     const artifact = await ctx.call('artifact.find_one', { query: { digest } });
     if (artifact === null || artifact === undefined) return undefined;
+    if (artifact.state === 'gone') return undefined;
+
+    // Both questions are asked: does the build record exist, and do we still hold what it produced?
+    // If the node holding this builder lost its disk or the artifact went gone, it must be rebuilt.
+    const sampleBlob = artifact.files[0]?.digest ?? digest;
+    if (!(await service.blobs.has(sampleBlob))) return undefined;
 
     return { buildId: previous.id, artifactDigest: digest };
 }

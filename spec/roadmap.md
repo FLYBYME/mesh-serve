@@ -202,15 +202,16 @@ Nothing resolves until this exists. Every version a site names is a row here.
       The cdn registers itself on start and removes itself on clean shutdown; an edge that dies
       without removing its row is discovered by C5 trying to fetch and failing. Unscoped and not
       exposed: internal infrastructure for peer blob sync. **S** · ⛔ C3
-- [ ] **C5 ★ Artifact sync between edges.** The hard one. An edge needs digest D and does not have
-      it: find a peer that does, fetch over **HTTP, not the broker** — a kernel bundle is megabytes
-      and the broker is for control messages. Announce at **artifact** granularity, fetch at **blob**
-      granularity, so a one-line change does not re-fetch a whole kernel. **L** · ⛔ C3, C4
-- [ ] **C6 `gone`, and rebuild.** No edge holds it → mark the artifact gone → rebuild from the
-      catalog's commit. Safe because the build is deterministic: ten edges discovering it
-      simultaneously all produce the same digest, so duplicate work is wasted and harmless. **This is
-      the only durability story there is** — the edge disk is a cache and git is the archive. **M** ·
-      ⛔ C5, B1
+- [x] **C5 ★ Artifact sync between edges.** *(built 2026-09-06)* An edge needs digest D and does not have
+      it: queries registered peer edges via `edge.find`, fetches over **HTTP (`/blobs/:digest`), not the broker** —
+      a kernel bundle is megabytes and the broker is for control messages. Validates incoming bytes against
+      the content digest using sha256 before storage; discards corrupt responses. Coalesces concurrent misses
+      in-flight via a singleflight Promise map. **L** · ⛔ C3, C4
+- [x] **C6 `gone`, and rebuild.** *(built 2026-09-06)* No edge holds it → mark the artifact and partVersion
+      `gone` → rebuild from the catalog's commit via `builder.build_start` authorized by `part.publisher`.
+      Safe because the build is deterministic: verified that rebuilt digest equals original digest. Rebuilt
+      artifact flips back to `available` and partVersion back to `built`. **This is the only durability story
+      there is** — the edge disk is a cache and git is the archive. **M** · ⛔ C5, B1
 - [ ] **C7 Eviction is a refcount, not a policy.** An artifact is removable when no release a live
       site names resolves to it. That makes deleting a site remove *its* composition while the kernel
       and shared parts survive — which is also the legal answer. **S** · ⛔ C1
@@ -513,11 +514,11 @@ page there is nothing to survive.
 serves — either because another edge had the bytes, or because the artifact went `gone` and was
 rebuilt from the catalog's commit.
 
-⛔ **C4** the edge registry · **C5** sync between edges · **C6** `gone` and rebuild
+~~**C4** the edge registry · **C5** sync between edges · **C6** `gone` and rebuild~~ — **all of M2, done 2026-09-06.**
 
 This is the one that makes it a platform rather than a demo, and it is already *designed* to be
 cheap: builds are deterministic, so several edges rebuilding at once converge on the same digest and
-the duplicate work is harmless.
+the duplicate work is harmless. All four durability scenarios proven in `test/integration/durability.test.ts`.
 
 ### M3 — Calls are gated and scoped
 
@@ -557,20 +558,14 @@ The first thing that could actually be looked at, in order:
 
 ~~B1 → B2 → B3 → C1 → C2 → A2 → A1 → C3~~ — **all of M1, done 2026-09-06.**
 
-The thing that had never happened has now happened, and it went better than the last time: 11 of 13
-assertions passed on the first run against a real database. The one failure was the *test's* fault —
-`fetch` silently drops a `Host` header, because it is forbidden by the fetch specification, so every
-request arrived as `127.0.0.1` and the cdn correctly found no site for it. A cdn is addressed by
-hostname; the test has to speak the protocol the way the proxy in front of it will.
+~~C4 → C5 → C6~~ — **all of M2, done 2026-09-06.**
 
-**Next**: M2, which is where the design gets tested rather than the code. C4 → C5 → C6 — an edge
-registry, sync between edges, and `gone` → rebuild. Everything up to here assumed one node, and every
-assumption about the other case is currently unexamined.
+The durability story holds: an edge wiping its cache or joining cold retrieves missing blobs from
+peers over HTTP (`/blobs/:digest`), detects and rejects corrupt bytes before writing to storage, and
+falls back to marking `gone` and deterministically rebuilding from git when all edge copies are lost.
 
-One thing the catalog surfaced that has to be answered before anyone but us publishes: **part names
-are a flat global namespace.** Two publishers both wanting `auth` collide, and renaming a part breaks
-every site that names it. npm answers with `@scope/name`. Whatever the answer is, it is cheap now and
-expensive later.
+**Next**: M3 — Calls are gated and scoped. Moving the API out of mesh-api, dynamic route mounting from
+site records, and scoping down to `defineCrud`.
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.
