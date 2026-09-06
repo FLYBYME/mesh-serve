@@ -99,11 +99,36 @@ export async function publishPart(
             artifactDigest: artifact.digest,
         });
 
-        await ctx.call('artifact.create', { ...artifact, buildId: build.id });
+        /**
+         * **Identical bytes are the same artifact, not a conflict.**
+         *
+         * Two versions of a part whose sources are byte-identical — a release that only moved a
+         * version number, a dependency range widened in `package.json` — bundle to the same output
+         * and therefore the same digest. That is content addressing working, and the row already
+         * there describes these exact bytes.
+         *
+         * mesh 2.4.0 put a global unique index on `digest` to close a real hole: two rows claiming
+         * the same bytes. Creating unconditionally then turned the *success* case into a failed
+         * build — `auth@0.2.0` failed with `Duplicate value "sha256:5037…"` because it is compiled
+         * from the same source as `0.1.0`. Reuse the row instead.
+         *
+         * No event, because nothing was published: the artifact already existed and anything
+         * listening has already seen it. The version→digest link is not affected — `build_start`
+         * writes that from the digest returned here.
+         */
+        const existing = await ctx.call('artifact.find_one', { query: { digest: artifact.digest } });
 
-        ctx.emit('builder.artifact_published', {
-            digest: artifact.digest, partId: part.id, kind: part.kind, version: part.version,
-        });
+        if (existing === null || existing === undefined) {
+            await ctx.call('artifact.create', { ...artifact, buildId: build.id });
+
+            ctx.emit('builder.artifact_published', {
+                digest: artifact.digest, partId: part.id, kind: part.kind, version: part.version,
+            });
+        } else {
+            ctx.logger.info(
+                `[builder] ${part.id}: ${artifact.digest} already exists — same bytes, reusing it.`,
+            );
+        }
 
         ctx.logger.info(
             `[builder] ${part.id}: ${artifact.digest} ` +
