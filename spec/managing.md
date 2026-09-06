@@ -154,3 +154,23 @@ platform, for the same reason `src/fleet/` may not import another service here.
 
 **Not per-tenant application hosting.** This is the *operator's* view of the machinery. What a
 tenant's own users see is their product's business.
+
+---
+
+## 7. The pattern worth naming
+
+Three findings here have the same shape, and it is not a coincidence worth ignoring:
+
+| field | its own comment says | readers |
+| --- | --- | --- |
+| `Role.scope` | makes surfdns #26 impossible | **none** |
+| `partVersion.kernel` | "the only thing standing between a stale part and a browser" | **none** |
+| `Build.log` | "a failed build with no log is a bug report nobody can act on" | **none** |
+
+Each was designed carefully, documented as load-bearing, written on every row — and wired to nothing.
+The schema is not the enforcement, and a comment asserting an invariant is the easiest place in a
+codebase for one to quietly not exist. `partVersion.kernel` is the proof: the live release runs
+`auth@0.1.0`, which declares `kernel: ^0.4`, on kernel **0.5.0**, and compose said nothing.
+
+The cheap check is worth running against any field added from here: **name the reader, or do not add
+the field.**

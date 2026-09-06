@@ -354,6 +354,14 @@ task** — each is a decision about the platform's own surface that blocks any U
       prevent it. Fix: `permits` resolves rows and takes an organization; both write points validate
       against the record. **Then operator contracts need no new mechanism and `scopedBy` never learns
       about bypasses** — which is the whole reason to do this before the console. **M**
+- [ ] **F5 ★ `partVersion.kernel` is stored and never read, and a live release already violates it.**
+      `publish-cli` writes the range a part was built against, with the comment *"the only thing
+      standing between a stale part and a browser"*; `build_start` forwards it. **Nothing reads it** —
+      `checkComposition` checks missing parts, unmet contracts and unused grants, and has no kernel
+      case at all. It is not theoretical: the live release is kernel **0.5.0** with `auth@0.1.0`,
+      which declares `kernel: ^0.4` and depends on `@flybyme/mesh-web: 0.4.0`. `^0.4` is
+      `>=0.4.0 <0.5.0`, so compose accepted an out-of-range part without a word. Add a
+      `kernel_mismatch` problem, fatal. **S**
 - [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
       because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
       The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
