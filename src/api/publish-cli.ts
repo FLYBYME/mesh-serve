@@ -36,6 +36,18 @@ export interface PublishArgs {
     readonly repository: string | undefined;
     /** Print what would be published and write nothing. */
     readonly dryRun: boolean;
+    /**
+     * A node already in the cluster, to join through.
+     *
+     * Publishing writes to a collection, and a collection lives on the mesh — so this command joins
+     * as a **temporary node** rather than opening a database. That is the same thing `mesh stats`
+     * does, and it matters for a reason beyond convenience: writing rows directly would be a second
+     * path into the catalog, one that skips the immutability check `catalog.publish` exists to
+     * enforce.
+     */
+    readonly bootstrap: readonly string[];
+    /** How long to wait for the catalog to appear before giving up. */
+    readonly timeoutMs: number;
 }
 
 export function parseArgs(argv: readonly string[]): PublishArgs {
@@ -44,11 +56,17 @@ export function parseArgs(argv: readonly string[]): PublishArgs {
         return at === -1 ? undefined : argv[at + 1];
     };
 
+    const bootstrap = value('--bootstrap') ?? process.env['MESH_BOOTSTRAP'];
+
     return {
         descriptor: value('--descriptor') ?? 'mesh.json',
         publisher: value('--publisher'),
         repository: value('--repository'),
         dryRun: argv.includes('--dry-run'),
+        bootstrap: bootstrap === undefined
+            ? []
+            : bootstrap.split(',').map((node) => node.trim()).filter((node) => node !== ''),
+        timeoutMs: Number(value('--timeout') ?? '10000'),
     };
 }
 
@@ -145,12 +163,100 @@ export async function run_(argv: readonly string[]): Promise<number> {
 
     if (args.dryRun) return 0;
 
-    // Publishing needs a broker: `catalog.publish` is a contract, not a local function, and it is
-    // the collection that enforces version immutability. A CLI that wrote rows directly would be a
-    // second path into the catalog and would not enforce it.
-    process.stderr.write(
-        '\nThis prints what would be published. Writing it needs a broker connection, which this ' +
-        'command does not open yet — call catalog.publish with the values above.\n',
-    );
+    if (args.bootstrap.length === 0) {
+        process.stderr.write(
+            '\nNo cluster to publish to. Pass --bootstrap ws://host:port (or set MESH_BOOTSTRAP), '
+            + 'or --dry-run to see what would be published.\n',
+        );
+        return 1;
+    }
+
+    const cluster = await join(args);
+
+    try {
+        for (const part of descriptor.parts) {
+            const version = versionFrom(part, commit, descriptor.kernel);
+
+            const published = await cluster.call<{ existed: boolean; versionId: string }>(
+                'catalog.publish',
+                {
+                    name: part.id,
+                    kind: part.kind,
+                    repository,
+                    publisher: args.publisher,
+                    version: version.version,
+                    commit: version.commit,
+                    entry: version.entry,
+                    ...(version.kernel === undefined ? {} : { kernel: version.kernel }),
+                    requires: version.requires,
+                    capabilities: {
+                        needs: [],
+                        provides: [],
+                    },
+                },
+            );
+
+            process.stdout.write(published.existed
+                ? `  ${part.id}@${part.version} already published\n`
+                : `  ${part.id}@${part.version} published\n`);
+        }
+    } catch (error) {
+        // Named rather than swallowed: the most likely failure is version immutability refusing a
+        // republish from a different commit, and that message says which two commits disagree.
+        process.stderr.write(`\n${error instanceof Error ? error.message : String(error)}\n`);
+        return 1;
+    } finally {
+        await cluster.stop();
+    }
+
     return 0;
+}
+
+/**
+ * Join the cluster as a temporary node.
+ *
+ * The same shape `mesh stats` uses: a node with no database and no modules of its own, which
+ * discovers the cluster, makes its calls, and leaves. It is not a client of the catalog so much as a
+ * peer that happens to be short-lived — which is what lets `catalog.publish` be an ordinary contract
+ * rather than something with a second, CLI-shaped entrance.
+ */
+async function join(args: PublishArgs): Promise<{
+    call<T>(tool: string, params: unknown): Promise<T>;
+    stop(): Promise<void>;
+}> {
+    const { BrokerModule, JSONSerializer, MeshApp, NetworkModule, RegistryModule } =
+        await import('@flybyme/mesh');
+    // The only piece that is node-specific: a WebSocket that dials out. Everything else is the same
+    // framework a browser would use, which is why it lives behind a separate entry point.
+    const { WSTransport } = await import('@flybyme/mesh/node');
+
+    const app = new MeshApp({ nodeID: `publish-${Math.random().toString(36).slice(2, 7)}` });
+
+    app.use(new RegistryModule());
+    app.use(new NetworkModule({
+        // Port 0: this node is dialling out and nothing dials it.
+        port: 0,
+        transports: [new WSTransport(new JSONSerializer(), 0)],
+        bootstrapNodes: [...args.bootstrap],
+    }));
+    app.use(new BrokerModule());
+    await app.start();
+
+    // Discovery is not instant, and a call made before the catalog is known fails as "no such tool"
+    // — which reads as a broken cluster rather than as one this node has not met yet.
+    const deadline = Date.now() + args.timeoutMs;
+    const registry = app as unknown as { registry: { waitForTool?(tool: string, ms: number): Promise<unknown> } };
+
+    if (typeof registry.registry.waitForTool === 'function') {
+        await registry.registry.waitForTool('catalog.publish', args.timeoutMs);
+    } else {
+        while (Date.now() < deadline) await new Promise((done) => setTimeout(done, 100));
+    }
+
+    return {
+        call: <T,>(tool: string, params: unknown): Promise<T> =>
+            (app as unknown as { call(t: string, p: unknown, o?: unknown): Promise<T> })
+                .call(tool, params, { meta: { user: { id: 'cli', tenant_id: args.publisher ?? '' } } }),
+        stop: () => app.stop(),
+    };
 }
