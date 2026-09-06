@@ -181,9 +181,12 @@ Nothing resolves until this exists. Every version a site names is a row here.
       same domain, its own class, an in-memory projection kept fresh by **events for latency and a
       `resync` tool for correctness**, because the mesh delivers at-most-once. Third time this shape
       has been the answer. **L** · ⛔ A1, A2, C1
-- [ ] **C4 The edge registry.** One row per running edge: id and **url**. Not liveness — the mesh
-      already knows which nodes are up, and a second heartbeat beside it is two sources of truth that
-      disagree during exactly the incident where it matters. **S** · ⛔ C3
+- [x] **C4 The edge registry.** *(built 2026-09-06)* One row per running edge: id and **url**. Not
+      liveness — the mesh already knows which nodes are up, and a second heartbeat beside it is two
+      sources of truth that disagree during exactly the incident where it matters.
+      The cdn registers itself on start and removes itself on clean shutdown; an edge that dies
+      without removing its row is discovered by C5 trying to fetch and failing. Unscoped and not
+      exposed: internal infrastructure for peer blob sync. **S** · ⛔ C3
 - [ ] **C5 ★ Artifact sync between edges.** The hard one. An edge needs digest D and does not have
       it: find a peer that does, fetch over **HTTP, not the broker** — a kernel bundle is megabytes
       and the broker is for control messages. Announce at **artifact** granularity, fetch at **blob**

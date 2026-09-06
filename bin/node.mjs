@@ -33,6 +33,7 @@ const flag = (name, fallback) => {
 
 const wsPort = Number(flag('ws', '4001'));
 const cdnPort = Number(flag('cdn', '8080'));
+const cdnUrl = flag('cdn-url', process.env.CDN_URL ?? `http://127.0.0.1:${String(cdnPort)}`);
 const apiPort = Number(flag('api', '5005'));
 const mongo = flag('mongo', process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
 const dbName = flag('db', 'mesh-serve');
@@ -57,14 +58,14 @@ await app.start();
 // unawaited, so a module registered earlier may never be mounted.
 await app.registerModule(new CatalogService());
 await app.registerModule(new BuilderService({ blobRoot }));
-await app.registerModule(new CdnService({ port: cdnPort, blobRoot }));
+await app.registerModule(new CdnService({ port: cdnPort, url: cdnUrl, blobRoot }));
 await app.registerModule(new ApiService({ port: apiPort }));
 await app.registerModule(createIdentityModule());
 
 process.stdout.write(
     `\nmesh-serve is up\n` +
     `  mesh      ws://127.0.0.1:${String(wsPort)}\n` +
-    `  cdn       http://127.0.0.1:${String(cdnPort)}\n` +
+    `  cdn       ${cdnUrl}\n` +
     `  api       http://127.0.0.1:${String(apiPort)}\n` +
     `  mongo     ${mongo}/${dbName}\n` +
     `  artifacts ${blobRoot}\n\n` +

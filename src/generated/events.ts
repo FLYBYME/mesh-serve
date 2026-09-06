@@ -5,7 +5,8 @@ import * as Contract_1 from '../builder/contracts/artifact.contract.js';
 import * as Contract_2 from '../catalog/contracts/part.contract.js';
 import * as Contract_3 from '../cdn/contracts/release.contract.js';
 import * as Contract_4 from '../cdn/contracts/site.contract.js';
-import * as Contract_5 from '../identity/contracts/identity.contract.js';
+import * as Contract_5 from '../cdn/contracts/edge.contract.js';
+import * as Contract_6 from '../identity/contracts/identity.contract.js';
 
 declare global {
     interface EventRegistry {
@@ -25,6 +26,9 @@ declare global {
         'partVersion.created': z.infer<typeof Contract_2.partVersionCrud['create']['outputSchema']>;
         'partVersion.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_2.partVersionCrud['update']['outputSchema']> };
         'partVersion.deleted': { id: string };
+        'edge.created': z.infer<typeof Contract_5.edgeCrud['create']['outputSchema']>;
+        'edge.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_5.edgeCrud['update']['outputSchema']> };
+        'edge.deleted': { id: string };
         'release.created': z.infer<typeof Contract_3.releaseCrud['create']['outputSchema']>;
         'release.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_3.releaseCrud['update']['outputSchema']> };
         'release.deleted': { id: string };

@@ -24,6 +24,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { BlobStore } from '../builder/blobs.js';
 import { fileBlobStore } from '../builder/blobs.js';
 import type { Artifact } from '../builder/schema/artifact.js';
+import { edgeCrud, type Edge } from './contracts/edge.contract.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
@@ -44,6 +45,8 @@ export interface CdnServiceOptions {
     /** `0` picks one, which is what a test wants. */
     readonly port?: number;
     readonly host?: string;
+    /** The advertised URL where peers can reach this node over HTTP (e.g. for C5 blob sync). */
+    readonly url?: string;
     /** Which tenant this node may serve, if it is dedicated to one. */
     readonly tenantId?: string;
     /** Where artifact bytes are cached on this node's disk. */
@@ -72,6 +75,8 @@ export class CdnService extends ServiceModule {
     /** The bound server, so a test can address it without guessing a port. */
     public listener: Server | undefined;
     public port: number | undefined;
+    public url: string | undefined;
+    public edgeId: string | undefined;
 
     private broker: IServiceBroker | undefined;
     private database: { repo(schema: unknown, domain: string): SiteRepo } | undefined;
@@ -97,6 +102,7 @@ export class CdnService extends ServiceModule {
 
         this.mountCrud(siteCrud);
         this.mountCrud(releaseCrud);
+        this.mountCrud(edgeCrud);
 
         this.mountTool(composeContract, cdn_compose);
         this.mountTool(deployContract, cdn_deploy);
@@ -120,11 +126,26 @@ export class CdnService extends ServiceModule {
         this.listener = await this.listen(this.options.port ?? 0, this.options.host ?? '0.0.0.0');
         const address = this.listener.address();
         this.port = typeof address === 'object' && address !== null ? address.port : this.options.port;
+        this.url = this.options.url ?? `http://127.0.0.1:${String(this.port)}`;
 
-        broker.logger.info(`[cdn] serving on ${String(this.port)}, artifacts in ${root}`);
+        broker.logger.info(`[cdn] serving on ${String(this.port)}, url ${this.url}, artifacts in ${root}`);
+
+        const registered = await broker.call('edge.create', { url: this.url });
+        this.edgeId = registered.id;
     }
 
     async onStop(): Promise<void> {
+        const edgeId = this.edgeId;
+        this.edgeId = undefined;
+
+        if (this.broker !== undefined && edgeId !== undefined) {
+            try {
+                await this.broker.call('edge.delete', { id: edgeId });
+            } catch {
+                // If shutting down or database disconnected, don't let error block port closure.
+            }
+        }
+
         const open = this.listener;
         this.listener = undefined;
         if (open === undefined) return;

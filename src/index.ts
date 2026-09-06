@@ -24,6 +24,7 @@ export { CdnService } from './cdn/cdn.service.js';
 export * from './api/contracts/api.contract.js';
 export * from './builder/contracts/artifact.contract.js';
 export * from './catalog/contracts/part.contract.js';
+export * from './cdn/contracts/edge.contract.js';
 export * from './cdn/contracts/release.contract.js';
 export * from './cdn/contracts/site.contract.js';
 export * from './identity/contracts/identity.contract.js';
@@ -34,6 +35,7 @@ export * from './builder/schema/artifact.js';
 export * from './builder/schema/build.js';
 export * from './builder/schema/descriptor.js';
 export * from './catalog/schema/part.js';
+export * from './cdn/schema/edge.js';
 export * from './cdn/schema/site.js';
 
 // ---------------------------------------------------------------------------- the pure work
