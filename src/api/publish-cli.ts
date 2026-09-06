@@ -173,11 +173,36 @@ export async function run_(argv: readonly string[]): Promise<number> {
 
     const cluster = await join(args);
 
+    /**
+     * **One part's outcome must not decide the others'**, and it used to.
+     *
+     * This loop was wrapped in a single try/catch that returned on the first throw, which is wrong
+     * for the case the `parts` array exists to serve. In a repository of several parts, changing one
+     * of them means every *other* part is now at a commit later than the one it was published from
+     * — and `catalog.publish` refuses that, correctly, because a version is immutable.
+     *
+     * So publishing a repository of five parts after editing one of them aborted at the first
+     * unchanged part and never reached the rest. Observed twice on 2026-09-06: `whoami` published,
+     * `clock` refused, and `notes`, `theme` and `palette` were never attempted. The workaround was
+     * hand-written partial descriptors, which is the sort of thing nobody does twice before deciding
+     * multi-part repositories are more trouble than they are worth.
+     *
+     * The invariant stays where it belongs — in the contract, which still refuses. What changes is
+     * that the CLI treats *this part is unchanged and already published* as an outcome to report
+     * rather than a reason to stop. The exit code still says something was skipped, because a
+     * forgotten version bump is worth noticing in CI; it just no longer hides the four parts behind
+     * it.
+     */
+    const skipped: string[] = [];
+    let failed: Error | undefined;
+
     try {
         for (const part of descriptor.parts) {
             const version = versionFrom(part, commit, descriptor.kernel);
 
-            const published = await cluster.call<{ existed: boolean; versionId: string }>(
+            let published: { existed: boolean; versionId: string };
+            try {
+                published = await cluster.call<{ existed: boolean; versionId: string }>(
                 'catalog.publish',
                 {
                     name: part.id,
@@ -194,19 +219,50 @@ export async function run_(argv: readonly string[]): Promise<number> {
                         provides: [],
                     },
                 },
-            );
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+
+                // The one failure that is ordinary in a multi-part repository: this part did not
+                // change, its version was not bumped, and the commit moved because a *sibling*
+                // changed. Report it and carry on to the parts that did change.
+                if (/immutable|already published from commit/i.test(message)) {
+                    skipped.push(`${part.id}@${part.version}`);
+                    process.stdout.write(
+                        `  ${part.id}@${part.version} unchanged — already published from an ` +
+                        `earlier commit, not republished\n`,
+                    );
+                    continue;
+                }
+
+                // Anything else is a real failure and stops the run: a publisher mismatch or a
+                // changed `kind` means the descriptor disagrees with the catalog about what this
+                // part is, and publishing the rest on top of that would be building on a mistake.
+                failed = error instanceof Error ? error : new Error(message);
+                break;
+            }
 
             process.stdout.write(published.existed
                 ? `  ${part.id}@${part.version} already published\n`
                 : `  ${part.id}@${part.version} published\n`);
         }
-    } catch (error) {
-        // Named rather than swallowed: the most likely failure is version immutability refusing a
-        // republish from a different commit, and that message says which two commits disagree.
-        process.stderr.write(`\n${error instanceof Error ? error.message : String(error)}\n`);
-        return 1;
     } finally {
         await cluster.stop();
+    }
+
+    if (failed !== undefined) {
+        process.stderr.write(`\n${failed.message}\n`);
+        return 1;
+    }
+
+    if (skipped.length > 0) {
+        process.stderr.write(
+            `\n${String(skipped.length)} part(s) were not published because their version already ` +
+            `exists at an earlier commit: ${skipped.join(', ')}.\n` +
+            `If any of them changed, bump its version in mesh.json — a published version is ` +
+            `immutable, so the catalog still builds them from the commit they were published at.\n`,
+        );
+        return 2;
     }
 
     return 0;
