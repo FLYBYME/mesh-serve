@@ -31,6 +31,7 @@ import { globalContractRegistry, MeshError, ServiceModule, z, type IServiceBroke
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import { canonical, digestOf } from '../builder/methods/content.js';
+import type { Release } from '../cdn/contracts/release.contract.js';
 import type { Site } from '../cdn/contracts/site.contract.js';
 import { hostOf } from '../cdn/methods/hostname.js';
 import { describeContract } from './contracts/api.contract.js';
@@ -90,6 +91,7 @@ export class ApiService extends ServiceModule {
      * value.
      */
     private readonly sites = new Map<string, { site: Site | undefined; expires: number }>();
+    private readonly releases = new Map<string, Release>();
     private readonly tables = new Map<string, RouteTable>();
     private readonly eventTables = new Map<string, EventTable>();
 
@@ -111,6 +113,11 @@ export class ApiService extends ServiceModule {
 
         this.mountEventHandler('cdn.site_deployed', (payload) => {
             this.sites.delete(payload.host);
+        });
+
+        this.mountEventHandler('site.updated', (payload) => {
+            const host = payload.item?.host;
+            if (host !== undefined) this.sites.delete(host);
         });
     }
 
@@ -205,13 +212,23 @@ export class ApiService extends ServiceModule {
                 });
             }
 
+            let release: Release | undefined;
+            if (site.releaseHash !== undefined) {
+                release = await this.releaseFor(site.releaseHash);
+                if (release === undefined) {
+                    return send(res, 503, this.cors(origin, site), {
+                        error: 'RELEASE_UNAVAILABLE', message: 'That release is not available from this node yet.',
+                    });
+                }
+            }
+
             const inner = stripBase(path ?? '/');
 
             if (inner === EVENTS_PATH) {
                 return await this.subscribe(req, res, site, origin);
             }
 
-            const table = await this.tableFor(site);
+            const table = await this.tableFor(site, release);
             const found = matchRoute(table, req.method ?? 'GET', inner);
 
             const headers = { ...this.cors(origin, site), [EXPOSURE_HEADER]: table.exposure };
@@ -526,18 +543,39 @@ export class ApiService extends ServiceModule {
         return site;
     }
 
+    private async releaseFor(hash: string): Promise<Release | undefined> {
+        const held = this.releases.get(hash);
+        if (held !== undefined) return held;
+
+        const found = await this.call<Release | null>('release.find_one', { query: { hash } })
+            .catch(() => null);
+        if (found !== null && found !== undefined) this.releases.set(hash, found);
+        return found ?? undefined;
+    }
+
     /**
      * The route table for a site, derived and cached on the record it came from.
      *
-     * Keyed on `updatedAt`, so editing a site's exposure produces a different key rather than a stale
-     * table — the invalidation is correct by construction rather than by remembering to clear.
+     * Keyed on `${site.id}:${release.hash}:${site.updatedAt}` — matching the cdn's page cache key
+     * and invalidation. A deploy or record edit produces a different key rather than a stale table.
      */
-    private async tableFor(site: Site): Promise<RouteTable> {
-        const key = `${site.id}:${String(site.updatedAt.getTime())}`;
+    private async tableFor(site: Site, release?: Release): Promise<RouteTable> {
+        let activeRelease = release;
+        if (activeRelease === undefined && site.releaseHash !== undefined) {
+            activeRelease = await this.releaseFor(site.releaseHash);
+        }
+
+        const releaseHash = activeRelease?.hash ?? site.releaseHash ?? '';
+        const key = `${site.id}:${releaseHash}:${site.updatedAt?.toISOString() ?? ''}`;
         const held = this.tables.get(key);
         if (held !== undefined) return held;
 
-        const built = routeTable(site.mesh, this.lookup(), (value) => digestOf(canonical(value)));
+        const built = routeTable(
+            site.mesh,
+            this.lookup(),
+            (value) => digestOf(canonical(value)),
+            activeRelease?.requires,
+        );
         if (built.unknown.length > 0) {
             // Reported and served around. A site naming one contract nothing provides should serve
             // its other twenty rather than nothing.
@@ -563,7 +601,7 @@ export class ApiService extends ServiceModule {
      * the right place to read from rather than a coincidence.
      */
     private lookup(): ContractLookup {
-        return (key) => globalContractRegistry.get(key) as ReturnType<ContractLookup>;
+        return (key) => globalContractRegistry.get(key);
     }
 
     private async call<T>(tool: string, params: unknown, options?: unknown): Promise<T> {

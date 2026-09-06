@@ -13,6 +13,8 @@ import type { ApiService } from '../api.service.js';
 import { BASE_PATH } from '../api.service.js';
 import { canonical, digestOf } from '../../builder/methods/content.js';
 import { normalizeHostname } from '../../cdn/methods/hostname.js';
+import type { Release } from '../../cdn/contracts/release.contract.js';
+import type { Site } from '../../cdn/contracts/site.contract.js';
 import { describeContract } from '../contracts/api.contract.js';
 import { routeTable, type ContractLookup } from '../methods/routes.js';
 
@@ -26,14 +28,21 @@ export async function api_describe(
 ): Promise<Output> {
     const host = normalizeHostname(input.host);
 
-    const site = await ctx.call('site.find_one', { query: { host } });
-    if (site === null || site === undefined) {
-        throw new ClientError(`No site is configured for ${host}.`, 'site_not_found', 404);
+    const site = await ctx.call('cdn.resolve_site', { host })
+        .catch(() => {
+            throw new ClientError(`No site is configured for ${host}.`, 'site_not_found', 404);
+        });
+
+    let release: Release | undefined;
+    if (site.releaseHash !== undefined) {
+        const found = await ctx.call('release.find_one', { query: { hash: site.releaseHash } })
+            .catch(() => null);
+        if (found !== null && found !== undefined) release = found;
     }
 
-    const lookup: ContractLookup = (key) => globalContractRegistry.get(key) as ReturnType<ContractLookup>;
+    const lookup: ContractLookup = (key) => globalContractRegistry.get(key);
 
-    const table = routeTable(site.mesh, lookup, (value) => digestOf(canonical(value)));
+    const table = routeTable(site.mesh, lookup, (value) => digestOf(canonical(value)), release?.requires);
 
     return {
         host,
