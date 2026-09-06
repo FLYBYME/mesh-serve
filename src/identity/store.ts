@@ -311,44 +311,54 @@ export function memoryStore(): IdentityStore {
 // ---------------------------------------------------------------------------- mongo backed
 
 interface UserDoc {
-    _id: string;
+    _id: string | ObjectId;
     email: string;
     displayName: string;
     passwordHash?: string;
     roles: string[];
     suspendedAt?: number;
     suspendedReason?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface OrganizationDoc {
-    _id: string;
+    _id: string | ObjectId;
     slug: string;
     name: string;
     ownerId: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface MembershipDoc {
-    _id: string;
+    _id: string | ObjectId;
     userId: string;
     organizationId: string;
     roleKey: string;
     invitedBy?: string;
     joinedAt: number;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface RoleDoc {
-    _id: string;
+    _id: string | ObjectId;
     key: string;
     name: string;
     scope: RoleScope;
     description?: string;
     builtin: boolean;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface GrantDoc {
     roleKey: string;
     contract: string;
     description?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface TicketDoc {
@@ -362,6 +372,8 @@ interface TicketDoc {
     via: string;
     revokedAt?: number;
     revokedReason?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 interface RevocationDoc {
@@ -388,6 +400,7 @@ interface ApiTokenDoc {
     lastUsedAt?: number;
     expiresAt?: number;
     revokedAt?: number;
+    updatedAt?: Date;
 }
 
 /**
@@ -463,6 +476,16 @@ export function mongoStore(database: Database | Db): IdentityStore {
 
     const id = (prefix: string): string => `${prefix}-${new ObjectId().toHexString()}`;
 
+    function byId(key: string) {
+        return ObjectId.isValid(key)
+            ? { $or: [{ _id: key }, { _id: new ObjectId(key) }] }
+            : { _id: key };
+    }
+
+    function toId(idVal: string | ObjectId): string {
+        return typeof idVal === 'string' ? idVal : idVal.toHexString();
+    }
+
     async function fetchRole(key: string): Promise<Role | undefined> {
         await ensureReady();
         const cols = getCollections();
@@ -490,6 +513,7 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 }
             }
             const key = id('u');
+            const now = new Date();
             const cols = getCollections();
             await cols.users.insertOne({
                 _id: key,
@@ -499,6 +523,8 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 roles: [...user.roles],
                 ...(user.suspendedAt !== undefined ? { suspendedAt: user.suspendedAt } : {}),
                 ...(user.suspendedReason !== undefined ? { suspendedReason: user.suspendedReason } : {}),
+                createdAt: now,
+                updatedAt: now,
             });
             return { id: key, value: user };
         },
@@ -508,21 +534,21 @@ export function mongoStore(database: Database | Db): IdentityStore {
             const cols = getCollections();
             const doc = await cols.users.findOne({ email });
             if (doc === null) return undefined;
-            return { id: doc._id, value: UserSchema.parse(doc) };
+            return { id: toId(doc._id), value: UserSchema.parse(doc) };
         },
 
         async getUser(key) {
             await ensureReady();
             const cols = getCollections();
-            const doc = await cols.users.findOne({ _id: key });
+            const doc = await cols.users.findOne(byId(key));
             if (doc === null) return undefined;
-            return { id: doc._id, value: UserSchema.parse(doc) };
+            return { id: toId(doc._id), value: UserSchema.parse(doc) };
         },
 
         async updateUser(key, patch) {
             await ensureReady();
             const cols = getCollections();
-            const existing = await cols.users.findOne({ _id: key });
+            const existing = await cols.users.findOne(byId(key));
             if (existing === null) {
                 throw new ClientError(`User "${key}" does not exist.`, 'USER_NOT_FOUND', 404);
             }
@@ -541,18 +567,21 @@ export function mongoStore(database: Database | Db): IdentityStore {
                     }
                 }
             }
-            await cols.users.updateOne({ _id: key }, { $set: patch });
+            await cols.users.updateOne(byId(key), { $set: { ...patch, updatedAt: new Date() } });
         },
 
         async createOrganization(org) {
             await ensureReady();
             const key = id('org');
+            const now = new Date();
             const cols = getCollections();
             await cols.organizations.insertOne({
                 _id: key,
                 slug: org.slug,
                 name: org.name,
                 ownerId: org.ownerId,
+                createdAt: now,
+                updatedAt: now,
             });
             return { id: key, value: org };
         },
@@ -560,15 +589,15 @@ export function mongoStore(database: Database | Db): IdentityStore {
         async getOrganization(key) {
             await ensureReady();
             const cols = getCollections();
-            const doc = await cols.organizations.findOne({ _id: key });
+            const doc = await cols.organizations.findOne(byId(key));
             if (doc === null) return undefined;
-            return { id: doc._id, value: OrganizationSchema.parse(doc) };
+            return { id: toId(doc._id), value: OrganizationSchema.parse(doc) };
         },
 
         async transferOwnership(organizationId, currentOwnerId, newOwnerId) {
             await ensureReady();
             const cols = getCollections();
-            const org = await cols.organizations.findOne({ _id: organizationId });
+            const org = await cols.organizations.findOne(byId(organizationId));
             if (org === null) {
                 throw new ClientError(`Organization "${organizationId}" does not exist.`, 'ORG_NOT_FOUND', 404);
             }
@@ -579,26 +608,29 @@ export function mongoStore(database: Database | Db): IdentityStore {
                     403,
                 );
             }
-            const newOwner = await cols.users.findOne({ _id: newOwnerId });
+            const newOwner = await cols.users.findOne(byId(newOwnerId));
             if (newOwner === null) {
                 throw new ClientError(`User "${newOwnerId}" does not exist.`, 'USER_NOT_FOUND', 404);
             }
 
-            await cols.organizations.updateOne({ _id: organizationId }, { $set: { ownerId: newOwnerId } });
+            await cols.organizations.updateOne(byId(organizationId), { $set: { ownerId: newOwnerId, updatedAt: new Date() } });
 
             const existingMembership = await cols.memberships.findOne({
                 organizationId,
                 userId: newOwnerId,
             });
             if (existingMembership !== null) {
-                await cols.memberships.updateOne({ _id: existingMembership._id }, { $set: { roleKey: 'owner' } });
+                await cols.memberships.updateOne({ _id: existingMembership._id }, { $set: { roleKey: 'owner', updatedAt: new Date() } });
             } else {
+                const now = new Date();
                 await cols.memberships.insertOne({
                     _id: id('m'),
                     userId: newOwnerId,
                     organizationId,
                     roleKey: 'owner',
                     joinedAt: Date.now(),
+                    createdAt: now,
+                    updatedAt: now,
                 });
             }
         },
@@ -606,7 +638,7 @@ export function mongoStore(database: Database | Db): IdentityStore {
         async reownOrganization(organizationId, userId) {
             await ensureReady();
             const cols = getCollections();
-            const org = await cols.organizations.findOne({ _id: organizationId });
+            const org = await cols.organizations.findOne(byId(organizationId));
             if (org === null) {
                 throw new ClientError(`Organization "${organizationId}" does not exist.`, 'ORG_NOT_FOUND', 404);
             }
@@ -623,10 +655,10 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 userId,
             });
             if (existingMembership !== null) {
-                await cols.memberships.updateOne({ _id: existingMembership._id }, { $set: { roleKey: 'owner' } });
+                await cols.memberships.updateOne({ _id: existingMembership._id }, { $set: { roleKey: 'owner', updatedAt: new Date() } });
                 const parsed = MembershipSchema.parse(existingMembership);
                 return {
-                    id: existingMembership._id,
+                    id: toId(existingMembership._id),
                     value: {
                         userId: parsed.userId,
                         organizationId: parsed.organizationId,
@@ -644,7 +676,8 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 joinedAt: Date.now(),
             };
             const memId = id('m');
-            await cols.memberships.insertOne({ _id: memId, ...newMembership });
+            const now = new Date();
+            await cols.memberships.insertOne({ _id: memId, ...newMembership, createdAt: now, updatedAt: now });
             return { id: memId, value: newMembership };
         },
 
@@ -662,8 +695,9 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 );
             }
             const memId = id('m');
+            const now = new Date();
             const cols = getCollections();
-            await cols.memberships.insertOne({ _id: memId, ...membership });
+            await cols.memberships.insertOne({ _id: memId, ...membership, createdAt: now, updatedAt: now });
             return { id: memId, value: membership };
         },
 
@@ -694,6 +728,7 @@ export function mongoStore(database: Database | Db): IdentityStore {
         async upsertRole(role) {
             await ensureReady();
             const cols = getCollections();
+            const now = new Date();
             await cols.roles.replaceOne(
                 { key: role.key },
                 {
@@ -702,6 +737,8 @@ export function mongoStore(database: Database | Db): IdentityStore {
                     scope: role.scope,
                     ...(role.description !== undefined ? { description: role.description } : {}),
                     builtin: role.builtin,
+                    createdAt: now,
+                    updatedAt: now,
                 },
                 { upsert: true },
             );
@@ -733,16 +770,20 @@ export function mongoStore(database: Database | Db): IdentityStore {
 
         async addGrant(grant) {
             await ensureReady();
+            const now = new Date();
             const cols = getCollections();
             await cols.grants.insertOne({
                 roleKey: grant.roleKey,
                 contract: grant.contract,
                 ...(grant.description !== undefined ? { description: grant.description } : {}),
+                createdAt: now,
+                updatedAt: now,
             });
         },
 
         async createTicket(ticket) {
             await ensureReady();
+            const now = new Date();
             const cols = getCollections();
             await cols.tickets.insertOne({
                 _id: ticket.token,
@@ -755,6 +796,8 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 via: ticket.via,
                 ...(ticket.revokedAt !== undefined ? { revokedAt: ticket.revokedAt } : {}),
                 ...(ticket.revokedReason !== undefined ? { revokedReason: ticket.revokedReason } : {}),
+                createdAt: now,
+                updatedAt: now,
             });
         },
 
@@ -842,6 +885,7 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 ...(token.lastUsedAt !== undefined ? { lastUsedAt: token.lastUsedAt } : {}),
                 ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
                 ...(token.revokedAt !== undefined ? { revokedAt: token.revokedAt } : {}),
+                updatedAt: new Date(),
             });
             return { id: key, value: token };
         },
