@@ -82,6 +82,35 @@ function coerce(field: z.ZodTypeAny, value: unknown): unknown {
         return value;
     }
 
+    /**
+     * **An object in a query string is JSON, and nothing was decoding it.**
+     *
+     * Numbers, booleans and arrays were coerced; objects and records were not. That gap is not
+     * cosmetic, because the one field it hits is the one every generated `find` sends:
+     * `defineCrud`'s `query`. The client emits `GET /parts?query=%7B%7D` — which is `{}` — and the
+     * api handed the schema the literal string `"{}"`, answering:
+     *
+     *     query: Expected object, received string
+     *
+     * So **every list call from a browser failed**, on every collection, the moment F2 exposed one.
+     * Found by the first console to get past authentication — the layer above had been refusing
+     * these calls for other reasons and hiding it.
+     *
+     * Parsed leniently: a string that is not JSON is passed through unchanged so the schema rejects
+     * it with its own message. A coercion that throws would turn a bad query into a 500, and the
+     * whole point of coercing at the boundary is that a bad request is a 400 naming the field.
+     */
+    if (field instanceof z.ZodObject || field instanceof z.ZodRecord) {
+        const text = value.trim();
+        if (!text.startsWith('{') && !text.startsWith('[')) return value;
+
+        try {
+            return JSON.parse(text);
+        } catch {
+            return value;
+        }
+    }
+
     return value;
 }
 
