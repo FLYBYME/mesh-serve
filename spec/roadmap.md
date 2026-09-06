@@ -362,6 +362,26 @@ task** — each is a decision about the platform's own surface that blocks any U
       which declares `kernel: ^0.4` and depends on `@flybyme/mesh-web: 0.4.0`. `^0.4` is
       `>=0.4.0 <0.5.0`, so compose accepted an out-of-range part without a word. Add a
       `kernel_mismatch` problem, fatal. **S**
+- [ ] **F6 ★ `publish-cli` mints its own caller, and nothing checks it.** The CLI joins the cluster as
+      a **node**, and *a node must never hold a user credential* — so the generated `ToolCommands.ts`
+      passing no `meta.user`, and `site.find` refusing it, is both halves working as designed:
+
+      ```
+      $ npx mesh site find --bootstrap ws://127.0.0.1:4001
+      Error: Scoped collection "site" requires a resolved "tenantId" scope, but none was
+      provided in call context.
+      ```
+
+      `publish-cli` is the one that breaks the rule. It sends
+      `{ meta: { user: { id: 'cli', tenant_id: args.publisher } } }`, where `publisher` is a **bare
+      `--publisher` flag with no credential behind it**. So `catalog.publish`'s ownership check —
+      *"mesh-web belongs to another publisher"* — is checkable and trivially forged: anyone who can
+      reach the mesh port publishes as anyone. A node asserted a user, which is precisely the plane
+      separation that exists to make this impossible.
+      **The fix is not a flag on the other CLIs.** An operator presents a *credential* — a ticket
+      from identity — and platform-wide reads go through operator contracts gated by a cluster-scoped
+      role (F3). A `--as-tenant` option would be the `scopedBy` bypass managing.md §2 rejects, handed
+      out on the command line. **M** · ⛔ F3
 - [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
       because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
       The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
