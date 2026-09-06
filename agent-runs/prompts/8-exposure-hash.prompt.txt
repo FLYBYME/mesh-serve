@@ -1,0 +1,121 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**D4 — the exposure hash. The last item in M3.** Rated **S**; the code is small
+and the decision inside it is not.
+
+> The API reports it, the generated client carries it, a mismatch is an error
+> rather than a confusing 404 three calls later.
+>
+> *A client generated from one exposure and pointed at an API serving another is
+> a lie the compiler vouches for.*
+
+The field already exists — `release.exposure` in `src/cdn/schema/release.ts:94`,
+with that sentence in its comment. `spec/unread.md` lists it under **promises
+nothing keeps**: *"`cdn.compose` never populates it, and nothing in `src/` ever
+reads it."* Closing D4 closes that entry too.
+
+================================================================================
+THE DECISION THIS TASK IS REALLY ABOUT — READ BEFORE WRITING CODE
+================================================================================
+
+There is a contradiction sitting between two things that are each correct, and
+resolving it *is* the task. Do not code past it.
+
+**1. A release is site-independent, by design.** C1: `tenantId`, `name` and
+`composedAt` are deliberately not inputs to the release hash, because *two
+organizations composing the same set have composed the same thing.*
+
+**2. The gate is per site, as of D2.** One site may expose `domains.zone_find`
+as `public` while another requires `user`, on the same release.
+
+**So an exposure hash computed over gates cannot live on the release.** Two sites
+sharing one release at different gates would need one field to hold two values.
+`release.exposure` as currently commented — *"the exposure this release's parts
+were generated against"* — may therefore be the wrong home for it, and saying so
+is a legitimate outcome of this dispatch.
+
+The other half of the contradiction is already written down in
+`src/api/client-cli.ts:113-125`, and it is the clearest statement of the problem:
+
+> `auth: 'public'` for every entry, and it is **not** a gate being granted. A part
+> declares what it *calls*; a site declares what it *exposes and at what level*.
+> … **the exposure hash in this file is not the site's.** A site's hash is
+> computed over real gates. So a part's hash cannot be compared against what an
+> API reports, and the check has to happen at compose time, where the site's
+> grants are actually known.
+
+**There are two different hashes here and they are being called one name.**
+
+- **a shape hash** — the contracts and their request/response schemas. Identical
+  for everyone, belongs to the release, and is what actually answers *is this
+  generated client stale?*
+- **a gate hash** — what this site exposes and at what level. Per site, changes on
+  a deploy without any part changing.
+
+Decide which one D4 needs, whether both are needed, and where each lives. State it
+in the report before describing the code. If the answer is that
+`release.exposure`'s comment describes a field that cannot exist as written, say
+that plainly — a wrong field with a confident comment is exactly what
+`spec/unread.md` exists to catch, and shipping a second one would be worse than
+shipping nothing.
+
+================================================================================
+WHAT ALREADY EXISTS
+================================================================================
+
+    src/api/schema/descriptor.ts     `describeExposure` and `hash`. Line 139 and
+                                     144: entries are sorted, "so a reordered
+                                     declaration is not a change to the exposure
+                                     hash". Read how the hash is built before
+                                     changing what goes into it.
+    src/api/client-cli.ts            generates a part's descriptor; the comment
+                                     quoted above is at 113-125.
+    src/api/api.service.ts:17        "the exposure hash is derived from…" — read
+                                     what it says the API's own hash is.
+    src/cdn/tools/compose.ts         where a release is built, and where
+                                     `checkComposition` already refuses a missing
+                                     required part and reports an unused grant.
+                                     **This is the natural home for one more
+                                     check**, and it already has the vocabulary:
+                                     a *required* thing missing refuses, an
+                                     *optional* thing reports.
+    src/cdn/schema/site.ts           `site.mesh` — what a hostname exposes and at
+                                     what gate.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **A test where a client generated against one exposure meets an API serving
+  another, and the failure names the difference.** Not a 404, not a schema error
+  three calls in — an error that says which contract and what changed. That
+  assertion is D4; the rest is plumbing.
+- A test that reordering a declaration does **not** change the hash — the sorting
+  at `descriptor.ts:139` claims this and should be held to it.
+- A test that changing a *gate* changes whatever hash is supposed to notice a gate
+  change, and does not change whatever hash is supposed to be site-independent.
+- `release.exposure` either populated and read, or removed with the reasoning in
+  its place. **Not left as it is** — that is the one unacceptable outcome.
+- Every existing test passing — **322 today**. `npm run typecheck` clean, **zero
+  casts**.
+- Tick D4 in `spec/roadmap.md`, update the M3 milestone line, and update the
+  `release.exposure` row in `spec/unread.md` §1 to say what happened.
+
+**Run every command in the foreground. Commit as you go.**
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/8-exposure-hash.md`
+
+- **the shape-hash / gate-hash decision**, stated before any code is described
+- whether `release.exposure` survived, and if not what replaced it and where
+- what a mismatch actually says to the caller — write the error message out
+- whether this closes M3 in the sense of the milestone's own sentence: *a site
+  exposes contracts and the API refuses what it should*
+- anything for `spec/unread.md`
