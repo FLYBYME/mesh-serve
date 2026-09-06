@@ -28,7 +28,6 @@ import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
 import { resolveSiteContract, siteCrud, type Site } from './contracts/site.contract.js';
-import { SiteSchema } from './schema/site.js';
 import { assertTenant, hostOf, TenantMismatch } from './methods/hostname.js';
 import { generatePage } from './methods/page.js';
 import { headersFor, pathOf, resolveFile, resolveRequest } from './methods/resolve.js';
@@ -138,7 +137,11 @@ export class CdnService extends ServiceModule {
      */
     siteRepo(): SiteRepo {
         if (this.database === undefined) throw new Error('The cdn is not started.');
-        return this.database.repo(SiteSchema, 'site');
+        // **`siteCrud.outputSchema`, not `SiteSchema`.** The repository parses what it reads with the
+        // schema it is given, and zod strips what a schema does not declare — so the write shape
+        // silently removed `id`, `createdAt` and `updatedAt` from every document, and this tool then
+        // failed its own output contract. The stored shape is the one a reader wants.
+        return this.database.repo(siteCrud.outputSchema, 'site');
     }
 
     private listen(port: number, host: string): Promise<Server> {
