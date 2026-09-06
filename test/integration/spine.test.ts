@@ -476,6 +476,34 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         // Stylesheets are fetchable from disk.
         const kernelCss = await get(port, `/_a/${slugOf(composed.kernel.digest)}/index.css`, 'fixture.test');
         expect(kernelCss.status).toBe(200);
+
+        /**
+         * **Editing the site record invalidates the cached page.**
+         *
+         * The cache was keyed `(siteId, releaseHash)`, and the module header called that *"the key
+         * that makes invalidation correct by construction"*. It was not: a page carries `api`,
+         * `title`, `description`, `canonical` and `theme` from the *site record*, and none of those
+         * move `releaseHash` — so editing one left the node serving the old page indefinitely, with
+         * no TTL and no event.
+         *
+         * Found by pointing a console at a new api URL: the record was written, the page kept the
+         * old one, and every call went to a hostname that resolved to a different site — which
+         * refused the origin and answered 404 for routes it does not expose. Three plausible bugs,
+         * one stale string.
+         */
+        expect(page.body).toContain('data-api="http://127.0.0.1:5005"');
+
+        const site = await world.call<{ id: string }>('site.find_one', {
+            query: { host: 'fixture.test' },
+        });
+        await world.call('site.update', { id: site.id, api: 'http://elsewhere.test:5005' });
+
+        const again = await get(port, '/', 'fixture.test');
+        expect(again.body).toContain('data-api="http://elsewhere.test:5005"');
+        expect(again.body).not.toContain('data-api="http://127.0.0.1:5005"');
+
+        // Put it back for whatever runs after this.
+        await world.call('site.update', { id: site.id, api: 'http://127.0.0.1:5005' });
         expect(kernelCss.headers['content-type']).toBe('text/css; charset=utf-8');
         expect(kernelCss.body).toContain('--surface');
 
