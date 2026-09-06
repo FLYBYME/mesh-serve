@@ -61,6 +61,38 @@ confirmed by reading the call site.
 `roles.builtin` and `principals.ownerId` are the two new ones, and both are the same shape as `Role.scope`:
 a field added to close a specific named incident, holding the right value, consulted by nothing.
 
+### `flatten()` is the server-side-rendering path, and no server imports it
+
+The first entry here that is not a field and not in this repository, which is why it is written out
+rather than tabled. `mesh-web/src/description/flatten.ts`, first paragraph of its header:
+
+> This is the test renderer, and it is also the **server-side-rendering path**: it resolves every
+> reactive value once and expands control flow, producing a plain tree with no functions in it.
+
+It is exported from `src/description/index.ts` and is genuinely load-bearing in mesh-web's own
+tests — a full render with no DOM and no jsdom is the property the description layer was built for,
+and it works.
+
+**No server reads it.** `mesh-serve` does not depend on `@flybyme/mesh-web` at all, so the cdn cannot
+call it even in principle, and `src/cdn/methods/page.ts:164` emits an empty `<body>` on every page of
+every site.
+
+The claim is not *SSR is unbuilt* — that is an ordinary open item. It is that a comment states a
+capability as a present fact (*"it **is** the server-side-rendering path"*), and a reader who trusts
+it concludes the server can render. The second half of the sentence is true and the first half is
+aspiration, with nothing distinguishing them.
+
+**The reader that would close it turns out not to be a small change**, which is itself the finding: a
+release pins a *kernel artifact*, and different sites on one edge run different kernel versions, so a
+cdn with a bundled kernel would render every site with the wrong one. Written up in
+`mesh-web/spec/prerender.md`.
+
+**Prediction, in the spirit of the entries above.** The first attempt at SSR will bundle a kernel
+into mesh-serve, because that is the one-line version, and it will pass its own tests — a test
+composes one release and never notices that the kernel it rendered with is not the kernel the release
+names. The symptom will be server-rendered and client-rendered markup disagreeing on a site running
+an older kernel, and it will be blamed on hydration.
+
 ## 2. Read only by their own tests — **the sharpest category**
 
 mesh-web's `Manifest` has nine fields. **One is consumed by production code.**
