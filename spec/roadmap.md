@@ -203,6 +203,39 @@ Nothing resolves until this exists. Every version a site names is a row here.
       that edits `mesh.json` changes nothing until somebody imports it. Those three are what make a
       push-triggered build safe rather than alarming, and each was a separate day's work. **L**
 
+- [ ] **B10 ★ Drivers: a part chosen by configuration, not by being installed.** A part is a
+      `kernel`, an `application` or an `extension`, and the question is whether there is a fourth
+      kind. There is a real distinction and it is not "an extension that talks to the outside":
+      | | how it is selected | how many | who declares the interface |
+      | --- | --- | --- | --- |
+      | extension | by being in the release | one that provides each token | itself |
+      | **driver** | **by a record naming it** | **one of many that could** | **somebody else** |
+      An `auth` Extension provides `AUTH` and *is* the definition of what that means; installing it
+      is the decision. A driver implements an interface it did not define, several could implement
+      the same one, and which is used is a **deployment's** choice written in a record — the same
+      shape as `site.releaseHash`: the code exists independently and something points at it.
+      **The evidence it is already real:** mesh-serve has four, hardcoded. `Fetcher`
+      (`methods/source.ts:23`), `CredentialFor` (`:41`), `BlobStore` (`blobs.ts:28`), `IdentityStore`
+      (`store.ts`). Each is an interface with exactly one implementation, passed to a constructor in
+      code — so swapping the blob store for S3, or the fetcher for a forge that is not git, is a
+      code change and a redeploy rather than a record. That is the thing a driver kind would fix,
+      and it is *also* the shape surfdns needs at the product level: a DNS platform talks to
+      registrars and providers that differ per zone, which is one interface and many
+      implementations chosen per record. This is the case, not a hypothetical.
+      **What it would need**, and each is a real decision rather than a line of code:
+      - **an interface declared as data**, so `catalog.resolve` can answer *which parts implement
+        this*. Today an interface is a TypeScript type, which the catalog cannot see.
+      - **binding**, and this is the hard half: what record names the driver, and at what
+        granularity. Per node? Per site? Per zone? `node.services` is the nearest existing thing.
+      - **capability**, because a driver reaches something the platform does not otherwise touch —
+        a credential, a network, a disk. The extension model has `needs(...)`; a driver holding a
+        registrar's API key is a bigger claim than any part makes today.
+      **Do not build this yet.** It is the right shape and none of it is urgent: four hardcoded
+      implementations is not painful at four, and the version below is one interface's worth of
+      value at a whole part kind's worth of cost. Revisit when the *second* implementation of any of
+      those four is actually wanted — that is the moment the abstraction is paid for rather than
+      guessed at. **L**
+
 ## Track C — Releases and the cdn edge
 
 - [x] **C1 ★ The `release` collection.** *(built 2026-09-06)* A kernel and N parts at exact versions,
