@@ -20,8 +20,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -39,7 +38,7 @@ export interface PublishArgs {
     readonly repository: string | undefined;
     /** Print what would be published and write nothing. */
     readonly dryRun: boolean;
-    /** API token for machine authentication. Read from --token, MESH_TOKEN, or ~/.mesh/token. */
+    /** API token for machine authentication. Read from --token, MESH_TOKEN, or MESH_API_TOKEN. */
     readonly token: string | undefined;
     /**
      * A node already in the cluster, to join through.
@@ -66,17 +65,6 @@ export function parseArgs(argv: readonly string[]): PublishArgs {
     let token = value('--token') ?? process.env['MESH_TOKEN'] ?? process.env['MESH_API_TOKEN'];
     if (token !== undefined && token.trim() === '') {
         token = undefined;
-    }
-    if (token === undefined) {
-        try {
-            const tokenPath = resolve(homedir(), '.mesh', 'token');
-            if (existsSync(tokenPath)) {
-                const content = readFileSync(tokenPath, 'utf8').trim();
-                if (content !== '') token = content;
-            }
-        } catch {
-            // Ignore unreadable or missing token file
-        }
     }
 
     return {
@@ -157,7 +145,7 @@ export async function run_(argv: readonly string[]): Promise<number> {
     if (!args.dryRun && args.token === undefined) {
         process.stderr.write(
             'No credential. Publishing requires an API token. ' +
-            'Pass --token <token>, set MESH_TOKEN / MESH_API_TOKEN, or write ~/.mesh/token.\n',
+            'Pass --token <token> or set MESH_TOKEN.\n',
         );
         return 1;
     }
@@ -191,7 +179,7 @@ export async function run_(argv: readonly string[]): Promise<number> {
     if (token === undefined) {
         process.stderr.write(
             'No credential. Publishing requires an API token. ' +
-            'Pass --token <token>, set MESH_TOKEN / MESH_API_TOKEN, or write ~/.mesh/token.\n',
+            'Pass --token <token> or set MESH_TOKEN.\n',
         );
         return 1;
     }
