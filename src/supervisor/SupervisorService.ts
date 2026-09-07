@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ServiceModule, defineContract, defaultPrint } from '@flybyme/mesh';
-import type { Supervisor, SupervisorServiceStatus, SupervisorTestRunResult } from './Supervisor.js';
+import { SupervisorServiceEntrySchema, type Supervisor, type SupervisorServiceStatus, type SupervisorTestRunResult } from './Supervisor.js';
 
 export const supervisorStatusSchema = z.object({
     name: z.string(),
@@ -71,6 +71,17 @@ export const runTestsContract = defineContract({
     print: defaultPrint,
 });
 
+export const serviceRegisterContract = defineContract({
+    domain: 'supervisor',
+    action: 'service_register',
+    description: 'Registers one service entry in this Supervisor process dynamically at runtime.',
+    inputSchema: SupervisorServiceEntrySchema,
+    outputSchema: supervisorStatusSchema,
+    rest: { method: 'POST', path: '/supervisor/service_register' },
+    destructive: true,
+    print: defaultPrint,
+});
+
 /**
  * SupervisorService — exposes the Supervisor's control surface as real mesh
  * contracts, callable the same way anything else in the mesh is called.
@@ -96,6 +107,8 @@ export class SupervisorService extends ServiceModule {
         }));
 
         this.mountTool(runTestsContract, async (input) => supervisor.runTests(input.name, input.testName));
+
+        this.mountTool(serviceRegisterContract, async (input) => supervisor.registerEntry(input));
     }
 }
 

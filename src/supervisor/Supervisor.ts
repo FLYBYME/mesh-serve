@@ -363,6 +363,61 @@ export class Supervisor {
     }
 
     /**
+     * registerEntry: registers a service entry dynamically in this Supervisor at runtime.
+     * Validates dependencies and cycle-freedom before committing the update.
+     */
+    public registerEntry(entry: SupervisorServiceEntry): SupervisorServiceStatus {
+        const validated = SupervisorServiceEntrySchema.parse(entry);
+
+        for (const dep of validated.dependsOn) {
+            if (!this.byName.has(dep) && dep !== validated.name) {
+                throw new Error(`[Supervisor] Service "${validated.name}" depends on unknown service "${dep}"`);
+            }
+        }
+
+        const oldServices = [...this.manifest.services];
+        const oldByName = new Map(this.byName);
+        const oldStatuses = new Map(this.statuses);
+        const oldOrder = [...this.order];
+
+        try {
+            const existing = this.byName.get(validated.name);
+            if (existing) {
+                const idx = this.manifest.services.findIndex((s) => s.name === validated.name);
+                if (idx !== -1) {
+                    this.manifest.services[idx] = validated;
+                }
+                this.byName.set(validated.name, validated);
+                const currentStatus = this.statuses.get(validated.name);
+                this.statuses.set(validated.name, {
+                    name: validated.name,
+                    domain: currentStatus?.domain,
+                    status: currentStatus?.status ?? 'stopped',
+                    dependsOn: validated.dependsOn,
+                    error: currentStatus?.error,
+                });
+            } else {
+                this.manifest.services.push(validated);
+                this.byName.set(validated.name, validated);
+                this.statuses.set(validated.name, {
+                    name: validated.name,
+                    status: 'stopped',
+                    dependsOn: validated.dependsOn,
+                });
+            }
+            this.order = topologicalOrder(this.manifest.services);
+            this.logger.info(`[Supervisor] Registered entry "${validated.name}" pointing to ${validated.path}`);
+            return this.statuses.get(validated.name)!;
+        } catch (err) {
+            this.manifest.services = oldServices;
+            this.byName = oldByName;
+            this.statuses = oldStatuses;
+            this.order = oldOrder;
+            throw err;
+        }
+    }
+
+    /**
      * runTests: the actual Part 3 ask -- "I can call a contract and a set of tests will run
      * and return the result." Runs an entry's associated tests (its `testsPath` module's
      * `tests` export) for real, against its currently-running instance -- the same live

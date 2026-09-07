@@ -313,4 +313,44 @@ describe('Supervisor.runTests() — real isolated test runs', () => {
             await (broker as unknown as { unregisterModule(key: string): Promise<void> }).unregisterModule('supervisor2');
         }
     });
+
+    it('registers a service entry dynamically and allows it to be started', async () => {
+        const supervisor = new Supervisor(app, manifest, FIXTURES_DIR);
+        await app.registerModule(new SupervisorService(supervisor), { key: 'supervisor3' });
+
+        try {
+            // Register a new entry pointing to widget fixture
+            const registered = await broker.call(
+                'supervisor3.service_register' as never,
+                {
+                    name: 'widget-dynamic',
+                    path: path.join(FIXTURES_DIR, 'widget.service.ts'),
+                    dependsOn: [],
+                } as never,
+            ) as { name: string; status: string };
+
+            expect(registered.name).toBe('widget-dynamic');
+            expect(registered.status).toBe('stopped');
+
+            // Now it appears in serviceStatus
+            const statuses = await broker.call('supervisor3.service_status' as never, {} as never) as {
+                services: { name: string }[];
+            };
+            expect(statuses.services.map((s) => s.name)).toContain('widget-dynamic');
+
+            // And can be started live
+            const startResult = await broker.call(
+                'supervisor3.service_start' as never,
+                { name: 'widget-dynamic' } as never,
+            ) as { status: string };
+            expect(startResult.status).toBe('running');
+
+            await broker.call(
+                'supervisor3.service_stop' as never,
+                { name: 'widget-dynamic' } as never,
+            );
+        } finally {
+            await (broker as unknown as { unregisterModule(key: string): Promise<void> }).unregisterModule('supervisor3');
+        }
+    });
 });
