@@ -65,7 +65,19 @@ export const ExposedContractSchema = z.union([
     z.object({
         /** `domain.action`, e.g. `domains.zone_create`. */
         key: z.string().min(1),
-        auth: z.enum(['public', 'user', 'admin']),
+        /**
+         * Must stay in step with `AuthLevel` in `api/schema/expose.ts`.
+         *
+         * `operator` was added to the type and not to this enum, and the failure was spectacularly
+         * indirect: a site row containing one `operator` entry failed `SiteSchema` outright, so
+         * `cdn.resolve_site` threw, `siteFor` swallowed it, and **every request to that hostname
+         * answered `NO_SITE` — 404, "no site is configured"** — for a site that was configured
+         * perfectly well. Nothing named the field or the value.
+         *
+         * Two enums for one union is the kind of duplication that only shows up as a different
+         * subsystem being broken.
+         */
+        auth: z.enum(['public', 'user', 'admin', 'operator']),
     }).strict(),
     z.object({
         key: z.string().min(1),
