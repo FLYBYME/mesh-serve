@@ -79,8 +79,29 @@ export const buildStartContract = defineContract({
     action: 'build_start',
     description: 'Build one published version of a part into its artifact.',
     dependencies: [],
+    /**
+     * **512MB, measured — it was 2048, guessed.**
+     *
+     * The guess had a real cost: surf has 981MB, so it refused every build, and the fleet's only
+     * public node could not do the one thing the whole loop needs. The workaround was a second
+     * machine, which is a strange conclusion to reach about bundling 30KB of TypeScript.
+     *
+     * Measured on 2026-09-07 by cloning mesh-core and bundling four of its parts in one process:
+     * **70MB peak RSS**, flat across all four — because esbuild is a Go binary with its own memory
+     * outside node's heap, and what node holds is the file contents, which for every part in this
+     * platform is between 2KB and 125KB.
+     *
+     * 512 is seven times the measurement, which leaves room for a repository much larger than any
+     * here while still refusing a genuinely tiny box. It also fits inside the `MemoryMax=600M` that
+     * surf's systemd unit sets, so a node that accepts the work can survive doing it.
+     *
+     * The failure this constant was written after is real and was not memory: `node.hello` returned
+     * raw `services` and ignored groups, so surf was told to run nothing, fell back to starting
+     * everything, and took builds while doing all of it. That is fixed. A number invented to work
+     * around a bug outlived the bug, which is the argument for measuring rather than estimating.
+     */
     requirements: {
-        memory: 2048,
+        memory: 512,
         preferData: true,
     },
     /**

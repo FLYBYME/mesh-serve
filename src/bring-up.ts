@@ -88,6 +88,15 @@ const SWITCHABLE = ['catalog', 'builder', 'cdn'] as const;
  */
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * How long to wait for a node to actually take an assignment.
+ *
+ * Shorter than a build because nothing is fetched or compiled — a service is imported and
+ * started — but far longer than the broker's 10s default, because the reconcile behind it is
+ * several database round trips and a module load on another machine.
+ */
+const ASSIGN_TIMEOUT_MS = 90 * 1000;
+
 export interface BringUpContext {
     app: MeshApp;
     broker: IServiceBroker;
@@ -281,9 +290,19 @@ export async function assignServices(
     const services = options.services ?? SWITCHABLE;
 
     console.log(`[fleet] assigning [${services.join(', ')}] to "${hostname}"`);
+
+    /**
+     * **Assigning is work, not a question**, so it does not get a question's timeout.
+     *
+     * `node.assign` writes the desired state, then reconciles: the target node's Supervisor starts
+     * or stops each service, live. Against a remote database every one of those steps is a
+     * round trip, and the whole thing overran the broker's 10s default the first time it was asked
+     * to start a builder — reported as `RPC Timeout calling node.assign`, while the assignment
+     * itself went on to succeed. Exactly the failure the build timeout exists for, one call earlier.
+     */
     const outcome = await ctx.broker.call('node.assign', {
         hostname, services: [...services],
-    }, as);
+    }, { ...as, timeout: ASSIGN_TIMEOUT_MS });
     console.log(`[fleet] "${hostname}" assigned (applied: ${String(outcome.applied)})`);
 
     // One tool per service, and each is the *last* thing that service registers rather than a name

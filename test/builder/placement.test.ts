@@ -22,16 +22,29 @@ describe('Placement: stopping the interchangeability assumption', () => {
 
     it('buildStartContract declares requirements alongside dependencies', () => {
         expect(buildStartContract.requirements).toBeDefined();
-        expect(buildStartContract.requirements?.memory).toBe(2048);
+        // Measured, not guessed: 70MB peak to clone mesh-core and bundle four parts, and 512
+        // fits inside surf's MemoryMax=600M so a node that accepts the work survives it.
+        expect(buildStartContract.requirements?.memory).toBe(512);
         expect(buildStartContract.requirements?.preferData).toBe(true);
         expect(buildStartContract.dependencies).toBeDefined();
         expect(buildStartContract.inputSchema.shape).toHaveProperty('preferLocal');
     });
 
-    it('declines work on a low-memory box (e.g. 981MB Chicago VPS) rather than accepting and timing out', async () => {
-        // Simulate surf's 981MB RAM
-        process.env['MESH_NODE_MEMORY_MB'] = '981';
-        expect(getNodeMemoryMB()).toBe(981);
+    it('declines work on a box too small to do it, rather than accepting and timing out', async () => {
+        /**
+         * **256MB, not surf's 981.**
+         *
+         * This used to simulate surf and assert it was refused, which encoded a guess as a
+         * requirement: the threshold was 2048 because somebody estimated it, so the fleet's only
+         * public node could not build and the test said that was correct. Measuring it (70MB peak
+         * to clone mesh-core and bundle four parts) moved the threshold to 512 — and surf, at
+         * 981MB, is now above it and builds. See `buildStartContract.requirements`.
+         *
+         * The refusal still matters and still needs a test, so this uses a box that genuinely
+         * cannot do the work instead of one that was only ever assumed not to.
+         */
+        process.env['MESH_NODE_MEMORY_MB'] = '256';
+        expect(getNodeMemoryMB()).toBe(256);
 
         const dummyContext = {
             call: async () => null,
@@ -54,8 +67,16 @@ describe('Placement: stopping the interchangeability assumption', () => {
         expect(clientErr.code).toBe('insufficient_memory');
         expect(clientErr.status).toBe(507);
         expect(clientErr.message).toMatch(/declining build/i);
-        expect(clientErr.message).toMatch(/981MB memory/);
-        expect(clientErr.message).toMatch(/requires 2048MB/);
+        expect(clientErr.message).toMatch(/256MB memory/);
+        expect(clientErr.message).toMatch(/requires 512MB/);
+    });
+
+    it('accepts work on surf, which the old threshold refused', async () => {
+        // The whole point of measuring: 981MB is plenty to bundle 30KB, so the one public node in
+        // the fleet can build and every step of the loop can go through its API.
+        process.env['MESH_NODE_MEMORY_MB'] = '981';
+        expect(getNodeMemoryMB()).toBe(981);
+        expect(getNodeMemoryMB()).toBeGreaterThanOrEqual(buildStartContract.requirements?.memory ?? 0);
     });
 
     it('accepts work on a machine meeting memory requirements', async () => {
@@ -153,7 +174,7 @@ describe('Placement: stopping the interchangeability assumption', () => {
                     calls.push(opts?.nodeID ?? 'unknown');
                     if (opts?.nodeID === 'surf-node-id') {
                         throw new ClientError(
-                            'Node "surf.surfdns.net" has 981MB memory, declining build (requires 2048MB)',
+                            'Node "surf.surfdns.net" has 981MB memory, declining build (requires 512MB)',
                             'insufficient_memory',
                             507,
                         );
