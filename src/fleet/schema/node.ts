@@ -70,6 +70,7 @@ export const NodeSummarySchema = z.object({
     connected: z.boolean(),
     desiredServices: z.array(z.string()),
     runningServices: z.array(z.string()),
+    provisionedServices: z.array(z.string()).optional(),
 });
 export type NodeSummary = z.infer<typeof NodeSummarySchema>;
 
@@ -80,8 +81,40 @@ export const NodeStatusReportSchema = z.object({
     peers: z.array(PeerInfoSchema),
     desiredServices: z.array(z.string()),
     runningServices: z.array(z.string()),
+    provisionedServices: z.array(z.string()).default([]),
     services: z.array(ServiceRunStatusSchema).optional(),
     nodes: z.array(NodeSummarySchema).optional(),
     error: z.string().optional(),
 });
 export type NodeStatusReport = z.infer<typeof NodeStatusReportSchema>;
+
+export const NodeProvisionInputSchema = z.object({
+    /** The node's stable identity: its hostname. */
+    hostname: z.string().min(1),
+    /** Name of the service entry in the Supervisor manifest. */
+    name: z.string().min(1),
+    /** Git repository URL to clone or pull. */
+    repository: z.string().min(1),
+    /** Pinned commit SHA or tag. Mutable branch names (e.g. main) are refused. */
+    ref: z.string().min(1),
+    /** Optional path to the compiled service entry module relative to repo root (or absolute). */
+    path: z.string().optional(),
+    /** Optional dependencies that must be running before this service starts. */
+    dependsOn: z.array(z.string()).default([]),
+    /** Optional mountKey alias for running isolated instances. */
+    mountKey: z.string().optional(),
+}).strict();
+export type NodeProvisionInput = z.infer<typeof NodeProvisionInputSchema>;
+
+export const NodeProvisionOutcomeSchema = z.object({
+    hostname: z.string(),
+    name: z.string(),
+    repository: z.string(),
+    ref: z.string(),
+    applied: z.boolean(),
+    noop: z.boolean(),
+    message: z.string(),
+    path: z.string().optional(),
+    error: z.string().optional(),
+}).strict();
+export type NodeProvisionOutcome = z.infer<typeof NodeProvisionOutcomeSchema>;

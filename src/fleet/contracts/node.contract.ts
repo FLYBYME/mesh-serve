@@ -1,6 +1,8 @@
 import { defineContract, defineCrud, defaultPrint, z } from '@flybyme/mesh';
 import {
     GroupSchema,
+    NodeProvisionInputSchema,
+    NodeProvisionOutcomeSchema,
     NodeSchema,
     NodeStatusReportSchema,
 } from '../schema/node.js';
@@ -129,5 +131,26 @@ export const nodeStatusContract = defineContract({
     visibility: 'public',
     rest: { method: 'GET', path: '/node/status' },
     destructive: false,
+    print: defaultPrint,
+});
+
+/**
+ * node.provision: makes new switches exist on a node.
+ *
+ * Acquires a service the node does not currently have: clones or pulls a repository at a pinned ref,
+ * installs its dependencies with npm, and registers a Supervisor manifest entry pointing at it.
+ *
+ * Two hard requirements:
+ * 1. A ref, not a branch. Mutable refs (main, master, etc.) are strictly refused.
+ * 2. Protected by the operator gate and an allowlist of repositories from the environment.
+ */
+export const nodeProvisionContract = defineContract({
+    domain: 'node',
+    action: 'provision',
+    description: 'Provisions a service onto a node by acquiring its repository at a pinned ref, installing dependencies, and registering it in the Supervisor manifest.',
+    inputSchema: NodeProvisionInputSchema,
+    outputSchema: NodeProvisionOutcomeSchema,
+    rest: { method: 'POST', path: '/node/provision' },
+    destructive: true,
     print: defaultPrint,
 });

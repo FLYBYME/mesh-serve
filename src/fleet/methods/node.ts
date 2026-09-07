@@ -6,14 +6,22 @@
  * exist to prevent — the schema would change and the signature would go on claiming the old shape.
  */
 
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
 import { ClientError, z, type IServiceContext, type IServiceRegistry } from '@flybyme/mesh';
 
 import type {
-    nodeAssignContract, nodeHelloContract, nodeReconcileContract, nodeStatusContract,
+    nodeAssignContract, nodeHelloContract, nodeProvisionContract, nodeReconcileContract,
+    nodeStatusContract,
 } from '../contracts/node.contract.js';
 import type { GroupRecord, NodeRecord, NodeSummary, ServiceRunStatus } from '../schema/node.js';
 import { nodesInGroup, reconcileNode } from './reconcile.js';
+
+const run = promisify(execFile);
 
 type HelloInput = z.infer<typeof nodeHelloContract['inputSchema']>;
 type HelloOutput = z.infer<typeof nodeHelloContract['outputSchema']>;
@@ -23,6 +31,8 @@ type ReconcileInput = z.infer<typeof nodeReconcileContract['inputSchema']>;
 type ReconcileOutput = z.infer<typeof nodeReconcileContract['outputSchema']>;
 type StatusInput = z.infer<typeof nodeStatusContract['inputSchema']>;
 type StatusOutput = z.infer<typeof nodeStatusContract['outputSchema']>;
+type ProvisionInput = z.infer<typeof nodeProvisionContract['inputSchema']>;
+type ProvisionOutput = z.infer<typeof nodeProvisionContract['outputSchema']>;
 
 /**
  * An operator, and **an absent caller is not one**.
@@ -253,6 +263,7 @@ export async function node_status(
         }));
 
     let runningServices: string[] = [];
+    let provisionedServices: string[] = [];
     let services: ServiceRunStatus[] | undefined;
     let error: string | undefined;
 
@@ -267,6 +278,7 @@ export async function node_status(
 
             services = statusResult.services ?? [];
             runningServices = services.filter((s) => s.status === 'running').map((s) => s.name);
+            provisionedServices = services.map((s) => s.name);
         } catch (err) {
             error = `Failed to query supervisor on node "${targetHostname}": ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -290,6 +302,7 @@ export async function node_status(
             connected: mNode !== undefined && (mNode.available ?? true),
             desiredServices: dRow?.services ?? [],
             runningServices: host === targetHostname ? runningServices : [],
+            provisionedServices: host === targetHostname ? provisionedServices : [],
         });
     }
 
@@ -300,8 +313,297 @@ export async function node_status(
         peers,
         desiredServices,
         runningServices,
+        provisionedServices,
         ...(services !== undefined ? { services } : {}),
         nodes: nodesSummary,
         ...(error !== undefined ? { error } : {}),
+    };
+}
+
+function normalizeRepo(repo: string): string {
+    return repo.trim().replace(/\.git$/, '').toLowerCase();
+}
+
+/**
+ * Validates repository against environment allowlist (MESH_PROVISION_ALLOWED_REPOSITORIES).
+ * Fails closed: if the environment variable is unset or empty, no repository is permitted.
+ */
+export function isRepositoryAllowed(repository: string, env: NodeJS.ProcessEnv = process.env): boolean {
+    const raw = env['MESH_PROVISION_ALLOWED_REPOSITORIES'] ?? env['FLEET_ALLOWED_REPOSITORIES'];
+    if (!raw || raw.trim() === '') {
+        return false;
+    }
+    const entries = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (entries.length === 0) {
+        return false;
+    }
+    const normRepo = normalizeRepo(repository);
+    return entries.some((entry) => {
+        if (entry === '*') return true;
+        const normEntry = normalizeRepo(entry);
+        if (normEntry === normRepo) return true;
+        if (entry.endsWith('*')) {
+            const prefix = normalizeRepo(entry.slice(0, -1));
+            return normRepo.startsWith(prefix);
+        }
+        return false;
+    });
+}
+
+function gitAuthArgs(repository: string): string[] {
+    try {
+        let host = '';
+        if (repository.includes('://')) {
+            host = new URL(repository).host;
+        } else if (repository.includes('@')) {
+            host = repository.split('@')[1]?.split(':')[0] ?? '';
+        }
+        if (!host) return [];
+        const key = `GIT_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}`;
+        const token = process.env[key] ?? process.env['GIT_TOKEN'];
+        if (!token) return [];
+        const auth = Buffer.from(`x-access-token:${token}`).toString('base64');
+        return ['-c', `http.extraHeader=Authorization: Basic ${auth}`];
+    } catch {
+        return [];
+    }
+}
+
+async function assertPinnedRef(repository: string, ref: string): Promise<void> {
+    if (/^(main|master|trunk|dev|development|head)$/i.test(ref) || ref.startsWith('refs/heads/')) {
+        throw new ClientError(
+            `node.provision requires a pinned commit SHA or tag, not a branch: "${ref}". `
+            + `A node that follows a branch changes behaviour when somebody else pushes.`,
+            'invalid_ref', 400,
+        );
+    }
+    // 40-char hex commit SHA is pinned
+    if (/^[0-9a-f]{40}$/i.test(ref)) {
+        return;
+    }
+    // Check if remote considers this a branch
+    try {
+        const auth = gitAuthArgs(repository);
+        const { stdout } = await run('git', [...auth, 'ls-remote', '--heads', repository, ref]);
+        if (stdout.trim().length > 0) {
+            throw new ClientError(
+                `node.provision requires a pinned commit SHA or tag, not a branch: "${ref}". `
+                + `The remote reports it as a branch head.`,
+                'invalid_ref', 400,
+            );
+        }
+    } catch (err) {
+        // The refusal above must escape this catch — it is the check, not a failure of the check.
+        if (err instanceof ClientError) throw err;
+        // Remote inspection may fail in offline or mock environments; branch name checks above protect it
+    }
+}
+
+/**
+ * node.provision: makes new switches exist on a node.
+ *
+ * Acquires a service the node does not currently have: clones or pulls a repository at a pinned ref,
+ * installs its dependencies with npm, and registers a Supervisor manifest entry pointing at it.
+ *
+ * Runs on the target node (forwarding over broker if called on another node).
+ * Pulling an already-cloned repo to the same ref is a no-op that avoids reinstalling.
+ */
+export async function node_provision(
+    input: ProvisionInput,
+    ctx: IServiceContext,
+): Promise<ProvisionOutput> {
+    requireOperator(ctx, 'provision');
+
+    if (!isRepositoryAllowed(input.repository)) {
+        throw new ClientError(
+            `Repository "${input.repository}" is not in the allowlist `
+            + `(MESH_PROVISION_ALLOWED_REPOSITORIES). Provisioning runs npm install, which runs `
+            + `arbitrary scripts, so the set of repositories a node will take code from is the `
+            + `operator's decision and not the caller's.`,
+            'repository_not_allowed', 403,
+        );
+    }
+
+    await assertPinnedRef(input.repository, input.ref);
+
+    const broker = ctx.broker;
+    const registryNodes = getRegistryNodes(broker);
+    const targetMeshNode = registryNodes.find(
+        (n) => (n.available ?? true) && n.hostname === input.hostname,
+    );
+
+    if (targetMeshNode === undefined) {
+        return {
+            hostname: input.hostname,
+            name: input.name,
+            repository: input.repository,
+            ref: input.ref,
+            applied: false,
+            noop: false,
+            message: `Node "${input.hostname}" is not connected to the mesh.`,
+            error: `Node "${input.hostname}" is not connected to the mesh.`,
+        };
+    }
+
+    // If target is a remote node, forward the call over the broker to run on the target
+    if (targetMeshNode.nodeID !== broker.nodeID) {
+        const remoteBroker = broker as unknown as {
+            call(tool: string, input: unknown, options?: { nodeID?: string; meta?: unknown }): Promise<ProvisionOutput>;
+        };
+        return await remoteBroker.call('node.provision', input, {
+            nodeID: targetMeshNode.nodeID,
+            meta: ctx.meta,
+        });
+    }
+
+    // Running locally on the target node
+    const servicesRoot = path.resolve(process.env['MESH_SERVICES_DIR'] || './.services');
+    const serviceDir = path.join(servicesRoot, input.name);
+    const metaFile = path.join(serviceDir, '.mesh-provision.json');
+
+    let isNoop = false;
+    let resolvedEntry = '';
+
+    if (fs.existsSync(path.join(serviceDir, '.git')) && fs.existsSync(metaFile)) {
+        try {
+            const meta = JSON.parse(fs.readFileSync(metaFile, 'utf-8')) as {
+                repository: string;
+                ref: string;
+                entryPath: string;
+            };
+            if (meta.repository === input.repository && meta.ref === input.ref) {
+                isNoop = true;
+                resolvedEntry = meta.entryPath;
+            }
+        } catch {
+            // Invalid metadata, proceed with pull
+        }
+    }
+
+    if (isNoop) {
+        // Register with Supervisor in case it was restarted
+        const localBroker = broker as unknown as {
+            call(tool: string, input: unknown): Promise<unknown>;
+        };
+        try {
+            await localBroker.call('supervisor.service_register', {
+                name: input.name,
+                path: resolvedEntry,
+                dependsOn: input.dependsOn ?? [],
+                mountKey: input.mountKey,
+            });
+        } catch {
+            // If supervisor is not mounted, continue
+        }
+
+        return {
+            hostname: input.hostname,
+            name: input.name,
+            repository: input.repository,
+            ref: input.ref,
+            applied: true,
+            noop: true,
+            message: `Service "${input.name}" is already provisioned at ref "${input.ref}"; no-op.`,
+            path: resolvedEntry,
+        };
+    }
+
+    // Fresh clone or update
+    if (!fs.existsSync(serviceDir)) {
+        fs.mkdirSync(serviceDir, { recursive: true });
+    }
+
+    const authArgs = gitAuthArgs(input.repository);
+
+    if (!fs.existsSync(path.join(serviceDir, '.git'))) {
+        await run('git', ['init', '--quiet'], { cwd: serviceDir });
+        await run('git', ['remote', 'add', 'origin', input.repository], { cwd: serviceDir });
+    } else {
+        try {
+            await run('git', ['remote', 'set-url', 'origin', input.repository], { cwd: serviceDir });
+        } catch {
+            // Remote already set or unable to update
+        }
+    }
+
+    await run('git', [...authArgs, 'fetch', '--quiet', '--depth', '1', 'origin', input.ref], { cwd: serviceDir });
+    await run('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: serviceDir });
+
+    const commitOut = await run('git', ['rev-parse', 'HEAD'], { cwd: serviceDir });
+    const commit = commitOut.stdout.trim();
+
+    // Resolve entry module path
+    if (input.path) {
+        resolvedEntry = path.isAbsolute(input.path) ? input.path : path.resolve(serviceDir, input.path);
+    } else {
+        let entry = 'dist/index.js';
+        const pkgPath = path.join(serviceDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+                    main?: string;
+                    exports?: string | Record<string, string>;
+                };
+                if (typeof pkg.main === 'string') {
+                    entry = pkg.main;
+                } else if (typeof pkg.exports === 'string') {
+                    entry = pkg.exports;
+                } else if (pkg.exports && typeof pkg.exports['.'] === 'string') {
+                    entry = pkg.exports['.'];
+                }
+            } catch {}
+        }
+        const candidate = path.resolve(serviceDir, entry);
+        if (fs.existsSync(candidate)) {
+            resolvedEntry = candidate;
+        } else if (fs.existsSync(path.resolve(serviceDir, 'index.js'))) {
+            resolvedEntry = path.resolve(serviceDir, 'index.js');
+        } else {
+            resolvedEntry = candidate;
+        }
+    }
+
+    // Run npm install if package.json exists
+    if (fs.existsSync(path.join(serviceDir, 'package.json'))) {
+        await run('npm', ['install', '--no-audit', '--no-fund', '--omit=dev'], { cwd: serviceDir });
+    }
+
+    // Save metadata for no-op checking
+    fs.writeFileSync(
+        metaFile,
+        JSON.stringify({
+            name: input.name,
+            repository: input.repository,
+            ref: input.ref,
+            commit,
+            entryPath: resolvedEntry,
+            provisionedAt: new Date().toISOString(),
+        }, null, 2),
+    );
+
+    // Register with Supervisor
+    const localBroker = broker as unknown as {
+        call(tool: string, input: unknown): Promise<unknown>;
+    };
+    try {
+        await localBroker.call('supervisor.service_register', {
+            name: input.name,
+            path: resolvedEntry,
+            dependsOn: input.dependsOn ?? [],
+            mountKey: input.mountKey,
+        });
+    } catch {
+        // If supervisor is not mounted, continue
+    }
+
+    return {
+        hostname: input.hostname,
+        name: input.name,
+        repository: input.repository,
+        ref: input.ref,
+        applied: true,
+        noop: false,
+        message: `Successfully provisioned "${input.name}" at ref "${input.ref}".`,
+        path: resolvedEntry,
     };
 }

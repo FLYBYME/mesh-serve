@@ -80,6 +80,7 @@ declare global {
         'node.assign': { params: z.input<typeof Contract_6.nodeAssignContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeAssignContract['outputSchema']> };
         'node.reconcile': { params: z.input<typeof Contract_6.nodeReconcileContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeReconcileContract['outputSchema']> };
         'node.status': { params: z.input<typeof Contract_6.nodeStatusContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeStatusContract['outputSchema']> };
+        'node.provision': { params: z.input<typeof Contract_6.nodeProvisionContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeProvisionContract['outputSchema']> };
         'node.create': { params: z.input<typeof Contract_6.nodeCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['create']['outputSchema']> };
         'node.find': { params: z.input<typeof Contract_6.nodeCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['find']['outputSchema']> };
         'node.find_one': { params: z.input<typeof Contract_6.nodeCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['findOne']['outputSchema']> };

@@ -6,12 +6,14 @@ import {
     nodeAssignContract,
     nodeReconcileContract,
     nodeStatusContract,
+    nodeProvisionContract,
 } from './contracts/node.contract.js';
 import {
     node_hello,
     node_assign,
     node_reconcile,
     node_status,
+    node_provision,
 } from './methods/node.js';
 
 /**
@@ -38,6 +40,7 @@ export class FleetService extends ServiceModule {
         this.mountTool(nodeAssignContract, node_assign);
         this.mountTool(nodeReconcileContract, node_reconcile);
         this.mountTool(nodeStatusContract, node_status);
+        this.mountTool(nodeProvisionContract, node_provision);
     }
 }
 
