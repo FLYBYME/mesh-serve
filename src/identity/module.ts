@@ -136,6 +136,37 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
             // builtins are ensured at start rather than left to a migration someone forgets.
             for (const role of BUILTIN_ROLES) await store.upsertRole(role);
 
+            /**
+             * **The first operator, named by the machine rather than by a request.**
+             *
+             * `identity.grant_role` requires the operator role, which leaves nobody able to make
+             * the first one — every operator-gated contract unreachable for ever, which is exactly
+             * where this deployment sat until now. An input flag would let any caller nominate
+             * themselves, so the decision is the node operator's, made once, in a file: read from
+             * the environment, never from a call.
+             *
+             * Idempotent and quiet when there is nothing to do, because it runs on every boot. It
+             * does not create the account — the address has to have registered — since a node
+             * silently minting a privileged account nobody asked for is worse than a clear failure.
+             */
+            const bootstrapOperator = process.env['MESH_BOOTSTRAP_OPERATOR'];
+            if (bootstrapOperator !== undefined && bootstrapOperator.trim() !== '') {
+                const account = await store.findUserByEmail(bootstrapOperator.trim());
+                if (account === undefined) {
+                    started.logger.warn(
+                        `[identity] MESH_BOOTSTRAP_OPERATOR names ${bootstrapOperator}, which has `
+                        + `no account. Register it and restart, or the fleet has no operator.`,
+                    );
+                } else if (!account.value.roles.includes('operator')) {
+                    await store.updateUser(account.id, {
+                        roles: [...new Set([...account.value.roles, 'operator'])],
+                    });
+                    started.logger.warn(
+                        `[identity] ${account.value.email} is now a platform operator`,
+                    );
+                }
+            }
+
             started.logger.info(`[identity] ready — ${String((await store.listRoles()).length)} roles`);
         },
 
@@ -287,6 +318,55 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         roles: user.value.roles,
                         organizations,
                     };
+                }
+
+                /**
+                 * Grant or revoke a cluster-scoped role.
+                 *
+                 * The caller's own role is checked here rather than left to the site's gate. A gate
+                 * is configuration and this contract hands out platform standing, so it verifies
+                 * for itself — the same reasoning that puts `requireOperator` inside the fleet's
+                 * handlers instead of trusting whoever wrote the site record.
+                 */
+                case 'identity.grant_role': {
+                    const { userId, email, role, granted } = input as {
+                        userId?: string; email?: string; role: string; granted?: boolean;
+                    };
+
+                    const caller = (_ctx.meta as { user?: { roles?: string[] } } | undefined)?.user;
+                    if (!(caller?.roles ?? []).includes('operator')) {
+                        throw new Error(
+                            'identity.grant_role requires the operator role. The first operator is '
+                            + 'named by MESH_BOOTSTRAP_OPERATOR in the node\'s environment.',
+                        );
+                    }
+
+                    const found = userId !== undefined
+                        ? await store.getUser(userId)
+                        : email !== undefined ? await store.findUserByEmail(email) : undefined;
+
+                    if (found === undefined) {
+                        // Same wording whichever way the account was named: which addresses exist
+                        // is not something a caller gets to enumerate, even an operator's caller.
+                        throw new Error('No such account.');
+                    }
+
+                    const before = found.value.roles;
+                    const after = granted === false
+                        ? before.filter((r) => r !== role)
+                        : [...new Set([...before, role])];
+
+                    const changed = after.length !== before.length;
+                    // The store refuses an organization-scoped role here, which is the check that
+                    // keeps membership roles from being mistaken for platform standing.
+                    if (changed) await store.updateUser(found.id, { roles: after });
+
+                    _ctx.logger.warn(
+                        `[identity] ${granted === false ? 'revoked' : 'granted'} "${role}" `
+                        + `${granted === false ? 'from' : 'to'} ${found.value.email}`,
+                    );
+
+                    return { userId: found.id, roles: after, changed };
                 }
 
                 case 'identity.permits': {

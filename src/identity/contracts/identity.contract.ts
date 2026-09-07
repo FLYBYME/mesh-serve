@@ -353,6 +353,61 @@ export const registerContract = defineContract({
     print: (o) => `registered ${o.userId}`,
 });
 
+/**
+ * Give an account a cluster-scoped role, or take one away.
+ *
+ * **Without this nobody can ever become an operator, and that was the state until 2026-09-07.**
+ * `roles` lives on the user row, identity keeps its own store, and `user` is internal for writes —
+ * so the only paths to it were a database client and a shell. Every operator-gated contract was
+ * therefore unreachable by construction: the fleet console 403'd for everybody, for ever, and no
+ * amount of gating or granting on the site could change it. "Manage the platform from the UI" has
+ * to include *becoming somebody who may*.
+ *
+ * ## Who may call it
+ *
+ * An operator, and nobody else — the role is what grants the role. That is deliberate and it leaves
+ * the obvious hole: the *first* operator cannot exist. `MESH_BOOTSTRAP_OPERATOR` closes it, naming
+ * one email that identity promotes at startup, **read from the server's environment and never from
+ * a request**. An input flag would let any caller nominate themselves, which is not a bootstrap but
+ * an escalation. The node operator decides once, in a file somebody can look at.
+ *
+ * ## Cluster-scoped only
+ *
+ * An organization role belongs on the membership, because it is a fact about a person *in* an
+ * organization. The store refuses one here rather than storing something that reads as
+ * platform-wide standing — see `mongoStore.updateUser`.
+ */
+export const grantRoleContract = defineContract({
+    domain: 'identity',
+    action: 'grant_role',
+    description: 'Grant or revoke a cluster-scoped role on an account.',
+    dependencies: [],
+    inputSchema: z.object({
+        /** Either identifies the account. An email is what a person has to hand. */
+        userId: z.string().min(1).optional(),
+        email: z.string().email().optional(),
+        role: z.string().min(1).describe('A cluster-scoped role key, e.g. operator'),
+        /** False revokes it. Present rather than a second contract: the check is identical. */
+        granted: z.boolean().default(true),
+    }),
+    outputSchema: z.object({
+        userId: z.string(),
+        roles: z.array(z.string()).describe('Every cluster role the account holds afterwards'),
+        changed: z.boolean(),
+    }),
+    rest: { method: 'POST', path: '/identity/roles' },
+    /**
+     * Exposable, and a site that exposes it must gate it at `operator`.
+     *
+     * `public` here means *may be exposed*, as everywhere — the handler checks the caller's role
+     * itself and does not rely on the gate, because a contract that grants platform standing is
+     * the last place to trust that a site was configured correctly.
+     */
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
+});
+
 // ---------------------------------------------------------------------------- authorization
 
 /**
@@ -460,6 +515,7 @@ export const identityContracts: readonly ToolContract[] = [
     revocationsSinceContract,
     whoamiContract,
     registerContract,
+    grantRoleContract,
     permitsContract,
     apiTokenValidateContract,
     apiTokenIssueContract,
