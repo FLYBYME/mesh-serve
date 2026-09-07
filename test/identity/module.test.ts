@@ -287,7 +287,13 @@ describe('a ticket is identity, not authority', () => {
 
         // A deployment with no `public` role cannot answer an anonymous request at all — not a state
         // it should be possible to configure into, so it is ensured rather than migrated.
-        expect((await node.store.listRoles()).map((r) => r.key).sort()).toEqual(['authenticated', 'public']);
+        //
+        // `operator` joined them for the same reason rather than a different one: the platform
+        // checks for that exact key (`gate.ts`, `requireOperator`), so a deployment without the row
+        // has a role its own code requires and nothing can create. Granting it threw out of
+        // `onStart` and crash-looped the node.
+        expect((await node.store.listRoles()).map((r) => r.key).sort())
+            .toEqual(['authenticated', 'operator', 'public']);
     }, 30_000);
 });
 

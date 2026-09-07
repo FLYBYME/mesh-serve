@@ -33,10 +33,27 @@ describe('public is a role like any other', () => {
         expect(permits([publicRole], grants, 'identity.whoami')).toBe(false);
     });
 
-    it('ships with identity, and so does exactly one other role', () => {
-        // A framework that shipped `editor` would be guessing at a blog, and one that shipped
-        // `admin` would repeat the ambiguity in surfdns #26.
-        expect(BUILTIN_ROLES.map((r) => r.key)).toEqual([PUBLIC_ROLE, 'authenticated']);
+    it('ships with identity, and so do exactly two other roles', () => {
+        /**
+         * A framework that shipped `editor` would be guessing at a blog, and one that shipped
+         * `admin` would repeat the ambiguity in surfdns #26. That rule holds, and `operator` is
+         * not an exception to it — it is the case the rule was never about.
+         *
+         * The difference is who depends on the string. `editor` would be a guess about somebody's
+         * product; `operator` is checked by *this* code — `gate.ts` resolves `auth: 'operator'`
+         * against exactly that key, and every fleet handler calls `requireOperator`. Leaving it out
+         * did not keep the platform unopinionated, it left a role the platform requires and cannot
+         * create: granting it threw `Role "operator" does not exist` from inside `onStart`, which
+         * killed the node and had systemd restart it into the same crash.
+         *
+         * So the test is not relaxed. The list is still exactly the roles the platform itself
+         * needs, and anything a deployment means by `author` or `compliance` is still its own.
+         */
+        expect(BUILTIN_ROLES.map((r) => r.key)).toEqual([PUBLIC_ROLE, 'authenticated', 'operator']);
+
+        // Cluster-scoped: standing across the deployment, not inside one organization. An
+        // organization admin is not a platform operator (`gate.ts`, ADMIN_ROLE / OPERATOR_ROLE).
+        expect(BUILTIN_ROLES.find((r) => r.key === 'operator')?.scope).toBe('cluster');
         // Only public is builtin (not deletable) — see roles.builtin comment and F8a
         expect(BUILTIN_ROLES.find((r) => r.key === PUBLIC_ROLE)?.builtin).toBe(true);
         expect(BUILTIN_ROLES.find((r) => r.key === 'authenticated')?.builtin).toBe(false);

@@ -98,6 +98,31 @@ export const BUILTIN_ROLES: readonly Role[] = [
         description: 'Held by every caller with a valid ticket. Grants nothing on its own.',
         builtin: false,
     },
+    /**
+     * **The role the platform itself checks for, which did not exist as a record.**
+     *
+     * `gate.ts` has named `operator` since gates grew the level, and every fleet handler calls
+     * `requireOperator` — but nothing ever created the row, and `updateUser` refuses a role key it
+     * cannot find. So the role was simultaneously load-bearing and unregistered: granting it threw
+     * `Role "operator" does not exist`, which is the store correctly refusing to write a name
+     * nobody had defined.
+     *
+     * Cluster-scoped, because it is standing across the whole deployment rather than inside one
+     * organization — an organization admin is not a platform operator, and the two are deliberately
+     * different questions (`gate.ts`, `ADMIN_ROLE` / `OPERATOR_ROLE`).
+     *
+     * `builtin: false` so a deployment can edit its description or grants; the key is what the
+     * platform depends on.
+     */
+    {
+        key: 'operator',
+        name: 'Operator',
+        scope: 'cluster',
+        description:
+            'Runs the platform: assigns services to machines, composes and deploys releases, and '
+            + 'grants this role to others. Not an organization role.',
+        builtin: false,
+    },
 ];
 
 /**

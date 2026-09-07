@@ -151,18 +151,40 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
              */
             const bootstrapOperator = process.env['MESH_BOOTSTRAP_OPERATOR'];
             if (bootstrapOperator !== undefined && bootstrapOperator.trim() !== '') {
-                const account = await store.findUserByEmail(bootstrapOperator.trim());
-                if (account === undefined) {
-                    started.logger.warn(
-                        `[identity] MESH_BOOTSTRAP_OPERATOR names ${bootstrapOperator}, which has `
-                        + `no account. Register it and restart, or the fleet has no operator.`,
-                    );
-                } else if (!account.value.roles.includes('operator')) {
-                    await store.updateUser(account.id, {
-                        roles: [...new Set([...account.value.roles, 'operator'])],
-                    });
-                    started.logger.warn(
-                        `[identity] ${account.value.email} is now a platform operator`,
+                /**
+                 * **Caught, because a convenience must not be able to take the node down.**
+                 *
+                 * The first version was not, and it did: `operator` had no `role` row, `updateUser`
+                 * correctly refused a role key it could not find, and the throw travelled out of
+                 * `onStart` and killed the process. systemd restarted it, into the same crash, for
+                 * ever — so a line in an environment file turned the whole platform off.
+                 *
+                 * The missing row is fixed (`BUILTIN_ROLES`), and that is the smaller half. The
+                 * lesson is the boundary: this promotes an account as a favour at boot, and
+                 * *nothing* it can discover about the database is worth refusing to serve over. A
+                 * node that starts without an operator is inconvenient; a node that will not start
+                 * is an outage.
+                 */
+                try {
+                    const account = await store.findUserByEmail(bootstrapOperator.trim());
+                    if (account === undefined) {
+                        started.logger.warn(
+                            `[identity] MESH_BOOTSTRAP_OPERATOR names ${bootstrapOperator}, which `
+                            + `has no account. Register it and restart, or the fleet has no operator.`,
+                        );
+                    } else if (!account.value.roles.includes('operator')) {
+                        await store.updateUser(account.id, {
+                            roles: [...new Set([...account.value.roles, 'operator'])],
+                        });
+                        started.logger.warn(
+                            `[identity] ${account.value.email} is now a platform operator`,
+                        );
+                    }
+                } catch (error) {
+                    started.logger.error(
+                        `[identity] could not promote ${bootstrapOperator} to operator: `
+                        + `${error instanceof Error ? error.message : String(error)}. `
+                        + `The node is serving; the fleet console will refuse until this is fixed.`,
                     );
                 }
             }
