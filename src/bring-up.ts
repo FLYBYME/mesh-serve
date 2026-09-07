@@ -1,20 +1,31 @@
 /**
- * Seed a running cluster: a user, an organization, a membership, and a site.
+ * Bring a cluster up from nothing: an operator, a fleet, a catalog, a release, a hostname serving it.
  *
- * **It joins; it does not load a database.** This used to mount `DatabaseModule`, identity and the
- * cdn in-process and write rows directly, which is a second path into the same collections — one
- * that skips the publisher checks, the scope checks and the invariants the contracts exist to
- * enforce. Whatever it seeded was therefore not necessarily something the platform would have
- * accepted from a real caller, which is the opposite of what a bring-up script is for.
+ * **Every step is a contract call, and every step is a function that can be called on its own.**
+ * That is the point of the file rather than a tidiness preference — the pipeline it automates was
+ * run by hand for weeks, and each stage was somewhere to get one argument wrong at eleven at night.
  *
- * So it does what `mesh stats` and `mesh-serve publish` do: joins as a **temporary node** with no
- * database and no modules of its own, waits for the tools it needs to appear, calls them, and
- * leaves. Everything it writes went through the same door a browser uses.
+ * ```
+ * join     →  user, organization, membership, ticket   identity exists
+ * assign   →  the node runs catalog, builder, cdn      the fleet decides, live, no restart
+ * import   →  mesh.json read once, into part rows      the catalog knows what the parts are
+ * release  →  pull, mint a version, publish, build     artifacts exist
+ * compose  →  exact digests, marked rolling            a release
+ * site     →  grants derived from what it calls        a hostname that may serve it
+ * deploy   →  one field                                it does
+ * ```
+ *
+ * **It joins; it does not load a database.** An earlier version mounted `DatabaseModule`, identity
+ * and the cdn in-process and wrote rows directly — a second path into the same collections that
+ * skipped every check the contracts exist to enforce, so what it seeded was not necessarily
+ * something the platform would have accepted from a real caller.
  *
  * ```
  * node bin/node.mjs …            # the cluster, holding the database
  * npx tsx src/bring-up.ts        # this, dialling in on the default port
  * ```
+ *
+ * Every function is idempotent, and running it twice is how you find out that it is.
  */
 
 import os from 'node:os';
@@ -35,6 +46,11 @@ const flag = (name: string, fallback: string): string => {
     const at = argv.indexOf(`--${name}`);
     return at === -1 ? fallback : (argv[at + 1] ?? fallback);
 };
+const optional = (name: string): string | undefined => {
+    const value = flag(name, '');
+    return value === '' ? undefined : value;
+};
+const has = (name: string): boolean => argv.includes(`--${name}`);
 
 /**
  * The mesh handshake key comes from `.env`, like everything else a node needs.
@@ -54,18 +70,40 @@ try {
 /** Where the cluster is. The node's own default ws port, so the common case needs no flag. */
 const DEFAULT_BOOTSTRAP = 'ws://127.0.0.1:4001';
 
+/** What a node runs beyond the always-on core, and therefore what the fleet gets to decide. */
+const SWITCHABLE = ['catalog', 'builder', 'cdn'] as const;
+
 export interface BringUpContext {
     app: MeshApp;
     broker: IServiceBroker;
-    /** Block until a tool is reachable on the mesh, so a call cannot race the node it needs. */
+    /** Block until a tool is reachable on the mesh, so a call cannot race the node that answers it. */
     waitFor(tool: string, ms?: number): Promise<void>;
     stop(): Promise<void>;
 }
 
 /**
+ * Who a call is made as.
+ *
+ * Built once by `callerFor` and threaded through every step below, because each of them writes
+ * something that belongs to an organization and the platform is entitled to ask whose.
+ */
+export interface Caller {
+    // Not `readonly`, and not a hand-written shape: this is passed straight to `broker.call` as its
+    // options, so it has to *be* `ICallOptions`. Deep-readonly fields are structurally incompatible
+    // with it, which is a compile error that says nothing about the actual mistake.
+    meta: {
+        organizationId: string;
+        tenantId: string;
+        user: { id: string; tenant_id: string; roles: string[] };
+    };
+}
+
+// ---------------------------------------------------------------------------- joining
+
+/**
  * Join the cluster as a temporary node.
  *
- * `port: 0` because this node dials out and nothing dials it — it is a peer that happens to be
+ * `port: 0` because this node dials out and nothing dials it — a peer that happens to be
  * short-lived rather than a client, which is what lets every contract it calls be an ordinary
  * contract with no second, script-shaped entrance.
  */
@@ -88,156 +126,619 @@ export async function setup(options: { bootstrap?: readonly string[] } = {}): Pr
 
     await app.start();
 
-    const broker = app.getProvider<IServiceBroker>('broker');
-
     return {
         app,
-        broker,
+        broker: app.getProvider<IServiceBroker>('broker'),
         waitFor: (tool, ms = 10_000) => app.registry.waitForTool(tool, ms),
         stop: () => app.stop(),
     };
 }
 
+// ---------------------------------------------------------------------------- identity
+
+/** The user: created on the first run, found on every one after. */
+export async function ensureUser(
+    ctx: BringUpContext,
+    account: { email: string; password: string; displayName: string },
+): Promise<string> {
+    await ctx.waitFor('identity.register');
+
+    const existing = await ctx.broker.call('user.find_one', { query: { email: account.email } })
+        .catch(() => null);
+
+    if (existing?.id !== undefined) {
+        console.log(`[user] "${account.email}" already exists (${existing.id})`);
+        return existing.id;
+    }
+
+    const registered = await ctx.broker.call('identity.register', account);
+    console.log(`[user] registered "${account.email}" (${registered.userId})`);
+    return registered.userId;
+}
+
+/** The organization every row below belongs to. */
+export async function ensureOrganization(
+    ctx: BringUpContext,
+    org: { slug: string; name: string; ownerId: string },
+): Promise<string> {
+    const existing = await ctx.broker.call('organization.find_one', { query: { slug: org.slug } })
+        .catch(() => null);
+
+    if (existing?.id !== undefined) {
+        console.log(`[org] "${org.slug}" already exists (${existing.id})`);
+        return existing.id;
+    }
+
+    const created = await ctx.broker.call('organization.create', {
+        name: org.name, slug: org.slug, ownerId: org.ownerId,
+    });
+    console.log(`[org] created "${org.name}" (${org.slug}) (${created.id})`);
+    return created.id;
+}
+
+/** The membership, which is what makes this user's calls resolve to that organization. */
+export async function ensureMembership(
+    ctx: BringUpContext,
+    who: { userId: string; orgId: string },
+    as: Caller,
+): Promise<void> {
+    // **Both halves of the key.** Querying on `userId` alone matches a membership in *some*
+    // organization, so a user who belongs to two would be reported as already a member of whichever
+    // row came back first — and never added to this one.
+    const existing = await ctx.broker.call(
+        'membership.find_one',
+        { query: { userId: who.userId, organizationId: who.orgId } },
+        as,
+    ).catch(() => null);
+
+    if (existing?.id !== undefined) {
+        console.log('[membership] already an owner');
+        return;
+    }
+
+    await ctx.broker.call('membership.create', {
+        userId: who.userId, organizationId: who.orgId, roleKey: 'owner', joinedAt: Date.now(),
+    }, as);
+    console.log(`[membership] added ${who.userId} as owner`);
+}
+
+/**
+ * Who this script's calls are made as.
+ *
+ * **The operator role is asserted in the meta this process constructs**, not written onto the user
+ * row. An earlier version called `user.update` to grant it and failed with *user not found* against
+ * an id it had just read successfully — identity keeps its own store, so the generic CRUD path
+ * cannot write there, and the failure was swallowed by a `.catch`.
+ *
+ * Asserting it is not a smaller claim than writing it, and it is worth being plain about why it is
+ * accepted here: **any peer that can join this mesh can construct any meta it likes.** Nothing
+ * checks a caller's roles against a stored user; `requireOperator` reads what the caller said about
+ * itself. The boundary that actually holds is `MESH_KEY` — a process without it is refused at the
+ * transport and never makes a call at all. That is a real gap rather than a design, and it is
+ * recorded as roadmap D6 rather than papered over by having this script pretend otherwise.
+ */
+export function callerFor(
+    userId: string,
+    orgId: string,
+    roles: readonly string[] = ['operator'],
+): Caller {
+    return {
+        meta: {
+            organizationId: orgId,
+            tenantId: orgId,
+            user: { id: userId, tenant_id: orgId, roles: [...roles] },
+        },
+    };
+}
+
+/** A ticket, so whatever the operator does next is a call from a real caller. */
+export async function issueTicket(
+    ctx: BringUpContext,
+    credentials: { email: string; password: string },
+): Promise<string> {
+    await ctx.waitFor('identity.ticket_issue');
+    const issued = await ctx.broker.call('identity.ticket_issue', credentials);
+    return issued.token;
+}
+
+// ---------------------------------------------------------------------------- the fleet
+
+/**
+ * Tell a node what to run, and wait until it is running it.
+ *
+ * `catalog`, `builder` and `cdn` are **switchable**: a node starts only its core services (api,
+ * identity, fleet, supervisor) until the fleet assigns the rest, and the Supervisor starts them
+ * live without a restart. So this is not configuration — it is the step that makes every call
+ * below this line possible at all.
+ *
+ * Waiting afterwards is the part that is easy to omit and expensive to omit. `node.assign` returns
+ * as soon as the node has been *told*; a build request sent a millisecond later fails with *tool
+ * not found* on a cluster that is working perfectly.
+ */
+export async function assignServices(
+    ctx: BringUpContext,
+    as: Caller,
+    options: { hostname?: string; services?: readonly string[] } = {},
+): Promise<{ hostname: string; services: readonly string[] }> {
+    await ctx.waitFor('node.assign');
+
+    const hostname = options.hostname ?? await targetNode(ctx, as);
+    const services = options.services ?? SWITCHABLE;
+
+    console.log(`[fleet] assigning [${services.join(', ')}] to "${hostname}"`);
+    const outcome = await ctx.broker.call('node.assign', {
+        hostname, services: [...services],
+    }, as);
+    console.log(`[fleet] "${hostname}" assigned (applied: ${String(outcome.applied)})`);
+
+    // One tool per service, and each is the *last* thing that service registers rather than a name
+    // that happens to live in the same file — waiting on an early one reports ready too soon.
+    const readiness: Record<string, string> = {
+        builder: 'builder.release_repo',
+        catalog: 'catalog.resolve',
+        cdn: 'cdn.site_edit',
+    };
+
+    for (const service of services) {
+        const tool = readiness[service];
+        if (tool === undefined) continue;
+        await ctx.waitFor(tool, 30_000);
+        console.log(`[fleet] ${service} is up`);
+    }
+
+    return { hostname, services };
+}
+
+/**
+ * Which machine to assign to, when nobody said.
+ *
+ * The fleet's own record first, because a node that has said hello is a node that exists. The
+ * registry is the fallback, so the very first run works on a cluster with no `node` rows at all —
+ * and this process's own peer is excluded either way, since assigning services to the bring-up
+ * script would be assigning them to something that is about to exit.
+ */
+async function targetNode(ctx: BringUpContext, as: Caller): Promise<string> {
+    const known = await ctx.broker.call('node.find', { query: {}, limit: 50 }, as).catch(() => []);
+    const registered = known.find((node) => !node.hostname.startsWith('bringup-'));
+    if (registered !== undefined) return registered.hostname;
+
+    const peers = ctx.app.registry.getNodes?.() ?? [];
+    const peer = peers.find((node) => !node.nodeID.startsWith('bringup-'));
+    return peer?.nodeID ?? os.hostname();
+}
+
+// ---------------------------------------------------------------------------- catalog and builder
+
+/**
+ * Read a repository's descriptor into part rows. **The last thing that reads `mesh.json`.**
+ *
+ * After this the catalog is authoritative: what a part builds, which entry, which kernel range and
+ * which contracts it calls all live on the row and are editable from the console. Editing the file
+ * again changes nothing until somebody imports again, which is the coupling being removed rather
+ * than an oversight.
+ */
+export async function importRepository(
+    ctx: BringUpContext,
+    as: Caller,
+    options: { repository: string; ref?: string },
+): Promise<readonly { name: string; kind: string }[]> {
+    console.log(
+        `[builder] importing ${options.repository}` +
+        `${options.ref === undefined ? '' : ` @ ${options.ref}`}`,
+    );
+
+    const imported = await ctx.broker.call('builder.import_repo', {
+        repository: options.repository,
+        // Absent means the repository's own default branch, whatever it is called. Naming `main`
+        // here is a guess about somebody else's repository, and it was wrong the first time it ran.
+        ...(options.ref === undefined ? {} : { ref: options.ref }),
+    }, as);
+
+    for (const part of imported.parts) {
+        console.log(`[builder]   ${part.kind} ${part.name} ${part.existed ? 'updated' : 'declared'}`);
+    }
+    return imported.parts;
+}
+
+/**
+ * Release every part a repository declares: pull, mint a version, publish, build.
+ *
+ * Kernels first — the contract handles that, and it matters: a part declares a kernel range, so a
+ * kernel released after the parts written against it leaves a set nobody can compose.
+ *
+ * Failures are reported rather than thrown, by the contract and again here. Seven parts should give
+ * seven answers, and one that cannot build is a thing to read, not a reason to abandon the six that
+ * can.
+ */
+export async function releaseRepository(
+    ctx: BringUpContext,
+    as: Caller,
+    options: { repository: string; bump?: 'patch' | 'minor' | 'major'; branch?: string },
+): Promise<{ released: readonly { part: string; version: string }[]; failed: number }> {
+    console.log(`[builder] releasing ${options.repository}`);
+
+    const result = await ctx.broker.call('builder.release_repo', {
+        repository: options.repository,
+        bump: options.bump ?? 'patch',
+        ...(options.branch === undefined ? {} : { branch: options.branch }),
+    }, as);
+
+    for (const part of result.released) {
+        console.log(
+            `[builder]   ${part.part}@${part.version} ${part.commit.slice(0, 12)}` +
+            `${part.cached ? ' (cached)' : ''}`,
+        );
+    }
+    for (const failure of result.failed) {
+        console.error(`[builder]   ${failure.part} FAILED — ${failure.reason}`);
+    }
+
+    return { released: result.released, failed: result.failed.length };
+}
+
+// ---------------------------------------------------------------------------- the site's grants
+
+/**
+ * What gate a contract goes behind, when nobody has said otherwise.
+ *
+ * **A part must never choose its own gate**, so this is the site owner's policy written once rather
+ * than typed out per contract. The shape of it is the interesting part:
+ *
+ * - `public` — the two calls a signed-out browser must make. Not *harmless*, not *read-only*:
+ *   **required in order to sign in at all**, which is the only thing that earns `public`.
+ * - `user` — reading.
+ * - `operator` — everything that changes what runs on a hostname: composing, deploying, releasing,
+ *   assigning a node its services.
+ *
+ * The default is `operator`, deliberately. A contract this table has not been taught about is one
+ * nobody has classified, and the safe answer to *I do not know what this does* is the strictest
+ * gate — a too-strict gate is a 403 somebody reports, a too-loose one is not noticed.
+ */
+export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
+    const PUBLIC = new Set(['identity.register', 'identity.ticket_issue']);
+    if (PUBLIC.has(key)) return 'public';
+
+    const USER = new Set([
+        'identity.whoami', 'identity.sign_out', 'identity.ticket_revoke',
+        'catalog.resolve', 'builder.get_artifact', 'builder.artifact_blob',
+        'node.status',
+    ]);
+    if (USER.has(key)) return 'user';
+
+    /**
+     * Generated reads.
+     *
+     * Safe **only where the collection declares `scopedBy`**, which narrows a find to the caller's
+     * organization so it cannot be widened into somebody else's data. That is true of `site` and is
+     * *not* true of `release`, whose own comment claims otherwise — roadmap D7. This line is
+     * therefore slightly ahead of the platform, and the note is here so it is not mistaken for a
+     * guarantee: fixing D7 is what makes it one.
+     */
+    if (/\.(find|find_one|get|count)$/.test(key)) return 'user';
+
+    return 'operator';
+}
+
+/**
+ * The site's grants, derived from what the deployed release actually calls.
+ *
+ * **Not a hand-written list**, which matters more than it looks. `cdn.deploy` refuses a release
+ * calling a contract the site does not expose — correctly, since the alternative is a 404 at run
+ * time found by whoever opens the page — so a maintained-by-hand list goes stale exactly when a new
+ * part is added, which is the moment somebody is least able to guess why the deploy was refused.
+ *
+ * `identity.register` and `identity.ticket_issue` are added whether or not a part declares them: a
+ * page nobody can sign in to cannot use anything else it was granted.
+ */
+export function grantsFor(requires: readonly string[]): {
+    contracts: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
+    events: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
+} {
+    const keys = new Set([...requires, 'identity.register', 'identity.ticket_issue']);
+    const contracts = [...keys].sort().map((key) => ({ key, auth: gateFor(key) }));
+
+    /**
+     * Every exposed collection streams its own CRUD events, at the gate its `find` has.
+     *
+     * This is what makes a list in the console *live* rather than a snapshot with a refresh button
+     * beside it: mesh-web subscribes to `${name}.created|updated|deleted` for a collection the
+     * generated client declares, and the client declares only what the site exposes. The gate has
+     * to match the collection's own — looser would push rows to somebody who may not read them.
+     */
+    const domains = [...new Set(
+        contracts
+            .filter((entry) => entry.key.endsWith('.find'))
+            .map((entry) => entry.key.slice(0, entry.key.indexOf('.'))),
+    )].sort();
+
+    const events = domains.flatMap((domain) => ['created', 'updated', 'deleted'].map((verb) => ({
+        key: `${domain}.${verb}`,
+        auth: gateFor(`${domain}.find`),
+    })));
+
+    return { contracts, events };
+}
+
+// ---------------------------------------------------------------------------- releases and sites
+
+/**
+ * Compose a release from ranges, and mark it rolling.
+ *
+ * **Ranges rather than the exact versions just minted.** A release marked `rolling` re-resolves
+ * *these* when a part in them is released again, which is the last two steps of the old six-step
+ * loop happening without anybody typing them. Pinning what came out of this run would make the
+ * release follow nothing.
+ */
+export async function composeRelease(
+    ctx: BringUpContext,
+    as: Caller,
+    options: {
+        kernel: string;
+        parts: readonly { kind: 'application' | 'extension'; id: string; version: string }[];
+        name?: string;
+        rolling?: boolean;
+    },
+): Promise<{ hash: string; requires: readonly string[] } | undefined> {
+    await ctx.waitFor('cdn.compose');
+
+    const composed = await ctx.broker.call('cdn.compose', {
+        kernel: options.kernel,
+        parts: options.parts.map((part) => ({ ...part })),
+        name: options.name ?? '',
+        rolling: options.rolling ?? true,
+    }, as);
+
+    if (composed.hash === '') {
+        // Every problem at once: somebody composing seven parts wants seven answers, and failing on
+        // the first turns one round trip into seven.
+        console.error('[cdn] composition failed:');
+        for (const problem of composed.problems) console.error(`[cdn]   ${problem.message}`);
+        return undefined;
+    }
+
+    console.log(
+        `[cdn] release ${composed.hash} — kernel ${composed.kernel.version}, ` +
+        `${String(Object.keys(composed.parts).length)} part(s)` +
+        `${composed.existed ? ' (existed)' : ''}`,
+    );
+
+    // The row carries the union of what its parts call, which is exactly what the site must grant.
+    const release = await ctx.broker.call('release.find_one', { query: { hash: composed.hash } }, as);
+    return { hash: composed.hash, requires: release?.requires ?? [] };
+}
+
+/** The site, with grants covering exactly what the release calls. */
+export async function ensureSite(
+    ctx: BringUpContext,
+    as: Caller,
+    options: {
+        host: string;
+        api: string;
+        application: string;
+        tenantId: string;
+        requires: readonly string[];
+        title?: string;
+    },
+): Promise<string> {
+    const { contracts, events } = grantsFor(options.requires);
+    const mesh = [{
+        package: '@flybyme/mesh-serve',
+        version: '^0.1.0',
+        contracts,
+        events,
+    }];
+
+    const existing = await ctx.broker.call('site.find_one', { query: { host: options.host } }, as)
+        .catch(() => null);
+
+    if (existing?.id !== undefined) {
+        // Grants are rewritten every run *because they are derived*: a release that calls something
+        // new must not need a person to remember. Everything else about the site — theme, policy,
+        // title — is left exactly as the operator set it.
+        await ctx.broker.call('site.update', {
+            id: existing.id, mesh, api: options.api,
+        }, as);
+        console.log(
+            `[site] "${options.host}" updated — ${String(contracts.length)} contract(s), ` +
+            `${String(events.length)} event(s)`,
+        );
+        return existing.id;
+    }
+
+    const created = await ctx.broker.call('site.create', {
+        host: options.host,
+        application: options.application,
+        tenantId: options.tenantId,
+        api: options.api,
+        mesh,
+        theme: {},
+        policy: {},
+        title: options.title ?? options.application,
+    }, as);
+
+    console.log(
+        `[site] created "${options.host}" (${created.id}) — ${String(contracts.length)} contract(s), ` +
+        `${String(events.length)} event(s)`,
+    );
+    return created.id;
+}
+
+/** Point the hostname at the release. One field, which is why rollback is the same write backwards. */
+export async function deploySite(
+    ctx: BringUpContext,
+    as: Caller,
+    options: { host: string; release: string },
+): Promise<void> {
+    const deployed = await ctx.broker.call('cdn.deploy', {
+        host: options.host, release: options.release,
+    }, as);
+
+    console.log(
+        `[cdn] ${deployed.host} → ${deployed.release}${deployed.changed ? '' : ' (unchanged)'}`,
+    );
+
+    if (deployed.unusedGrants.length > 0) {
+        // Reported, never refused: a grant nothing calls is the route somebody left behind when
+        // they deleted the screen that used it.
+        console.log(`[cdn] granted but unused: ${deployed.unusedGrants.join(', ')}`);
+    }
+}
+
+// ---------------------------------------------------------------------------- the whole thing
+
+/**
+ * What the console is made of.
+ *
+ * Ranges, because the release is rolling: these are what it re-resolves when any of these parts is
+ * released again.
+ */
+const CONSOLE_PARTS = [
+    { kind: 'extension', id: 'chrome', version: '^0.2' },
+    { kind: 'extension', id: 'ui', version: '^0.2' },
+    { kind: 'extension', id: 'auth', version: '^0.3' },
+    { kind: 'application', id: 'catalog', version: '^0.2' },
+    { kind: 'application', id: 'releases', version: '^0.2' },
+    { kind: 'application', id: 'fleet', version: '^0.2' },
+    { kind: 'application', id: 'sites', version: '^0.1' },
+] as const;
+
 export async function main(): Promise<void> {
     const ctx = await setup();
-    const { broker, waitFor } = ctx;
 
     try {
         console.log('\n=== Seeding the cluster through its own contracts ===\n');
 
-        // Nothing below can run until identity is actually reachable. Without this the first call
-        // fails with "tool not found" a few milliseconds before the node it needs finishes
-        // announcing itself, which reads as a broken cluster rather than as a race.
-        await waitFor('identity.ticket_issue');
-
-        // 1. The user
         const email = flag('email', process.env['USER_EMAIL'] ?? 'tim@example.com');
         const password = flag('password', process.env['USER_PASSWORD'] ?? 'correct-horse-battery-staple');
-        const displayName = flag('name', process.env['USER_NAME'] ?? 'Tim');
 
-        let userId: string;
-        const existingUser = await broker.call('user.find_one', { query: { email } })
-            .catch(() => null);
+        const userId = await ensureUser(ctx, {
+            email,
+            password,
+            displayName: flag('name', process.env['USER_NAME'] ?? 'Tim'),
+        });
+        const orgId = await ensureOrganization(ctx, {
+            slug: flag('org-slug', process.env['ORG_SLUG'] ?? 'tim-org'),
+            name: flag('org-name', process.env['ORG_NAME'] ?? 'Tim Org'),
+            ownerId: userId,
+        });
 
-        if (existingUser?.id !== undefined) {
-            userId = existingUser.id;
-            console.log(`[user] "${email}" already exists (${userId})`);
-        } else {
-            const registered = await broker.call('identity.register', { email, password, displayName });
-            userId = registered.userId;
-            console.log(`[user] registered "${email}" (${userId})`);
+        const as = callerFor(userId, orgId);
+        await ensureMembership(ctx, { userId, orgId }, as);
+        const ticket = await issueTicket(ctx, { email, password });
+
+        const host = flag('host', process.env['SITE_HOST'] ?? 'localhost');
+        const api = flag('api', process.env['SITE_API'] ?? 'http://127.0.0.1:5005');
+
+        // `--identity-only` stops here: an account and a ticket, nothing built. What you want when
+        // the cluster is already seeded and you only need to be able to sign in.
+        if (has('identity-only')) {
+            report({ email, orgId, ticket });
+            return;
         }
 
-        // 2. The organization
-        const orgSlug = flag('org-slug', process.env['ORG_SLUG'] ?? 'tim-org');
-        const orgName = flag('org-name', process.env['ORG_NAME'] ?? 'Tim Org');
-
-        let orgId: string;
-        const existingOrg = await broker.call('organization.find_one', { query: { slug: orgSlug } })
-            .catch(() => null);
-
-        if (existingOrg?.id !== undefined) {
-            orgId = existingOrg.id;
-            console.log(`[org] "${orgSlug}" already exists (${orgId})`);
-        } else {
-            const org = await broker.call('organization.create', {
-                name: orgName, slug: orgSlug, ownerId: userId,
-            });
-            orgId = org.id;
-            console.log(`[org] created "${orgName}" (${orgSlug}) (${orgId})`);
-        }
-
-        // 3. The membership, which is what makes the user's calls resolve to that organization.
-        const orgMeta = {
-            meta: {
-                organizationId: orgId,
-                tenantId: orgId,
-                user: { id: userId, tenant_id: orgId },
-            },
-        };
-
-        // **Both halves of the key.** Querying on `userId` alone matches a membership in *some*
-        // organization, so a user who belongs to two would be reported as already a member of
-        // whichever row came back first — and never added to this one.
-        const existingMember = await broker.call(
-            'membership.find_one',
-            { query: { userId, organizationId: orgId } },
-            orgMeta,
-        ).catch(() => null);
-
-        if (existingMember?.id !== undefined) {
-            console.log(`[membership] already an owner of "${orgSlug}"`);
-        } else {
-            await broker.call('membership.create', {
-                userId, organizationId: orgId, roleKey: 'owner', joinedAt: Date.now(),
-            }, orgMeta);
-            console.log(`[membership] added ${userId} as owner of "${orgSlug}"`);
-        }
-
-        // 4. A ticket, so the rest of the seeding — and whatever the operator does next — is a
-        //    call from a real caller rather than from a script with a private door.
-        const ticket = await broker.call('identity.ticket_issue', { email, password });
-
-        // 5. The site
-        const siteHost = flag('host', process.env['SITE_HOST'] ?? 'localhost');
-        const siteApi = flag('api', process.env['SITE_API'] ?? 'http://127.0.0.1:5005');
-
-        await waitFor('site.find_one');
-        const existingSite = await broker.call('site.find_one', { query: { host: siteHost } }, orgMeta)
-            .catch(() => null);
-
-        if (existingSite?.id !== undefined) {
-            console.log(`[site] "${siteHost}" already exists (${existingSite.id})`);
-        } else {
-            const site = await broker.call('site.create', {
-                host: siteHost,
-                application: 'console',
-                tenantId: orgId,
-                api: siteApi,
-                mesh: [{
-                    package: '@flybyme/mesh-serve',
-                    version: '^0.1.0',
-                    contracts: [
-                        { key: 'identity.register', auth: 'public' },
-                        { key: 'identity.ticket_issue', auth: 'public' },
-                        { key: 'identity.whoami', auth: 'user' },
-                        { key: 'site.find', auth: 'user' },
-                        { key: 'site.get', auth: 'user' },
-                    ],
-                    events: [
-                        { key: 'site.created', auth: 'user' },
-                        { key: 'site.updated', auth: 'user' },
-                        { key: 'site.deleted', auth: 'user' },
-                    ],
-                }],
-                theme: {},
-                policy: {},
-                title: 'Console Site',
-            }, orgMeta);
-            console.log(`[site] created "${siteHost}" (${site.id})`);
-        }
-
-        console.log('\n=== Done ===\n');
-        console.log(`User:  ${email}`);
-        console.log(`Org:   ${orgName} (${orgSlug}) [${orgId}]`);
-        console.log(`Site:  ${siteHost} → ${siteApi}\n`);
+        const node = optional('node');
+        await assignServices(ctx, as, { ...(node === undefined ? {} : { hostname: node }) });
 
         /**
-         * The ticket is printed and the password is not.
+         * The kernel repository first, then everything built against it.
          *
-         * A ticket expires and can be revoked; a password is the credential behind every ticket
-         * that will ever be issued for this account, and printing one puts it in a scrollback, a
-         * screen recording and a `journalctl` for as long as any of those live. Same class of
-         * mistake as the database password that reached surf's journal.
+         * `release_repo` orders parts within one repository, but two repositories have an order
+         * too: mesh-core's parts declare a kernel range, and composing against a kernel with no
+         * artifact yet is a refusal that reads as a missing part.
          */
-        console.log(`Ticket: ${ticket.token}\n`);
-        console.log('Try it:');
-        console.log(
-            `  curl -H "Host: ${siteHost}" -H "Authorization: Bearer ${ticket.token}" ` +
-            `${siteApi}/identity/whoami\n`,
-        );
+        const repositories = [
+            flag('kernel-repo', 'https://github.com/FLYBYME/mesh-web.git'),
+            flag('core-repo', 'https://github.com/FLYBYME/mesh-core.git'),
+        ];
+        const ref = optional('ref');
+
+        let failures = 0;
+        for (const repository of repositories) {
+            await importRepository(ctx, as, { repository, ...(ref === undefined ? {} : { ref }) });
+
+            if (has('import-only')) continue;
+
+            const result = await releaseRepository(ctx, as, {
+                repository,
+                bump: 'patch',
+                ...(ref === undefined ? {} : { branch: ref }),
+            });
+            failures += result.failed;
+        }
+
+        // `--import-only` stops once the catalog knows what the parts are — useful on a slow
+        // connection, or to look at what was declared before anything is built.
+        if (has('import-only')) {
+            report({ email, orgId, ticket });
+            return;
+        }
+
+        if (failures > 0) {
+            // Composing on top of a partial release produces a second, more confusing failure about
+            // a missing artifact, several steps away from the build that actually failed.
+            console.error(
+                `\n${String(failures)} part(s) failed to build. Nothing was composed — fix those ` +
+                `first, then run this again.\n`,
+            );
+            report({ email, orgId, ticket });
+            return;
+        }
+
+        const composed = await composeRelease(ctx, as, {
+            kernel: flag('kernel-range', '^0.15'),
+            parts: CONSOLE_PARTS,
+            name: 'console',
+            rolling: true,
+        });
+
+        if (composed === undefined) {
+            console.error('\nNothing was deployed: the composition above has to hold together first.\n');
+            report({ email, orgId, ticket });
+            return;
+        }
+
+        await ensureSite(ctx, as, {
+            host,
+            api,
+            application: 'console',
+            tenantId: orgId,
+            requires: composed.requires,
+            title: 'Console',
+        });
+
+        await deploySite(ctx, as, { host, release: composed.hash });
+
+        report({ email, orgId, ticket, host, api, release: composed.hash });
     } finally {
         await ctx.stop();
+    }
+}
+
+/**
+ * The ticket is printed and the password is not.
+ *
+ * A ticket expires and can be revoked; a password is the credential behind every ticket that will
+ * ever be issued for that account, and printing one puts it in a scrollback, a screen recording and
+ * a `journalctl` for as long as any of those live. Same class of mistake as the database password
+ * that reached surf's journal.
+ */
+function report(what: {
+    email: string; orgId: string; ticket: string;
+    host?: string; api?: string; release?: string;
+}): void {
+    console.log('\n=== Done ===\n');
+    console.log(`User:    ${what.email}`);
+    console.log(`Org:     ${what.orgId}`);
+    if (what.host !== undefined) console.log(`Site:    ${what.host} → ${what.api ?? ''}`);
+    if (what.release !== undefined) console.log(`Release: ${what.release}`);
+    console.log(`\nTicket:  ${what.ticket}\n`);
+
+    if (what.host !== undefined && what.api !== undefined) {
+        console.log('Try it:');
+        console.log(
+            `  curl -H "Host: ${what.host}" -H "Authorization: Bearer ${what.ticket}" ` +
+            `${what.api}/identity/whoami\n`,
+        );
     }
 }
 

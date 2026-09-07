@@ -388,6 +388,41 @@ Nothing resolves until this exists. Every version a site names is a row here.
       over shapes, not over the real exposure, and cannot be compared with what an API reports. The
       check belongs at **compose time**, where the site's grants are known. **S** · ⛔ D4, C1
 
+- [ ] **D6 ★ `visibility: 'internal'` is not enforced anywhere but HTTP.** A `defineCrud` marking
+      every action `internal` — `user` does exactly this, deliberately, and says so — is protected at
+      exactly one place: `describeExposure` (`api/schema/descriptor.ts:150`) refuses to put it in a
+      site's REST exposure. **Nothing consults `visibility` at dispatch.** Not `ServiceBroker`, not
+      `ServiceModule`, not any middleware; the only other reader in the repository is a log line.
+      So `internal` means *not routable over HTTP*, and does not mean *not callable*. Any process
+      that completes the mesh handshake may call `user.find_one` and read every user row on the
+      deployment, and it needs no ticket, no organization and no roles — **not forged meta, no meta
+      at all.** Found by `src/bring-up.ts`, which does precisely that and works.
+      Two separate holes, and the second is the one that matters: a joined peer can also *construct*
+      any meta it likes, so `scopedBy` and every `requireOperator` check are assertions a caller
+      makes about itself. `MESH_KEY` is therefore not one boundary among several — it is the only
+      one, and a key that leaks is every collection on the platform.
+      The fix is a broker-level check, because per-tool checks are what this already relies on and
+      they are individually correct: a call arriving **over the network** may only reach a contract
+      whose `visibility` says so, whatever meta it carries; a call from a module mounted in the same
+      process may reach anything. That distinction exists in the transport and is not currently
+      passed to the dispatcher. **L** · ⛔ mesh
+
+- [ ] **D7 ★ `release` is exposed on an argument for safety it never implemented.** `releaseCrud`
+      declares `visibility: { find, findOne, get, count: 'public' }` and its own comment says why that
+      is safe: *"exposable now because `scopedBy` makes every generated read a read within the
+      caller's own organization"* (`cdn/contracts/release.contract.ts:40`). **`releaseCrud` declares
+      no `scopedBy`.** The framework has no default — an undeclared collection is unscoped
+      (`normalizeUniqueKeys`: *"On an unscoped collection: all keys are global"*) — so `release.find`
+      answers with every composition on the platform: which parts each tenant runs, at which
+      versions, at which digests. Reachable from a browser on any site that exposes it.
+      The comment is not wrong about the rule, and that is what makes it dangerous: it states the
+      condition that would make the exposure safe, in the same object that fails to meet it, so
+      reading the file is *reassuring*. `siteCrud` next door does declare it (line 81), which is why
+      this reads as done.
+      Fix is one line, plus the question it raises: `build` is unscoped too and nobody decided that —
+      a build record names a repository and a commit. `artifact`, `part` and `partVersion` are
+      global **on purpose** and say so; those three stay. **S**
+
 ## Track F — Managing the platform
 
 Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
