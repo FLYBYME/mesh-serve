@@ -224,6 +224,32 @@ export async function ensureMembership(
         userId: who.userId, organizationId: who.orgId, roleKey: 'owner', joinedAt: Date.now(),
     }, as);
     console.log(`[membership] added ${who.userId} as owner`);
+
+    /**
+     * **A second membership is not free, and nothing used to say so.**
+     *
+     * The `authorize` hook resolves a scope from the caller's memberships and will only do it when
+     * there is exactly one — with more it declines rather than guessing, because guessing which
+     * organization a request meant is how it reads the wrong one's data. So the moment an account
+     * joins its second organization, every *scoped* collection starts answering 401 over HTTP until
+     * the caller sends `x-organization`, while the global ones carry on working.
+     *
+     * That is correct and it looks nothing like the truth from a browser: the console showed
+     * "no auth" on sites and releases and loaded parts and nodes normally. Adding the membership is
+     * still the right thing to do here — it is what makes the account able to work in the
+     * organization at all — so this warns rather than refuses.
+     */
+    const all = await ctx.broker.call(
+        'membership.find', { query: { userId: who.userId }, limit: 50 }, as,
+    ).catch(() => []);
+
+    if (all.length > 1) {
+        console.warn(
+            `[membership] this account is now in ${String(all.length)} organizations. Scoped ` +
+            `collections (site, release) will answer 401 over HTTP until the caller sends the ` +
+            `x-organization header, because the scope is ambiguous and the hook will not guess.`,
+        );
+    }
 }
 
 /**
@@ -709,9 +735,41 @@ export async function main(): Promise<void> {
             password,
             displayName: flag('name', process.env['USER_NAME'] ?? 'Tim'),
         });
+        /**
+         * **The organization is named, never invented.**
+         *
+         * This defaulted to `tim-org`, and against a cluster that already had one it did real
+         * damage rather than nothing. It created a second organization, added the account to it,
+         * and every `catalog.declare` was then refused with *No such part* — correctly, because the
+         * parts belonged to `flybyme` and the caller was now arriving as somebody else.
+         *
+         * Worse and quieter: two memberships make the scope **ambiguous**, and the `authorize` hook
+         * resolves one only when there is exactly one — it will not guess, because guessing is how
+         * a request reads another organization's data. So every *scoped* collection started
+         * answering 401 while the global ones kept working, which reads as an auth bug and is a
+         * membership bug. Undoing it meant deleting a membership from a live database.
+         *
+         * A default that is harmless on an empty cluster and destructive on a real one is not a
+         * default. Refused, with the organizations that do exist named, because the answer is
+         * almost always already on screen.
+         */
+        const orgSlug = optional('org-slug') ?? process.env['ORG_SLUG'];
+        if (orgSlug === undefined) {
+            const known = await ctx.broker.call('organization.find', { query: {}, limit: 50 })
+                .catch(() => []);
+            console.error(
+                `\nWhich organization? Pass --org-slug.\n` +
+                (known.length === 0
+                    ? '  none exist yet — pass --org-slug and --org-name to create one\n'
+                    : `  existing: ${known.map((o) => o.slug).join(', ')}\n`),
+            );
+            return;
+        }
+
         const orgId = await ensureOrganization(ctx, {
-            slug: flag('org-slug', process.env['ORG_SLUG'] ?? 'tim-org'),
-            name: flag('org-name', process.env['ORG_NAME'] ?? 'Tim Org'),
+            slug: orgSlug,
+            // Only used when creating; an existing organization keeps the name it has.
+            name: flag('org-name', process.env['ORG_NAME'] ?? orgSlug),
             ownerId: userId,
         });
 
