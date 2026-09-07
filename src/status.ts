@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { artifactCrud, buildCrud } from './builder/contracts/artifact.contract.js';
+import { GLOBALLY_DELIVERED } from './api/methods/events.js';
 import { partCrud, partVersionCrud } from './catalog/contracts/part.contract.js';
 import { edgeCrud } from './cdn/contracts/edge.contract.js';
 import { releaseCrud } from './cdn/contracts/release.contract.js';
@@ -70,9 +71,25 @@ function section(title: string): void {
     console.log(`\n${bold(title)}\n${dim('─'.repeat(Math.max(24, title.length)))}`);
 }
 
-/** A table that lines up regardless of colour, and says so when there is nothing in it. */
-function table(rows: readonly (readonly string[])[], empty = 'nothing'): void {
-    if (rows.length === 0) {
+/**
+ * A table that lines up regardless of colour, says so when there is nothing in it, and — the part
+ * that matters — **never renders a failed read as an empty one**.
+ *
+ * It did, once, for about ten minutes: `node.find` threw, `ask` returned its fallback, and the
+ * fleet table drew a header over nothing. An empty table reads as *there are no nodes*, so the tool
+ * built to catch things that fail silently was failing silently. A refusal is a finding here, not
+ * an absence, and the two must never look alike.
+ */
+function table(
+    rows: readonly (readonly string[])[],
+    empty = 'nothing',
+    error?: string,
+): void {
+    if (error !== undefined) {
+        console.log(`  ${red('could not read:')} ${error}`);
+        return;
+    }
+    if (rows.length <= 1) {
         console.log(dim(`  (${empty})`));
         return;
     }
@@ -173,6 +190,24 @@ const COLLECTIONS = [
 const scopedByOf = (name: string): string | undefined =>
     (COLLECTIONS.find((c) => c.name === name)?.crud as { scopedBy?: string } | undefined)?.scopedBy;
 
+/**
+ * Whether a collection's CRUD events can reach a subscriber at all.
+ *
+ * Three states, not two, and this tool reported two until the third existed. A collection scoped by
+ * a field narrows its events to that owner. A collection listed in `GLOBALLY_DELIVERED` is global
+ * *on purpose* and its events go to everyone the site's gate admits. Anything else can be narrowed
+ * to nobody, so its events are refused at deploy and any list subscribing to them is silent for
+ * ever — which is the failure worth naming, because nothing about it looks like a failure.
+ *
+ * Imported from the API rather than restated, so this cannot drift from what the server does.
+ */
+const streaming = (name: string): { can: boolean; how: string } => {
+    const scoped = scopedByOf(name);
+    if (scoped !== undefined) return { can: true, how: scoped };
+    if (GLOBALLY_DELIVERED.has(name)) return { can: true, how: 'global' };
+    return { can: false, how: '—' };
+};
+
 async function report(): Promise<void> {
     const bootstrap = flag('bootstrap', process.env['MESH_BOOTSTRAP'] ?? 'ws://127.0.0.1:4001')
         .split(',').map((s) => s.trim()).filter((s) => s !== '');
@@ -221,7 +256,7 @@ async function report(): Promise<void> {
                 (n.groups ?? []).join(',') || dim('—'),
                 ago(n.updatedAt),
             ]),
-        ], 'no nodes have said hello');
+        ], 'no nodes have said hello', nodes.error);
 
         for (const n of nodes.value as { hostname: string; services?: string[] }[]) {
             if (!connected.has(n.hostname) && (n.services ?? []).length > 0) {
@@ -280,7 +315,7 @@ async function report(): Promise<void> {
                         ago(latest?.publishedAt),
                     ];
                 }),
-        ], 'no parts published');
+        ], 'no parts published', parts.error ?? versions.error);
 
         for (const [name, list] of byPart) {
             const unbuilt = list.filter((v) => v.artifactDigest === undefined);
@@ -318,7 +353,7 @@ async function report(): Promise<void> {
                     ? dim(`→ ${short(r.supersededBy)}`) : dim('no'),
                 ago(r.composedAt),
             ]),
-        ], 'nothing composed');
+        ], 'nothing composed', releases.error);
 
         const rollingCount = (releases.value as Rel[]).filter((r) => r.rolling === true).length;
         console.log(dim(`  ${String((releases.value as Rel[]).length)} total, ${String(rollingCount)} rolling`));
@@ -352,7 +387,7 @@ async function report(): Promise<void> {
                     String(events),
                 ];
             }),
-        ], 'no sites');
+        ], 'no sites', sites.error);
 
         for (const s of sites.value as Site[]) {
             if (s.releaseHash !== undefined && !byHash.has(s.releaseHash)) {
@@ -374,7 +409,7 @@ async function report(): Promise<void> {
              */
             const dead = s.mesh.flatMap((m) => m.events ?? [])
                 .map((e) => e.key)
-                .filter((key) => scopedByOf(key.slice(0, key.indexOf('.'))) === undefined);
+                .filter((key) => !streaming(key.slice(0, key.indexOf('.'))).can);
 
             if (dead.length > 0) {
                 findings.push({
@@ -390,19 +425,23 @@ async function report(): Promise<void> {
         // ------------------------------------------------------------------ collections
         section('COLLECTIONS');
         table([
-            [dim('COLLECTION'), dim('SCOPED BY'), dim('READS'), dim('EVENTS STREAM')],
+            [dim('COLLECTION'), dim('ROWS SCOPED BY'), dim('READS'), dim('EVENTS REACH')],
             ...COLLECTIONS.map(({ name, crud }) => {
                 const scoped = scopedByOf(name);
+                const stream = streaming(name);
                 const vis = (crud as { visibility?: Record<string, string> }).visibility?.['find'] ?? 'internal';
                 return [
                     name,
-                    scoped ?? dim('global'),
+                    scoped ?? dim('nobody — global'),
                     vis === 'public' ? (scoped === undefined ? yellow('public') : green('public')) : dim(vis),
-                    scoped === undefined ? red('no') : green('yes'),
+                    stream.can
+                        ? green(stream.how === 'global' ? 'everyone the gate admits' : `the ${stream.how}`)
+                        : red('nobody'),
                 ];
             }),
         ]);
-        console.log(dim('  public reads on a collection with no scope return every tenant\'s rows'));
+        console.log(dim('  a public read on a collection with no scope returns every tenant\'s rows'));
+        console.log(dim('  events reaching nobody are refused at deploy; lists subscribing to them never update'));
 
         for (const { name, crud } of COLLECTIONS) {
             const scoped = scopedByOf(name);
