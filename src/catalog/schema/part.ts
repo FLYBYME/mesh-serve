@@ -190,7 +190,17 @@ export const PartVersionSchema = z.object({
     /** For a monorepo. A name within the repository, never a path on a disk. */
     subdirectory: z.string().min(1).optional(),
 
-    /** The kernel range this was written against. Absent on a kernel, which has no kernel. */
+    /**
+     * The kernel range this was written against, e.g. `^0.13`.
+     *
+     * "The only thing standing between a stale part and a browser." Enforced at release composition
+     * time by `checkComposition`: if the release serves a kernel outside this declared range,
+     * compose refuses with a fatal `kernel_mismatch` problem.
+     *
+     * Absent on a kernel artifact (which has no kernel of its own).
+     * On a part, an absent range is accepted rather than refused so that parts published before this
+     * field existed remain composable without breaking existing releases.
+     */
     kernel: z.string().min(1).optional(),
 
     /** Contract keys this version calls, by name. Checked against the site's grants at compose time. */

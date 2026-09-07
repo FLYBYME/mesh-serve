@@ -418,14 +418,13 @@ task** — each is a decision about the platform's own surface that blocks any U
       and organization-scoped roles only in an organization; write points validate against the store
       (refusing organization-scoped roles in `user.roles` and cluster-scoped roles in `membership.roleKey`).
       **Operator contracts need no new mechanism and `scopedBy` never learns about bypasses.** **M**
-- [ ] **F5 ★ `partVersion.kernel` is stored and never read, and a live release already violates it.**
+- [x] **F5 ★ `partVersion.kernel` is stored and never read, and a live release already violates it.** *(done 2026-09-06)*
       `publish-cli` writes the range a part was built against, with the comment *"the only thing
-      standing between a stale part and a browser"*; `build_start` forwards it. **Nothing reads it** —
-      `checkComposition` checks missing parts, unmet contracts and unused grants, and has no kernel
-      case at all. It is not theoretical: the live release is kernel **0.5.0** with `auth@0.1.0`,
-      which declares `kernel: ^0.4` and depends on `@flybyme/mesh-web: 0.4.0`. `^0.4` is
-      `>=0.4.0 <0.5.0`, so compose accepted an out-of-range part without a word. Add a
-      `kernel_mismatch` problem, fatal. **S**
+      standing between a stale part and a browser"*; `build_start` forwards it. **Enforced at compose time.**
+      `checkComposition` checks `kernel.version` against each part's declared `kernel` range and emits
+      a fatal `kernel_mismatch` problem that refuses composition if out of range. A kernel artifact's
+      own absent requirement is not a mismatch, and parts published before the field existed have an
+      absent range accepted without error to preserve backward compatibility. **S**
 - [ ] **F6 ★ `publish-cli` mints its own caller, and nothing checks it.** The CLI joins the cluster as
       a **node**, and *a node must never hold a user credential* — so the generated `ToolCommands.ts`
       passing no `meta.user`, and `site.find` refusing it, is both halves working as designed:

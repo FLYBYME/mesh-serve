@@ -424,6 +424,57 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         expect(second.existed).toBe(true);
     });
 
+    it('refuses to compose when a part declares an incompatible kernel range', async () => {
+        await world.call('catalog.publish', {
+            name: 'fixture-stale', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.2',
+        });
+        const build = await world.call<{ artifactDigest?: string }>('builder.build_start', {
+            part: 'fixture-stale', version: '1.0.0',
+        });
+        expect(build.artifactDigest).toBeDefined();
+
+        const composed = await world.call<{
+            hash: string;
+            problems: { kind: string; message: string }[];
+        }>('cdn.compose', {
+            kernel: '^0.3',
+            parts: [{ kind: 'application', id: 'fixture-stale', version: '^1.0' }],
+        });
+
+        expect(composed.hash).toBe('');
+        expect(composed.problems).toHaveLength(1);
+        expect(composed.problems[0]?.kind).toBe('kernel_mismatch');
+        expect(composed.problems[0]?.message).toContain('fixture-stale');
+        expect(composed.problems[0]?.message).toContain('^0.2');
+    });
+
+    it('composes cleanly when a part declares no kernel range', async () => {
+        // Versions published before the field existed have none. Refusing them breaks
+        // existing releases; accepting them preserves backward compatibility.
+        await world.call('catalog.publish', {
+            name: 'fixture-legacy', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: world.commit, entry: 'src/app.ts',
+        });
+        const build = await world.call<{ artifactDigest?: string }>('builder.build_start', {
+            part: 'fixture-legacy', version: '1.0.0',
+        });
+        expect(build.artifactDigest).toBeDefined();
+
+        const composed = await world.call<{
+            hash: string;
+            parts: Record<string, unknown>;
+            problems: { kind: string; message: string }[];
+        }>('cdn.compose', {
+            kernel: '^0.3',
+            parts: [{ kind: 'application', id: 'fixture-legacy', version: '^1.0' }],
+        });
+
+        expect(composed.problems).toEqual([]);
+        expect(composed.hash).toMatch(/^sha256:/);
+        expect(Object.keys(composed.parts)).toEqual(['fixture-legacy']);
+    });
+
     it('serves the site over HTTP once it is deployed', async () => {
         const composed = await world.call<{
             hash: string;

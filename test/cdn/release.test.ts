@@ -152,3 +152,90 @@ describe('does this set of parts hold together', () => {
         expect(problems.filter(isFatal)).toHaveLength(3);
     });
 });
+
+describe('kernel range enforcement', () => {
+    it('refuses a kernel mismatch, naming both the part and the range', () => {
+        // Kernel 0.13 with a part declaring ^0.6: refused, fatal.
+        const problems = checkComposition(
+            ['theme'], [], [], [],
+            { version: '0.13.0', ranges: { theme: '^0.6' } },
+        );
+
+        expect(problems).toHaveLength(1);
+        expect(problems[0]?.kind).toBe('kernel_mismatch');
+        expect(problems[0]?.message).toContain('theme');
+        expect(problems[0]?.message).toContain('^0.6');
+        expect(isFatal(problems[0]!)).toBe(true);
+    });
+
+    it('also refuses when kernel version is partial string 0.13', () => {
+        const problems = checkComposition(
+            ['theme'], [], [], [],
+            { version: '0.13', ranges: { theme: '^0.6' } },
+        );
+
+        expect(problems).toHaveLength(1);
+        expect(problems[0]?.kind).toBe('kernel_mismatch');
+        expect(problems[0]?.message).toContain('theme');
+        expect(problems[0]?.message).toContain('^0.6');
+        expect(isFatal(problems[0]!)).toBe(true);
+    });
+
+    it('treats a kernel artifact\'s own absent requirement as not a mismatch', () => {
+        // A kernel artifact has no kernel requirement of its own.
+        const problems = checkComposition(
+            ['kernel'], [], [], [],
+            { version: '0.13.0', ranges: { kernel: undefined } },
+        );
+
+        expect(problems).toEqual([]);
+    });
+
+    it('accepts an absent range on a part without error', () => {
+        // Versions published before the field existed have none. Refusing them breaks
+        // existing releases; accepting them preserves backward compatibility.
+        const problems = checkComposition(
+            ['legacy-part'], [], [], [],
+            { version: '0.13.0', ranges: { 'legacy-part': undefined } },
+        );
+
+        expect(problems).toEqual([]);
+    });
+
+    it('is satisfied when the kernel is within the declared range', () => {
+        // All six live sites as of 2026-09-06 rebuild are in range:
+        // demos.localhost, todo.localhost, demo.localhost with kernel 0.11.4 and parts ^0.11
+        const problems = checkComposition(
+            ['chrome', 'catalog', 'releases'], [], [], [],
+            {
+                version: '0.11.4',
+                ranges: {
+                    chrome: '^0.11',
+                    catalog: '^0.11',
+                    releases: '^0.11',
+                },
+            },
+        );
+
+        expect(problems).toEqual([]);
+    });
+
+    it('reports kernel mismatch alongside missing parts and contract errors', () => {
+        const problems = checkComposition(
+            ['theme'],
+            [{ by: 'app', id: 'missing-dep', version: '^1.0', optional: false }],
+            ['identity.whoami'],
+            [],
+            { version: '0.13.0', ranges: { theme: '^0.6' } },
+        );
+
+        expect(problems).toHaveLength(3);
+        expect(problems.map((p) => p.kind).sort()).toEqual([
+            'kernel_mismatch',
+            'missing_part',
+            'unmet_contract',
+        ]);
+        expect(problems.every(isFatal)).toBe(true);
+    });
+});
+
