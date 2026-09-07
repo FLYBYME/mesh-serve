@@ -1,211 +1,215 @@
-# Operating the platform
+# Operating a node
 
-Every command you need, in the order you would actually need them. Written
-2026-09-07, from doing each one by hand at least once — the notes marked **⚠**
-are mistakes that cost real time, not hypotheticals.
+**Written for somebody sitting on the machine.** Every command below is run from
+an ssh session on the box it affects — there is no orchestration from a laptop,
+and nothing here needs one.
 
-Two facts that explain most of the surprises below:
+Two facts that explain most of the surprises:
 
+- **Configuration is a file, never a command line.** `bin/node.mjs` reads
+  `./.env` beside the checkout, or `/etc/mesh/node.env`. A secret typed as an
+  argument is visible in `ps` to every user on the box.
 - **A part carries the `shapeHash` it was built against.** If the server's shape
   moves and a part is not rebuilt, *every* call that part makes fails with the
   word `stale`. Rebuild all parts together, always.
-- **The node is the only way in.** There is no admin CLI that reaches past it.
-  Publishing, building, composing and deploying are all contract calls to a
-  running node.
 
 ---
 
-## 0. The two secrets
+## 1. The configuration file
 
-| variable | what it is | where it lives |
-| --- | --- | --- |
-| `MESH_KEY` | the shared key a peer presents at the WebSocket handshake | `/etc/mesh/node.env` on every node |
-| `MESH_TOKEN` | an API token identifying **you** when publishing | your shell, not a file |
+`/etc/mesh/node.env` (systemd) or `.env` in the checkout (running by hand). Mode
+**600**, and `.env` is gitignored.
 
-**Every node in the fleet must have the same `MESH_KEY`.** It is generated once
-and copied; there is no negotiation.
+```ini
+MESH_KEY=<the fleet's shared key — identical on every machine>
+MONGODB_URI=mongodb+srv://user:pass@cluster/mesh-serve-live?appName=Cluster0
+MESH_BLOB_ROOT=/srv/mesh-serve/.artifacts
+CDN_PORT=8080
+CDN_URL=http://<this machine's public IP>:8080
 
-Read the current one off the head:
-
-```bash
-ssh -i ~/.ssh/paas_infra_ed25519 root@169.197.131.82 \
-  'grep -oP "(?<=^MESH_KEY=).*" /etc/mesh/node.env'
+# Every node except the head:
+MESH_BOOTSTRAP=ws://169.197.131.82:4001
 ```
-
-**⚠ Once a node has a key, everything talking to it needs the key — including
-tools on the same machine over loopback.** `mesh-serve publish` fails with
-`Tool "identity.api_token_validate" not found` if you forget, which does not
-look like an auth error at all.
-
----
-
-## 1. Run a node locally
-
-```bash
-cd ~/code/mesh-serve
-npm run build
-
-MESH_KEY=<the key> \
-MONGODB_URI='mongodb+srv://…/mesh-serve-live?…' \
-node bin/node.mjs --ws 4002 --cdn 8080 --api 5005 \
-                  --db mesh-serve-live \
-                  --bootstrap ws://169.197.131.82:4001
-```
-
-- `--ws 4002` — this laptop uses 4002 so it never fights the head's 4001.
-- `--bootstrap` — dial the head. Omit it to run alone.
-- **No `--ws-host`.** Loopback is the default and correct for every node except
-  the head.
 
 **⚠ The database name in the URI overrides `--db`.** A URI ending `/test_run?…`
-puts you in `test_run` no matter what `--db` says, and the symptom is
-`No site is configured for this hostname` on a database that visibly has sites
-in it. Make the URI path `mesh-serve-live`.
+puts you in `test_run` whatever `--db` says, and the symptom is
+`No site is configured for this hostname` on a database that visibly has sites in
+it. Make the path `mesh-serve-live`.
 
-Add `MESH_ALLOW_REPUBLISH=1` while developing to overwrite a version in place
-instead of bumping for every round trip. **Never set it on a production node.**
+**Bootstrap is an IP, permanently.** DNS is the product being built; a control
+plane that resolves its own head by name cannot reach the machines that would fix
+DNS.
+
+Read the fleet's key off any machine already in it:
+
+```bash
+grep -oP '(?<=^MESH_KEY=).*' /etc/mesh/node.env
+```
 
 ---
 
-## 2. Publish, build, deploy
-
-Four separate steps on purpose. Publishing says *this version exists*; building
-produces bytes; composing pins a set; deploying points a hostname at it.
-
-### Publish
-
-From the repository whose `mesh.json` you changed:
+## 2. Run a node
 
 ```bash
-cd ~/code/mesh-core          # or mesh-web
-MESH_KEY=<key> MESH_TOKEN=<token> MESH_BOOTSTRAP=ws://127.0.0.1:4002 \
-  node ~/code/mesh-serve/bin/mesh-serve.mjs publish --publisher flybyme
+cd /srv/mesh-serve
+npm run build
+node bin/node.mjs --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-live
 ```
 
-**⚠ Commit and push first.** Publishing records the current commit and the
-builder clones it from GitHub — an unpushed commit fails with *"the repository
-was reachable, so this is not a credential problem — the commit is missing."*
+That is the whole command. No variables in front of it — it reads the `.env` and
+the banner says which file it used:
 
-### Build, compose, deploy
-
-There is no CLI for these yet; they are contract calls. The working script is
-`scratch/ship.mjs` in the pattern below — build every part, compose, deploy:
-
-```js
-await app.call('builder.build_start', { part, version }, { meta, timeout: 600000 });
-const composed = await app.call('cdn.compose', { kernel: '^0.15', name, parts }, { meta });
-await app.call('cdn.deploy', { host: 'console.localhost', release: composed.hash }, { meta });
+```
+mesh-serve is up
+  mesh      ws://127.0.0.1:4001
+  cdn       http://169.197.131.82:8080
+  api       http://127.0.0.1:5005
+  mongo     mongodb+srv://user:***@cluster/mesh-serve-live
+  config    /srv/mesh-serve/.env
 ```
 
-`meta` comes from validating your token:
+**Only the head passes `--ws-host 0.0.0.0`.** Every other machine binds loopback
+and dials out, so exactly one mesh port is on the internet. Set `MESH_ROLE=head`
+in the env, or add the flag.
 
-```js
-const v = await app.call('identity.api_token_validate', { token: process.env.MESH_TOKEN });
-const meta = { user: { id: v.userId, tenant_id: v.organizationId, roles: v.roles },
-               tenant_id: v.organizationId };
+**⚠ Once a node has a `MESH_KEY`, everything talking to it needs the key** —
+including tools on the same box over loopback. `mesh-serve publish` fails with
+`Tool "identity.api_token_validate" not found`, which does not look like an auth
+error at all. Run CLIs from a directory whose `.env` has the key, or export it.
+
+### Under systemd
+
+```bash
+systemctl status mesh-node
+systemctl restart mesh-node
+journalctl -u mesh-node -f
 ```
 
-**⚠ Bump and rebuild every part that talks to the API together** — `catalog`,
-`releases`, `auth`, `fleet`, `sites`. `chrome` and `ui` do not call the API and
-can stay. Miss one and that one part fails every call with `stale`.
+The unit is `deploy/mesh-node.service`. It reads `/etc/mesh/node.env`, restarts
+on failure, and caps memory at 600M — a node that dies of OOM and is restarted is
+recoverable; one that takes the box down with it is a drive to a datacentre.
 
 ---
 
-## 3. Add a machine to the fleet
+## 3. Provision a new machine
+
+On the new box, as root:
 
 ```bash
-# From your laptop. The env file is piped over stdin — never on a command line,
-# where every user on the box can read it out of `ps`.
-{ printf 'MESH_KEY=%s\n' "$(ssh -i ~/.ssh/paas_infra_ed25519 root@169.197.131.82 \
-      'grep -oP "(?<=^MESH_KEY=).*" /etc/mesh/node.env')"
-  printf 'MONGODB_URI=%s\n' 'mongodb+srv://…/mesh-serve-live?…'
-  printf 'MESH_BLOB_ROOT=/srv/mesh-serve/.artifacts\nCDN_PORT=8080\n'
-  printf 'CDN_URL=http://<this box IP>:8080\nNODE_OPTIONS=--max-old-space-size=420\n'
-} | ssh -i ~/.ssh/paas_infra_ed25519 root@<IP> \
-    'bash -s' < ~/code/mesh-serve/deploy/provision.sh
+apt-get update && apt-get install -y git
+git clone https://github.com/FLYBYME/mesh-serve.git /srv/mesh-serve
+cd /srv/mesh-serve
+
+install -d -m 700 /etc/mesh
+vi /etc/mesh/node.env          # section 1 — MESH_KEY and MONGODB_URI from an existing node
+
+./deploy/provision.sh          # Node 22, npm install, build, systemd unit, start
+systemctl status mesh-node
 ```
 
-`provision.sh` is idempotent — running it again converges rather than
-duplicating. Useful variables:
-
-| variable | effect |
-| --- | --- |
-| `MESH_REF` | branch, tag or commit to check out (default `master`) |
-| `MESH_ROLE` | `head` opens the mesh port; `dialin` binds loopback. Default: `surf` → head, everything else → dialin |
-| `MESH_DRY_RUN=1` | print what it would do |
-
-**Only `surf` is a head.** Every other machine binds loopback and dials out, so
-exactly one mesh port is on the internet.
+`provision.sh` is idempotent — run it again after a change and it converges
+rather than duplicating. `MESH_DRY_RUN=1` prints what it would do.
 
 ### The fleet
 
-| host | ip | note |
+| host | ip | role |
 | --- | --- | --- |
-| `surf.surfdns.net` | 169.197.131.82 | **head**, 981MB — the tightest box |
-| `ns1.surfdns.net` | 158.69.203.224 | |
-| `ns2.surfdns.net` | 51.195.151.109 | |
-| `edge1.surfdns.net` | 158.69.213.185 | |
-| `edge2.surfdns.net` | 199.85.8.229 | 956MB, 2TB disk |
-| `edge3.surfdns.net` | 169.197.131.54 | |
-
-**Bootstrap is an IP, permanently.** DNS is the product being built; a control
-plane that resolves its own head by name cannot reach the machines that would
-fix DNS.
+| `surf.surfdns.net` | 169.197.131.82 | **head** — the only public mesh port. 981MB, the tightest box |
+| `ns1.surfdns.net` | 158.69.203.224 | dial-in |
+| `ns2.surfdns.net` | 51.195.151.109 | dial-in |
+| `edge1.surfdns.net` | 158.69.213.185 | dial-in |
+| `edge2.surfdns.net` | 199.85.8.229 | dial-in — 956MB, 2TB disk |
+| `edge3.surfdns.net` | 169.197.131.54 | dial-in |
 
 ---
 
-## 4. Fleet operations
+## 4. Local development
 
-On a node: `systemctl status|restart|stop mesh-node`, and
-`journalctl -u mesh-node -f` to watch it.
+**Two checkouts, and they are not the same thing.**
 
-Everything else is the Fleet console, or these calls (all gated `operator`):
+| | | |
+| --- | --- | --- |
+| `~/code/mesh-serve` | where you edit and run tests | local mongo, no `.env` |
+| `~/code/mesh-live` | a node joined to the real fleet | Atlas, real `MESH_KEY`, dials the head |
+
+`mesh-live` is started **exactly the way a VPS starts one** — same command, same
+`.env`, no special-casing. If it works there it works on a box, and the local
+node stops being a different animal from the live one.
+
+```bash
+cd ~/code/mesh-live
+git pull && npm run build
+node bin/node.mjs --ws 4002 --cdn 8080 --api 5005 --db mesh-serve-live
+```
+
+`--ws 4002` so it never fights a local dev node on 4001.
+
+For development against a throwaway database, run from `~/code/mesh-serve` with
+no `.env` — it falls back to `mongodb://localhost:27017`. Add
+`MESH_ALLOW_REPUBLISH=1` there to overwrite a version in place instead of bumping
+for every round trip. **Never on a live node.**
+
+---
+
+## 5. Publish and deploy
+
+Four steps on purpose: publishing says *this version exists*; building produces
+bytes; composing pins a set; deploying points a hostname at it.
+
+```bash
+cd ~/code/mesh-core            # the repository whose mesh.json changed
+git add -A && git commit && git push          # ⚠ the builder clones from GitHub
+MESH_TOKEN=<token> node ~/code/mesh-serve/bin/mesh-serve.mjs publish --publisher flybyme
+```
+
+**⚠ Push before publishing.** An unpushed commit fails with *"the repository was
+reachable, so this is not a credential problem — the commit is missing."*
+
+**⚠ Bump every part that talks to the API together** — `catalog`, `releases`,
+`auth`, `fleet`, `sites`. `chrome` and `ui` do not call the API. Miss one and
+that one part fails every call with `stale`.
+
+Building, composing and deploying have no CLI yet; they are contract calls.
+
+---
+
+## 6. Fleet operations
+
+All from the **Fleet console**, which is the intended interface. The same calls
+exist over the API, gated `operator`:
 
 | call | what it does |
 | --- | --- |
-| `node.status` | what a machine is running and what it can see |
+| `node.status` | what each machine is running and what it can see |
 | `node.assign` | set desired services and/or groups; reconciles live |
 | `node.reconcile` | make running match desired — idempotent, safe twice |
-| `node.provision` | clone a repo at a **pinned ref**, install, register it as a service |
+| `node.provision` | clone a repo at a **pinned ref**, install, register it |
 
 `node.assign` is a **switch**: it starts and stops services inside the running
 process, never restarting it. systemd owns the process; the Supervisor owns
-services inside it. Two supervisors, one boundary.
+services inside it.
 
-**Core services are not switchable**: `api`, `identity`, `fleet`, `supervisor`
-run because the node runs. A machine that could be told to switch off the
-service receiving its orders could never be told anything again.
+**Core services are not switchable** — `api`, `identity`, `fleet`, `supervisor`
+run because the node runs. A machine that could be told to switch off the service
+receiving its orders could never be told anything again.
 
-Groups (`serve`, `edge`, `build`) are stored **by name, not expanded** — editing
-a group rolls onto every machine in it.
-
----
-
-## 5. Move a database to Atlas
-
-```bash
-SOURCE_URI=mongodb://localhost:27017 \
-TARGET_URI='mongodb+srv://…' \
-node scripts/migrate-to-atlas.mjs            # dry run, writes nothing
-node scripts/migrate-to-atlas.mjs --commit   # for real
-```
-
-Copies, never moves — the source is left as it was and stays a working fallback.
-Idempotent by `_id`, so a second run converges instead of failing on duplicates.
+Groups (`serve`, `edge`, `build`) are stored **by name, not expanded**, so
+editing a group rolls onto every machine in it.
 
 ---
 
-## 6. When something is wrong
+## 7. When something is wrong
 
 | symptom | cause |
 | --- | --- |
 | every call from one part says `stale` | that part was not rebuilt after the server's shape moved |
-| `No site is configured for this hostname` | wrong database — check the URI's path, not just `--db` |
+| `No site is configured for this hostname` | wrong database — check the URI's **path**, not just `--db` |
 | `Tool "…" not found` from a CLI | `MESH_KEY` missing from the CLI's environment |
-| a console window never appears | an Application opens its own window; declaring `views` does not do it |
+| a console window never appears | an Application opens its own window; declaring `views` does not |
 | `Unknown service: api` from assign | a core service was assigned; they are not switchable |
-| the browser test suite hangs forever | needs `--no-file-parallelism`; six parallel browsers deadlock |
-| publish says the commit is missing | commit and **push** before publishing |
+| a node starts services it was not assigned | it was told nothing and fell back to starting everything |
+| publish says the commit is missing | commit and **push** first |
+| browser tests hang forever | needs `--no-file-parallelism` |
 
 `ctrl+alt+q` in any console opens the log viewer — every `cx.log.*` from every
 part plus the kernel's own warnings, filterable by level and source.
