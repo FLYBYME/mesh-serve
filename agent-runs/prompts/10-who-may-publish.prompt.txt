@@ -1,0 +1,119 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+Read `AGENTS.md` first.
+
+================================================================================
+THE TASK
+================================================================================
+
+**B6 — who may publish.** And **F6**, which is the same hole seen from the other
+side. Do both; separating them would leave one half of a check that only works
+whole.
+
+> A `partVersion` row is what a site resolves to, so **whoever writes one can
+> change what runs on someone else's hostname.** — roadmap B6
+
+================================================================================
+THE HOLE, PRECISELY
+================================================================================
+
+`catalog.publish` takes `publisher` as an **input field** (`part.contract.ts:117`)
+and `src/catalog/tools/publish.ts` **never reads `ctx.meta`.** The one check it
+performs is:
+
+```ts
+if (found.publisher !== input.publisher) {
+    throw new ClientError(`"${input.name}" belongs to another publisher.`,
+        'part_not_yours', 403);
+}
+```
+
+That compares a caller-supplied string against the stored one. It stops a
+publisher being *renamed*. **It does not stop a caller claiming to be one** —
+pass `publisher: 'flybyme'` and the check passes, because both sides came from
+the same place.
+
+`builder.build_start` gets this right and is the model: `if (caller !== publisher)`
+where `caller` comes from the call's identity, with a **404 rather than 403**,
+because which organization publishes a part is not something an unrelated caller
+gets to confirm by probing.
+
+**F6 is why the hole is currently load-bearing.** `publish-cli` joins the cluster
+as a *node* and mints `meta: { user: { id: 'cli', tenant_id: args.publisher } }`
+from its own `--publisher` flag. A node must never hold a user credential — that
+part is correct — but it means the publish path has no verified caller at all,
+which is why `publisher` became an input in the first place.
+
+So the two must be fixed together: **make `publish` derive the publisher from the
+caller**, and **give the CLI a real credential to be a caller with**.
+
+================================================================================
+WHAT TO DECIDE, AND ARGUE IN THE REPORT
+================================================================================
+
+**How the CLI authenticates.** An API token is the obvious answer and `apiToken`
+already exists as a collection with `hashApiToken` in `src/identity/module.ts`.
+But decide deliberately: where the token comes from, how it is scoped to an
+organization, and what happens on a machine that has none. **A publish that
+silently succeeds with no credential is the bug this dispatch exists to remove**,
+so the no-credential path must refuse, clearly, naming what is missing.
+
+**Whether `publisher` stays in the input at all.** If it is derived from the
+caller it is redundant, and a redundant field that *looks* authoritative is worse
+than no field. If you keep it, it can only be as an assertion the server checks
+and rejects on mismatch — never as the source.
+
+**What a first publish means.** `publish.ts` has a create path for a part that
+does not exist yet. Today anyone can create a part under any publisher name.
+After this, the publisher is the caller — so decide whether *any* authenticated
+caller may claim an unused part name, and say why. This is the marketplace
+question in miniature and M4 turns on it.
+
+================================================================================
+WHAT NOT TO DO
+================================================================================
+
+**Do not weaken `build_start`.** It already refuses correctly, with 404 not 403.
+It is the reference, not the thing being changed.
+
+**Do not build a permissions system.** Roles and grants exist; this is one check
+against one field. If it needs more than that, say so in the report rather than
+building it.
+
+**Do not break the live platform.** Six sites are serving, and every part in the
+catalog was published under organization `6a9e0bd588bc0b534a2b2d05`. A migration
+or a compatibility path is part of this task — say what an existing catalog needs
+in order to keep working, and make it work.
+
+**Zero `as any`, zero `as never`, zero casts.** Foreground commands, commit as you
+go.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **A test where a caller publishes a part belonging to somebody else and is
+  refused** — the whole item, and it must fail for the right reason: identity,
+  not a mismatched input field.
+- A test that a caller with **no credential** cannot publish at all.
+- A test for whatever you decide about first publish.
+- The CLI still works end to end. It is how every part in this repository's
+  catalog got there, and `npm run build && node bin/mesh-serve.mjs publish` is a
+  path somebody uses by hand.
+- Every existing test passing. `npm run typecheck` clean.
+- Tick B6 and F6 in `spec/roadmap.md`, and update the M4 line.
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/10-who-may-publish.md`
+
+- how the CLI authenticates now, and what happens with no credential
+- whether `publisher` survived as an input, and the argument
+- **what a first publish means**, and why
+- what an existing catalog needs to keep working
+- **what is still unenforced about who may publish** — this closes the input-field
+  hole; it does not make the catalog a marketplace, and the gap between those two
+  is what M4 still has to cover
+- anything for `spec/unread.md`
