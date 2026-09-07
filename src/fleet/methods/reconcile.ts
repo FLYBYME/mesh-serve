@@ -125,3 +125,35 @@ export async function reconcileNode(
         };
     }
 }
+
+/**
+ * Reconcile every node that references a group.
+ *
+ * Invoked asynchronously by the fleet service when a group is created or updated.
+ * One wedged or failing node does not halt convergence for the others.
+ */
+export async function reconcileGroup(
+    ctx: IServiceContext,
+    groupName: string,
+): Promise<ReconcileOutcome[]> {
+    const nodes = await nodesInGroup(ctx, groupName);
+    if (nodes.length === 0) return [];
+
+    const allGroups = (await ctx.call('group.find', { query: {} }) as GroupRecord[]) ?? [];
+    const outcomes: ReconcileOutcome[] = [];
+
+    for (const node of nodes) {
+        try {
+            outcomes.push(await reconcileNode(ctx, node, allGroups));
+        } catch (error) {
+            outcomes.push({
+                hostname: node.hostname,
+                services: resolveDesired(node, allGroups),
+                applied: false,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
+    return outcomes;
+}

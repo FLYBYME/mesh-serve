@@ -15,6 +15,7 @@ import {
     node_status,
     node_provision,
 } from './methods/node.js';
+import { reconcileGroup } from './methods/reconcile.js';
 
 /**
  * The fleet: which machines exist, and what each should be running.
@@ -41,6 +42,29 @@ export class FleetService extends ServiceModule {
         this.mountTool(nodeReconcileContract, node_reconcile);
         this.mountTool(nodeStatusContract, node_status);
         this.mountTool(nodeProvisionContract, node_provision);
+
+        /**
+         * A group edit rolls onto every machine referencing it, through an event.
+         *
+         * Not inline: a write that blocks on starting/stopping services across multiple machines
+         * is a write that times out, and a group edit is a small write. Reconciling runs asynchronously
+         * when the scoped group.updated (or group.created) event fires.
+         *
+         * One failing node does not stop the others — reconcileGroup isolates failures per-node.
+         */
+        this.mountEventHandler('group.updated', async (payload, ctx) => {
+            const groupName = payload.item?.name;
+            if (groupName) {
+                await reconcileGroup(ctx, groupName);
+            }
+        });
+
+        this.mountEventHandler('group.created', async (payload, ctx) => {
+            const groupName = payload?.name;
+            if (groupName) {
+                await reconcileGroup(ctx, groupName);
+            }
+        });
     }
 }
 
