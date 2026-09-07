@@ -9,6 +9,22 @@ export const nodeCrud = defineCrud('node', NodeSchema, {
     pluralPath: 'nodes',
     dependencies: [],
     unique: [{ fields: 'hostname', scope: 'global' }],
+
+    /**
+     * Reads exposable, writes not — and `public` here means *may be exposed*, never
+     * *unauthenticated*.
+     *
+     * The gate is the site's, and every site that exposes these gates them at `operator`. So a
+     * customer's admin cannot reach them at all, and the console can list the fleet. Without this
+     * the collection is internal, `describeExposure` refuses to publish it, and a fleet console can
+     * be written but never talk to anything.
+     *
+     * Writes stay internal because a node's desired state is `node.assign`'s business: assigning
+     * reconciles the running services, and a bare `node.update` would change the row and leave the
+     * machine running what it was running — desired and observed silently diverging, which is the
+     * one thing this collection exists to prevent.
+     */
+    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
 });
 
 /**
@@ -23,6 +39,19 @@ export const groupCrud = defineCrud('group', GroupSchema, {
     pluralPath: 'groups',
     dependencies: [],
     unique: [{ fields: 'name', scope: 'global' }],
+
+    /**
+     * Reads **and** the two writes an operator does from a console: creating a group and editing
+     * what is in one. Gated at `operator` by every site that exposes them.
+     *
+     * `delete` stays internal. Deleting a group silently drops its services from every node that
+     * references it, and the nodes only find out at the next reconcile — that is a fine thing to do
+     * deliberately from a CLI and a bad thing to have one button away from a list.
+     */
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public',
+        create: 'public', update: 'public',
+    },
 });
 
 const reconcileOutcomeSchema = z.object({
@@ -61,6 +90,7 @@ export const nodeAssignContract = defineContract({
         groups: z.array(z.string()).optional(),
     }),
     outputSchema: reconcileOutcomeSchema,
+    visibility: 'public',
     rest: { method: 'POST', path: '/node/assign' },
     destructive: true,
     print: defaultPrint,
@@ -82,6 +112,7 @@ export const nodeReconcileContract = defineContract({
         group: z.string().optional(),
     }),
     outputSchema: z.object({ reconciled: z.array(reconcileOutcomeSchema) }),
+    visibility: 'public',
     rest: { method: 'POST', path: '/node/reconcile' },
     destructive: true,
     print: defaultPrint,
@@ -95,6 +126,7 @@ export const nodeStatusContract = defineContract({
         hostname: z.string().optional(),
     }),
     outputSchema: NodeStatusReportSchema,
+    visibility: 'public',
     rest: { method: 'GET', path: '/node/status' },
     destructive: false,
     print: defaultPrint,
