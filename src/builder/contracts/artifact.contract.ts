@@ -128,6 +128,161 @@ export const buildStartContract = defineContract({
 });
 
 /**
+ * Read a repository's `mesh.json` and declare what it describes.
+ *
+ * **The one job `mesh.json` still has, and the last one it will have.** It is a *genesis* format:
+ * this reads it once, writes what it found onto `part` rows, and from then on the catalog is what a
+ * release reads. Nothing in the build path opens it again — see `catalog.declare`.
+ *
+ * That is the difference the file could never express on its own. A descriptor in a repository is
+ * read at the moment somebody runs a command in a checkout, which is why shipping needed a person
+ * with the tree open. A row is read by whatever asks, from wherever it runs.
+ *
+ * Editing the file afterwards changes nothing until this is called again — deliberately. The
+ * console is the place to change what a part builds, and a repository quietly redefining itself on
+ * the next build is exactly the coupling being removed.
+ */
+export const importRepoContract = defineContract({
+    domain: 'builder',
+    action: 'import_repo',
+    description: 'Read a repository descriptor and declare the parts it describes.',
+    dependencies: [],
+    inputSchema: z.object({
+        repository: z.string().min(1).describe('A clonable reference — never a path on a disk'),
+        ref: z.string().min(1).default('main').describe('Branch, tag or commit to read the descriptor at'),
+        subdirectory: z.string().min(1).optional().describe('Where in the repository the descriptor is'),
+        /** Report what would be declared and write nothing. */
+        dryRun: z.boolean().optional(),
+    }),
+    outputSchema: z.object({
+        repository: z.string(),
+        commit: z.string().describe('What the ref resolved to, so an import is a fact about a commit'),
+        parts: z.array(z.object({
+            name: z.string(),
+            kind: z.string(),
+            entry: z.string(),
+            /** False when this import created the part. */
+            existed: z.boolean(),
+        })),
+    }),
+    rest: { method: 'POST', path: '/builder/imports' },
+    /** The gate is the site's, and this one belongs behind `operator`: it names a repository to clone. */
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${String(o.parts.length)} part(s) from ${o.repository} @ ${o.commit.slice(0, 12)}`,
+});
+
+/**
+ * **Release a part: pull, mint a version, publish it, build it, say so.**
+ *
+ * The endpoint this whole rework exists for. What it replaces was six manual steps, and five of
+ * them were bookkeeping:
+ *
+ * ```
+ * edit mesh.json  →  commit  →  publish  →  build  →  compose  →  deploy
+ * ```
+ *
+ * The first two are gone because **the version is minted here**, from what the catalog already
+ * knows, rather than read from a file somebody had to edit. The last two are gone for a release
+ * marked `rolling`, which recomposes and redeploys itself when this fires its event.
+ *
+ * ## Why it mints rather than reads
+ *
+ * A repository holding its own version number has to be edited to ship, and the number it holds is
+ * a claim the catalog cannot check — the two disagree constantly, and the repository always loses,
+ * because the catalog is what resolves. Minting removes the disagreement by removing one of the
+ * copies. The label is derived: the highest already published, plus the requested bump.
+ *
+ * ## What it does not do
+ *
+ * It does not push. Nothing here writes to the repository — no version commit, no tag, no
+ * dependency bump — because a build node that can write to a repository is a build node whose
+ * credential can rewrite what it later builds. `dependencies` is *recorded* from the resolved
+ * lockfile onto the version row instead, which is the fact worth keeping.
+ */
+export const releasePartContract = defineContract({
+    domain: 'builder',
+    action: 'release_part',
+    description: 'Pull a part, mint the next version, publish it and build its artifact.',
+    dependencies: [],
+    requirements: { memory: 2048, preferData: true },
+    inputSchema: z.object({
+        part: z.string().min(1).describe('→ part.name'),
+        /**
+         * How far to move the label. `patch` is the honest default for the case this exists for —
+         * a change being shipped to see it work — and anything larger is a claim about
+         * compatibility that a machine should not be making on somebody's behalf.
+         */
+        bump: z.enum(['patch', 'minor', 'major']).default('patch'),
+        /** Override the mint entirely. For a deliberate number — a 1.0.0 somebody means. */
+        version: z.string().min(1).optional(),
+        /** Which branch to cut from, when it is not the one on the part's declaration. */
+        branch: z.string().min(1).optional(),
+        /** Resolve, mint and report — publish nothing, build nothing. */
+        dryRun: z.boolean().optional(),
+    }),
+    outputSchema: z.object({
+        part: z.string(),
+        version: z.string(),
+        commit: z.string(),
+        /** True when this commit was already published, and the existing label was used. */
+        existed: z.boolean(),
+        artifactDigest: z.string().optional(),
+        /** True when identical bytes were already built and nothing ran. */
+        cached: z.boolean(),
+    }),
+    rest: { method: 'POST', path: '/builder/releases' },
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${o.part}@${o.version} ${o.commit.slice(0, 12)}${o.cached ? ' (cached)' : ''}`,
+});
+
+/**
+ * Every part a repository declares, released together, in dependency order.
+ *
+ * Because a repository is not one part. mesh-core builds seven from a single commit, and releasing
+ * them one at a time is the loop this is meant to end — worse, it has an order: a part is built
+ * against a kernel range, so a kernel released after the parts that need it produces a set nobody
+ * can compose until somebody notices and runs it again.
+ *
+ * Kernels first, then everything else. One commit, so every part in the answer is the same code.
+ */
+export const releaseRepoContract = defineContract({
+    domain: 'builder',
+    action: 'release_repo',
+    description: 'Release every part declared from one repository, kernels first.',
+    dependencies: [],
+    requirements: { memory: 2048, preferData: true },
+    inputSchema: z.object({
+        repository: z.string().min(1),
+        bump: z.enum(['patch', 'minor', 'major']).default('patch'),
+        branch: z.string().min(1).optional(),
+        dryRun: z.boolean().optional(),
+    }),
+    outputSchema: z.object({
+        repository: z.string(),
+        released: z.array(z.object({
+            part: z.string(),
+            version: z.string(),
+            commit: z.string(),
+            artifactDigest: z.string().optional(),
+            cached: z.boolean(),
+        })),
+        /**
+         * Parts that could not be released, and why.
+         *
+         * Reported rather than thrown: seven parts should give seven answers, and stopping on the
+         * first turns one call into seven.
+         */
+        failed: z.array(z.object({ part: z.string(), reason: z.string() })),
+    }),
+    rest: { method: 'POST', path: '/builder/repo-releases' },
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${String(o.released.length)} released, ${String(o.failed.length)} failed`,
+});
+
+/**
  * One artifact, by digest.
  *
  * **The question every serving node asks first.** A site's resolution names digests; a cdn node
@@ -214,4 +369,36 @@ export type ArtifactPublished = z.infer<typeof ArtifactPublishedSchema>;
  */
 export const artifactPublishedEvent = defineEvent('builder.artifact_published', ArtifactPublishedSchema, {
     scopedBy: 'global',
+});
+
+export const PartReleasedSchema = z.object({
+    /** Who released it. A rolling release only follows parts its own tenant published. */
+    tenantId: z.string(),
+    part: z.string(),
+    kind: z.enum(['kernel', 'application', 'extension']),
+    version: z.string(),
+    commit: z.string(),
+    /** Absent when the build produced nothing — a failure that still ended a release attempt. */
+    digest: z.string().optional(),
+});
+export type PartReleased = z.infer<typeof PartReleasedSchema>;
+
+/**
+ * A part was released: pulled, published at a new label, and built.
+ *
+ * **This is what a rolling release listens to**, and it exists rather than reusing
+ * `builder.artifact_published` for one reason that matters: that event fires only when the *bytes*
+ * are new. Identical source bundles to an identical digest and publishes nothing, so a release
+ * following `^0.2` would never hear about the version it should now resolve to. This fires whenever
+ * a release completes; the recompose it triggers is a no-op when nothing actually moved, and a
+ * redundant no-op is the right side of that trade.
+ *
+ * `scopedBy: 'tenantId'`, unlike the artifact event beside it. An artifact is content-addressed and
+ * global — two organizations building identical source have built the same thing — but a *release*
+ * is an act by somebody, and which parts an organization is shipping, at what cadence, is not
+ * something the catalog publishes to everyone. The version itself is public via
+ * `catalog.version_published`; the release cadence is not.
+ */
+export const partReleasedEvent = defineEvent('builder.part_released', PartReleasedSchema, {
+    scopedBy: 'tenantId',
 });

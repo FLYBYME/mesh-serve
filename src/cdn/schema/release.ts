@@ -102,5 +102,59 @@ export const ReleaseSchema = z.object({
     // On the release, contract requirements are tracked cleanly by `requires` (checked against
     // site grants at deploy time).
 
+    /**
+     * ## Rolling: a release that re-composes itself when a part it names is released
+     *
+     * The flag an operator sets to say *this one follows the code*. When `builder.part_released`
+     * fires for a part inside `source`, the ranges below are resolved again; if that produces a
+     * different composition, the new release inherits the flag, this one is marked superseded, and
+     * every site sitting on it is moved across.
+     *
+     * **It is on the release rather than on the site**, and that took a wrong turn to see. A site
+     * is a hostname and a record; "follows latest" is a property of the *composition* it points at,
+     * and putting it on the site would mean two sites sharing one release could disagree about
+     * whether that release was following anything — one field holding two values, which is exactly
+     * the mistake `exposure` made before it was taken off this schema (D4).
+     *
+     * A release still never mutates: rolling produces a **new** release and moves the pointer.
+     * Rollback is unaffected and stays one write backwards, to a release that is still there.
+     */
+    rolling: z.boolean().default(false),
+
+    /**
+     * The requirements this was composed from — **ranges, not the exacts above.**
+     *
+     * A release records what it resolved *to* and, until now, nothing recorded what it resolved
+     * *from*. That made rolling impossible to express: re-resolving `^0.15` needs `^0.15`, and all
+     * that survived was `0.15.10`. Reconstructing a range from a pinned version is guesswork about
+     * what somebody meant, and guessing here changes what runs on a hostname.
+     *
+     * Not part of `hash`, deliberately. Two people composing the same set have composed the same
+     * release whether one of them wrote `^0.2` and the other `0.2.4` — identity is the artifacts,
+     * and the ranges are how this one got there.
+     *
+     * Optional because releases composed before this existed have none. Those cannot roll, and are
+     * skipped by name rather than rolled from a guess.
+     */
+    source: z.object({
+        kernel: z.string().min(1),
+        // The compose input as it was given, `kind` included — so re-composing is handing the same
+        // argument back rather than reconstructing one and hoping it means the same thing.
+        parts: z.array(z.object({
+            kind: z.enum(['application', 'extension']),
+            id: z.string().min(1),
+            version: z.string().min(1),
+        })),
+    }).optional(),
+
+    /**
+     * The release that replaced this one when it rolled.
+     *
+     * A chain rather than a flag, so *what happened to the thing I deployed on Tuesday* is
+     * answerable by following it, and a rolled-past release is still a real release somebody can
+     * deploy again.
+     */
+    supersededBy: z.string().min(1).optional(),
+
     composedAt: z.date(),
 });

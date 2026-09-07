@@ -35,6 +35,41 @@ export function parse(text: string): Version | undefined {
     };
 }
 
+/**
+ * The next label after the highest one published, and **this is where a version number now comes
+ * from**.
+ *
+ * It used to come from `mesh.json`, which meant shipping a change required editing a file to claim
+ * a number the catalog was about to become the authority on anyway. Two copies of one fact, one of
+ * which was always stale.
+ *
+ * Derived from what is published rather than from what a repository says, so it cannot disagree
+ * with the catalog. Unparseable labels are skipped: a hand-written `main` in the collection should
+ * not stop the next number being mintable.
+ *
+ * A part with nothing published starts at `0.1.0` — not `1.0.0`, because `1.0.0` is a claim about
+ * stability that a first automated build has not earned and that nobody made deliberately.
+ */
+export function nextVersion(
+    published: readonly string[],
+    bump: 'patch' | 'minor' | 'major' = 'patch',
+): string {
+    const parsed = published
+        .map((text) => parse(text))
+        .filter((version): version is Version => version !== undefined)
+        // A prerelease never seeds the next number: bumping from `1.0.0-rc.1` would mint `1.0.1`
+        // and quietly skip the `1.0.0` it was a candidate for.
+        .filter((version) => version.prerelease.length === 0)
+        .sort(compare);
+
+    const highest = parsed[parsed.length - 1];
+    if (highest === undefined) return '0.1.0';
+
+    if (bump === 'major') return `${String(highest.major + 1)}.0.0`;
+    if (bump === 'minor') return `${String(highest.major)}.${String(highest.minor + 1)}.0`;
+    return `${String(highest.major)}.${String(highest.minor)}.${String(highest.patch + 1)}`;
+}
+
 /** Negative when `a` is older. Total, so it can sort. */
 export function compare(a: Version, b: Version): number {
     if (a.major !== b.major) return a.major - b.major;

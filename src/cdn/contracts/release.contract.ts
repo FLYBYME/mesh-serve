@@ -77,6 +77,15 @@ export const composeContract = defineContract({
         parts: z.array(PartRefSchema),
         policy: z.record(z.string(), z.string()).optional(),
         name: z.string().optional().describe('A label for people. Never an identity.'),
+        /**
+         * Follow the code: re-compose from these same ranges whenever a part in them is released,
+         * and move every site on this release across to the result.
+         *
+         * The ranges are what make it possible, so they are stored on the row — see
+         * `ReleaseSchema.source`. Set it on the composition rather than on a site: two sites sharing
+         * a release cannot disagree about whether it follows anything.
+         */
+        rolling: z.boolean().optional(),
         /** Resolve and report without writing. What a deploy runs before it decides to. */
         dryRun: z.boolean().optional(),
     }),
@@ -183,5 +192,32 @@ export const ReleaseComposedSchema = z.object({
  * about to run. That is not secret, and it is not anybody else's business either.
  */
 export const releaseComposedEvent = defineEvent('cdn.release_composed', ReleaseComposedSchema, {
+    scopedBy: 'tenantId',
+});
+
+export const ReleaseRolledSchema = z.object({
+    tenantId: z.string(),
+    /** The release that was following, now superseded. Still deployable — rollback is a write. */
+    from: z.string(),
+    to: z.string(),
+    /** What triggered it. */
+    part: z.string(),
+    version: z.string(),
+    /** The hostnames actually moved. A site that refused the new release is not in here. */
+    hosts: z.array(z.string()),
+});
+
+/**
+ * A rolling release followed a part and the sites on it moved.
+ *
+ * **The one place a deploy happens without a person asking for it**, which is why it is announced
+ * loudly rather than left in a log: an operator who set `rolling` on Tuesday should be able to see
+ * every hostname it has moved since, and from what to what.
+ *
+ * `hosts` is what was *actually* deployed. A site whose grants do not cover the new release stays
+ * where it is and is absent here — the grant check refusing a roll is the system working, and a
+ * payload that claimed the site had moved would be the failure worth catching.
+ */
+export const releaseRolledEvent = defineEvent('cdn.release_rolled', ReleaseRolledSchema, {
     scopedBy: 'tenantId',
 });

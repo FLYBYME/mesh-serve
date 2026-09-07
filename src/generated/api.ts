@@ -13,6 +13,9 @@ declare global {
     interface IServiceToolRegistry {
         'api.describe': { params: z.input<typeof Contract_0.describeContract['inputSchema']>, returns: z.infer<typeof Contract_0.describeContract['outputSchema']> };
         'builder.build_start': { params: z.input<typeof Contract_1.buildStartContract['inputSchema']>, returns: z.infer<typeof Contract_1.buildStartContract['outputSchema']> };
+        'builder.import_repo': { params: z.input<typeof Contract_1.importRepoContract['inputSchema']>, returns: z.infer<typeof Contract_1.importRepoContract['outputSchema']> };
+        'builder.release_part': { params: z.input<typeof Contract_1.releasePartContract['inputSchema']>, returns: z.infer<typeof Contract_1.releasePartContract['outputSchema']> };
+        'builder.release_repo': { params: z.input<typeof Contract_1.releaseRepoContract['inputSchema']>, returns: z.infer<typeof Contract_1.releaseRepoContract['outputSchema']> };
         'builder.get_artifact': { params: z.input<typeof Contract_1.getArtifactContract['inputSchema']>, returns: z.infer<typeof Contract_1.getArtifactContract['outputSchema']> };
         'builder.artifact_blob': { params: z.input<typeof Contract_1.artifactBlobContract['inputSchema']>, returns: z.infer<typeof Contract_1.artifactBlobContract['outputSchema']> };
         'artifact.create': { params: z.input<typeof Contract_1.artifactCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_1.artifactCrud['create']['outputSchema']> };
@@ -32,6 +35,7 @@ declare global {
         'build.update': { params: z.input<typeof Contract_1.buildCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_1.buildCrud['update']['outputSchema']> };
         'build.delete': { params: z.input<typeof Contract_1.buildCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_1.buildCrud['delete']['outputSchema']> };
         'catalog.publish': { params: z.input<typeof Contract_2.publishContract['inputSchema']>, returns: z.infer<typeof Contract_2.publishContract['outputSchema']> };
+        'catalog.declare': { params: z.input<typeof Contract_2.declareContract['inputSchema']>, returns: z.infer<typeof Contract_2.declareContract['outputSchema']> };
         'catalog.resolve': { params: z.input<typeof Contract_2.resolveContract['inputSchema']>, returns: z.infer<typeof Contract_2.resolveContract['outputSchema']> };
         'part.create': { params: z.input<typeof Contract_2.partCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_2.partCrud['create']['outputSchema']> };
         'part.find': { params: z.input<typeof Contract_2.partCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_2.partCrud['find']['outputSchema']> };

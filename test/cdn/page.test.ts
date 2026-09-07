@@ -32,6 +32,9 @@ const input = (over: Partial<PageInput> = {}): PageInput => ({
         },
         requires: [],
         policy: {},
+        // Not rolling: a page is generated from a release, and whether that release follows the
+        // catalog has nothing to do with what the page says.
+        rolling: false,
         composedAt: new Date(0),
         createdAt: new Date(0),
         updatedAt: new Date(0),

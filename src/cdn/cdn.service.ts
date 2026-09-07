@@ -41,6 +41,7 @@ import { resolveSiteContract, siteCrud, siteEditContract, type Site } from './co
 import { assertTenant, hostOf, TenantMismatch } from './methods/hostname.js';
 import { generatePage } from './methods/page.js';
 import { headersFor, pathOf, resolveFile, resolveRequest } from './methods/resolve.js';
+import { rollForPart } from './methods/rolling.js';
 import { cdn_compose } from './tools/compose.js';
 import { cdn_deploy } from './tools/deploy.js';
 import { cdn_resolve_site } from './tools/resolve_site.js';
@@ -145,6 +146,28 @@ export class CdnService extends ServiceModule {
         this.mountEventHandler('site.updated', (payload) => {
             const host = (payload.item as { host?: string } | undefined)?.host;
             if (host !== undefined) this.sites.delete(host);
+        });
+
+        /**
+         * **A release marked `rolling` follows the code**, and this is where that happens.
+         *
+         * The last two steps of the old six-step loop — compose, deploy — run here instead of being
+         * typed by a person: `builder.release_part` publishes and builds, fires this, and every
+         * release naming that part re-resolves the ranges it kept.
+         *
+         * Asynchronous on purpose. Rolling can move many sites, and a release call that blocked
+         * until all of them had deployed would be a build request that times out; worse, it would
+         * make the *builder* fail because a site's grants refused a deploy, which is a decision
+         * about that site and not about the build.
+         *
+         * More than one node may mount this service and therefore run this. That is tolerable
+         * rather than ideal: a release hash is derived from its contents, so two nodes composing
+         * concurrently produce the same row and the unique index settles it, and a deploy to the
+         * hash a site already has reports `changed: false` and writes nothing. It is on the roadmap
+         * as work that wants a single runner, not a race that corrupts anything.
+         */
+        this.mountEventHandler('builder.part_released', async (payload, ctx) => {
+            await rollForPart(ctx, payload);
         });
     }
 

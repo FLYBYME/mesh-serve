@@ -160,6 +160,29 @@ export const gitFetcher: Fetcher = createGitFetcher();
  * cache keyed on `main` would answer the same forever while the code moved underneath it — a deploy
  * that silently does nothing, discovered days later with nothing in any log.
  */
+/**
+ * A git reference, resolved to its commit, typed as one.
+ *
+ * `resolveSource` answers the whole `SourceRef` union because it accepts one, which leaves every
+ * caller that asked for a git source narrowing a union it already knows the answer to. A caller
+ * naming a repository and a branch wants a commit; this is that.
+ */
+export async function resolveGitSource(source: {
+    readonly repository: string;
+    readonly ref: string;
+    readonly subdirectory?: string;
+}): Promise<Extract<SourceRef, { kind: 'git' }>> {
+    const resolved = await resolveSource({ kind: 'git', ...source });
+
+    if (resolved.kind !== 'git') {
+        // Unreachable: `kind` is fixed above. Named rather than cast, because a cast here would be
+        // the one place a wrong answer travels silently into a build's input hash.
+        throw new Error(`Resolving ${source.repository} produced a ${resolved.kind} source.`);
+    }
+
+    return resolved;
+}
+
 export async function resolveSource(source: {
     readonly kind: 'git' | 'archive';
     readonly repository?: string;

@@ -12,8 +12,10 @@ import * as Contract_7 from '../identity/contracts/identity.contract.js';
 declare global {
     interface EventRegistry {
         'builder.artifact_published': z.infer<typeof Contract_1.artifactPublishedEvent['schema']>;
+        'builder.part_released': z.infer<typeof Contract_1.partReleasedEvent['schema']>;
         'catalog.version_published': z.infer<typeof Contract_2.versionPublishedEvent['schema']>;
         'cdn.release_composed': z.infer<typeof Contract_3.releaseComposedEvent['schema']>;
+        'cdn.release_rolled': z.infer<typeof Contract_3.releaseRolledEvent['schema']>;
         'cdn.site_deployed': z.infer<typeof Contract_4.siteDeployedEvent['schema']>;
         'artifact.created': z.infer<typeof Contract_1.artifactCrud['create']['outputSchema']>;
         'artifact.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_1.artifactCrud['update']['outputSchema']> };

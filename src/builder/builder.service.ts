@@ -18,12 +18,16 @@ import { ServiceModule, type IServiceBroker } from '@flybyme/mesh';
 import { fileBlobStore, type BlobStore } from './blobs.js';
 import {
     artifactBlobContract, artifactCrud, buildCrud, buildStartContract, getArtifactContract,
+    importRepoContract, releasePartContract, releaseRepoContract,
 } from './contracts/artifact.contract.js';
 import { DEFAULT_MAX_BYTES } from './methods/bundle.js';
 import { gitFetcher, type Fetcher } from './methods/source.js';
 import { builder_artifact_blob } from './tools/artifact_blob.js';
 import { builder_build_start } from './tools/build_start.js';
 import { builder_get_artifact } from './tools/get_artifact.js';
+import { builder_import_repo } from './tools/import_repo.js';
+import { builder_release_part } from './tools/release_part.js';
+import { builder_release_repo } from './tools/release_repo.js';
 
 export interface BuilderServiceOptions {
     /**
@@ -82,6 +86,12 @@ export class BuilderService extends ServiceModule {
         this.mountTool(buildStartContract, builder_build_start);
         this.mountTool(getArtifactContract, builder_get_artifact);
         this.mountTool(artifactBlobContract, builder_artifact_blob);
+
+        // The endpoints that replaced the manual loop: read a descriptor once, then release from
+        // the catalog for ever after.
+        this.mountTool(importRepoContract, builder_import_repo);
+        this.mountTool(releasePartContract, builder_release_part);
+        this.mountTool(releaseRepoContract, builder_release_repo);
     }
 
     /**

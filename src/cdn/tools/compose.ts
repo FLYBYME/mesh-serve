@@ -139,6 +139,16 @@ export async function cdn_compose(
             parts: pinned,
             requires: [...requires].sort(),
             policy,
+            ...(input.rolling === undefined ? {} : { rolling: input.rolling }),
+            /**
+             * **What it was composed from, kept beside what it resolved to.**
+             *
+             * Nothing recorded this until 2026-09-07, which made rolling inexpressible: re-resolving
+             * `^0.15` needs `^0.15`, and all that survived a compose was `0.15.10`. Recovering a
+             * range from a pinned version is guessing at what somebody meant, on the thing that
+             * decides what runs on a hostname.
+             */
+            source: { kernel: input.kernel, parts: [...input.parts] },
             composedAt: new Date(),
         });
 

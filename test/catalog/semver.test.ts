@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { boundsOf, compare, highest, parse, satisfies } from '../../src/catalog/methods/semver.js';
+import {
+    boundsOf, compare, highest, nextVersion, parse, satisfies,
+} from '../../src/catalog/methods/semver.js';
 
 describe('parsing', () => {
     it('reads a plain version', () => {
@@ -151,5 +153,39 @@ describe('choosing from what is published', () => {
 
     it('ignores rows it cannot parse', () => {
         expect(highest([...published, 'nightly'], '*')).toBe('2.0.0');
+    });
+});
+
+describe('minting the next label', () => {
+    /**
+     * **Where a version number comes from now.**
+     *
+     * It used to come from `mesh.json`, which meant a repository had to be edited to ship and held
+     * a number the catalog was going to overrule anyway. Minting from what is published removes one
+     * of the two copies, so they cannot disagree.
+     */
+    it('bumps the highest published, not the last one written', () => {
+        expect(nextVersion(['1.0.0', '1.4.2', '1.3.0'])).toBe('1.4.3');
+    });
+
+    it('minor and major move the right digit and zero the rest', () => {
+        expect(nextVersion(['1.4.2'], 'minor')).toBe('1.5.0');
+        expect(nextVersion(['1.4.2'], 'major')).toBe('2.0.0');
+    });
+
+    it('starts a part with nothing published at 0.1.0', () => {
+        // Not 1.0.0: that is a claim about stability that a first automated build has not earned
+        // and that nobody made deliberately.
+        expect(nextVersion([])).toBe('0.1.0');
+    });
+
+    it('never seeds from a prerelease', () => {
+        // Bumping from `1.5.0-rc.1` would mint `1.5.1` and skip the 1.5.0 it was a candidate for.
+        expect(nextVersion(['1.4.2', '1.5.0-rc.1'])).toBe('1.4.3');
+    });
+
+    it('ignores labels it cannot parse', () => {
+        // A hand-written `main` in the collection must not stop the next number being mintable.
+        expect(nextVersion(['1.4.2', 'main', 'nightly'])).toBe('1.4.3');
     });
 });

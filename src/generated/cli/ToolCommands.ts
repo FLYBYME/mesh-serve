@@ -80,6 +80,36 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_builder_buildStartContract_build_start, Contract_1.buildStartContract.inputSchema);
+    const cmd_builder_importRepoContract_import_repo = builder.command('import_repo').description(`Read a repository descriptor and declare the parts it describes.`);
+    cmd_builder_importRepoContract_import_repo.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('builder.import_repo', o, Contract_1.importRepoContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_builder_importRepoContract_import_repo, Contract_1.importRepoContract.inputSchema);
+    const cmd_builder_releasePartContract_release_part = builder.command('release_part').description(`Pull a part, mint the next version, publish it and build its artifact.`);
+    cmd_builder_releasePartContract_release_part.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('builder.release_part', o, Contract_1.releasePartContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_builder_releasePartContract_release_part, Contract_1.releasePartContract.inputSchema);
+    const cmd_builder_releaseRepoContract_release_repo = builder.command('release_repo').description(`Release every part declared from one repository, kernels first.`);
+    cmd_builder_releaseRepoContract_release_repo.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('builder.release_repo', o, Contract_1.releaseRepoContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_builder_releaseRepoContract_release_repo, Contract_1.releaseRepoContract.inputSchema);
     const cmd_builder_getArtifactContract_get_artifact = builder.command('get_artifact').description(`Fetch one artifact by its content digest.`);
     cmd_builder_getArtifactContract_get_artifact.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
@@ -273,6 +303,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_catalog_publishContract_publish, Contract_2.publishContract.inputSchema);
+    const cmd_catalog_declareContract_declare = catalog.command('declare').description(`Create or update a part and how it builds, without publishing a version.`);
+    cmd_catalog_declareContract_declare.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('catalog.declare', o, Contract_2.declareContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_catalog_declareContract_declare, Contract_2.declareContract.inputSchema);
     const cmd_catalog_resolveContract_resolve = catalog.command('resolve').description(`Resolve version requirements against published versions.`);
     cmd_catalog_resolveContract_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {

@@ -25,6 +25,58 @@ import { z } from '@flybyme/mesh';
 export const PartKindSchema = z.enum(['kernel', 'application', 'extension']);
 export type PartKind = z.infer<typeof PartKindSchema>;
 
+/**
+ * Another part this one needs on the page, as a range.
+ *
+ * A **requirement**, never a grant: it says this part will not function without that one. It does
+ * not install it, does not choose its version for the site, and does not decide what it may reach.
+ */
+export const RequiredPartRefSchema = z.object({
+    id: z.string().min(1),
+    version: z.string().min(1).describe('A range, or * for any'),
+    /** Present-and-useful rather than necessary. Composing reports an unmet optional; it refuses an unmet required one. */
+    optional: z.boolean().default(false),
+});
+export type RequiredPartRef = z.infer<typeof RequiredPartRefSchema>;
+
+/**
+ * How to build this part, held by the catalog rather than by the repository.
+ *
+ * The fields `mesh.json` used to own, minus the two that were never the repository's to state:
+ *
+ * - **the version**, which is minted by `builder.release_part` now. A repository holding its own
+ *   version number is a repository that must be edited to ship, and a number that can be spent.
+ * - **the publisher**, which comes from whoever asked, whose scope the API already resolved. A
+ *   repository that could name its own owner could name someone else's.
+ *
+ * There is still nowhere to put an `auth`. A part must never choose its own gate — if a repository
+ * could declare `domains.zone_delete` public, installing a part would be a privilege escalation
+ * with nobody in the loop — so `requires` is a list of bare contract keys and the site's record is
+ * what says at what gate, if at all, each one is exposed.
+ */
+export const PartDeclarationSchema = z.object({
+    /** The **source** entry — `src/app.ts`. esbuild reads types; it does not check them. */
+    entry: z.string().min(1),
+
+    /**
+     * Which branch a release is cut from. Resolved to an exact commit at release time, always —
+     * a build keyed on `main` would answer the same forever while the code moved underneath it.
+     */
+    branch: z.string().min(1).default('main'),
+
+    /** For a monorepo. A name within the repository, never a path on a disk. */
+    subdirectory: z.string().min(1).optional(),
+
+    /** The kernel range this is written against, e.g. `^0.15`. Absent when this *is* the kernel. */
+    kernel: z.string().min(1).optional(),
+
+    /** Contract keys this part calls — `part.find`, `cdn.deploy`. Bare keys, never a gate. */
+    requires: z.array(z.string()).default([]),
+
+    requiredParts: z.array(RequiredPartRefSchema).default([]),
+});
+export type PartDeclaration = z.infer<typeof PartDeclarationSchema>;
+
 export const PartSchema = z.object({
     /**
      * What a site names when it says it loads this — `auth`, `process-monitor`.
@@ -51,6 +103,29 @@ export const PartSchema = z.object({
      * change what runs on somebody else's hostname.
      */
     publisher: z.string().min(1),
+
+    /**
+     * ## What this part builds, and where the answer lives
+     *
+     * Everything here was in `mesh.json`, in the repository, and shipping a one-line change meant
+     * editing that file — bump the version, commit, publish, build, compose, deploy. Six steps, run
+     * by hand, and the first of them existed only because the repository was holding a number the
+     * catalog was going to overwrite anyway.
+     *
+     * So the descriptor is a **genesis format** now, not a build input: `builder.import_repo` reads
+     * one once and writes what it found here, and from that moment this row is what a release reads.
+     * A repository can still be edited; it just no longer decides anything on its own.
+     *
+     * **A version keeps its own frozen copy.** `partVersion` records the entry, kernel range and
+     * requirements it was published with, so changing this changes what the *next* version declares
+     * and can never reach back into one already built. That split is the whole reason this is safe
+     * to make editable: identity is on the version, intent is here.
+     *
+     * Optional, because a part published before this existed has none — and because a part may be
+     * declared by hand from the console before anyone points it at a repository. `release_part`
+     * refuses one it cannot build from, naming the field.
+     */
+    declaration: PartDeclarationSchema.optional(),
 
     /**
      * ## Presentation — everything a person choosing a part needs, and nothing a build does

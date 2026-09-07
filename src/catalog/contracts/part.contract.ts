@@ -22,7 +22,9 @@
 
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
-import { CapabilitiesSchema, PartKindSchema, PartSchema, PartVersionSchema } from '../schema/part.js';
+import {
+    CapabilitiesSchema, PartDeclarationSchema, PartKindSchema, PartSchema, PartVersionSchema,
+} from '../schema/part.js';
 
 // ---------------------------------------------------------------------------- collections
 
@@ -150,6 +152,55 @@ export const publishContract = defineContract({
     rest: { method: 'POST', path: '/catalog/parts/:name/versions' },
     destructive: true,
     print: (o) => (o.existed ? 'already published' : `published ${o.versionId}`),
+});
+
+/**
+ * Declare a part — what it is, where its source is, and what it builds — without publishing one.
+ *
+ * **The endpoint that replaces editing `mesh.json`.** A part exists here before any version of it
+ * does, which is the ordering the previous model could not express: `catalog.publish` created the
+ * part row as a side effect of publishing a version, so there was no way to say *this part exists
+ * and here is how to build it* and then ask the platform to go and do it. That gap is why every
+ * release started with a text editor.
+ *
+ * Idempotent by name, and the same identity rules apply as everywhere else: `kind` is fixed at
+ * creation, `publisher` comes from the caller, and neither can be changed by asking again.
+ */
+export const declareContract = defineContract({
+    domain: 'catalog',
+    action: 'declare',
+    description: 'Create or update a part and how it builds, without publishing a version.',
+    dependencies: [],
+    inputSchema: z.object({
+        name: z.string().min(1),
+        kind: PartKindSchema,
+        repository: z.string().min(1),
+        declaration: PartDeclarationSchema,
+
+        // Presentation, all optional and all followed rather than overwritten: a field left out is
+        // left alone, so a console that knows about `description` and not `icon` cannot erase one.
+        description: z.string().optional(),
+        homepage: z.string().optional(),
+        license: z.string().optional(),
+        keywords: z.array(z.string()).optional(),
+        icon: z.string().optional(),
+    }),
+    outputSchema: z.object({
+        partId: z.string(),
+        name: z.string(),
+        /** False when this created the part. */
+        existed: z.boolean(),
+    }),
+    rest: { method: 'PUT', path: '/catalog/parts/:name' },
+    /**
+     * **Exposable, and the gate is the site's.** Declaring a part is how an operator adds one from
+     * the console, which is the whole point — but it writes a row that says which repository a
+     * builder will clone with whatever credential it holds, so no site should put this behind
+     * anything less than `operator`.
+     */
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${o.name} ${o.existed ? 'updated' : 'declared'}`,
 });
 
 /**
