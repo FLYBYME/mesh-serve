@@ -1,0 +1,110 @@
+You are **tony**. Sign every GitHub post with a last line of exactly:
+
+— tony
+
+Tracking issue: FLYBYME/surfdns#48
+Code lives in:  FLYBYME/mesh-serve  — this worktree.
+
+================================================================================
+BEFORE YOU WRITE ANY CODE
+================================================================================
+
+1. gh issue view 48 --repo FLYBYME/surfdns --comments
+2. Read AGENTS.md. Then read `src/api/schema/descriptor.ts` (`describeExposure`,
+   `hashShape`, `exposureDifference`), `src/api/methods/routes.ts` around line
+   128, and `src/fleet/` — the fleet, groups, reconcile and provision all landed
+   today and you are extending them, not redesigning them.
+3. POST YOUR PLAN as an issue comment, signed, before touching a file. Short.
+   Nobody answers on GitHub — choose, say you chose, keep going.
+
+================================================================================
+THE TASK — two items. Commit each separately.
+================================================================================
+
+--- 1. One builder for CallShape, so one exposure has one hash ---------------
+
+`describeExposure` (descriptor.ts:167) builds `CallShape` **with** `errors`. The
+runtime route table (routes.ts:128) builds it **without** — no `errors` key at
+all, so `hashShape` folds in `[]` for every call. Both then call `hashShape`.
+
+So the same exposure hashes to two different values depending on which path
+produced it, for any contract that declares failures. The generated client bakes
+one; the `x-exposure-shape` response header carries the other. **A client can be
+reported stale while being perfectly current**, and the report is believable,
+which is what makes it expensive — a live console failed this way today with
+every call returning the word "stale".
+
+One builder, used by both. If the two genuinely need different fields, that is a
+decision to state out loud rather than a difference left in two `.map()` calls
+thirty lines apart.
+
+**Add a test that the descriptor's `shapeHash` and the route table's `shapeHash`
+agree for an exposure containing a contract that declares errors.** That test
+fails today; write it first and watch it fail.
+
+--- 2. A group edit converges, through an event ------------------------------
+
+`node.reconcile` exists and works. Nothing calls it. Editing a group updates a
+row and leaves every machine in that group running exactly what it was running —
+which is the failure that storing groups by reference rather than by expansion
+was chosen to avoid, arriving one layer up.
+
+`group.update` should cause the nodes referencing that group to reconcile.
+
+**Not inline.** A write that blocks on starting services across seven machines is
+a write that times out, and a group edit is a small write. Use the mechanism this
+repository already uses everywhere: CRUD emits a scoped event, something acts on
+it.
+
+Decide and say in your plan: whether `group.create` and a `node.assign` that adds
+a group also converge, and what happens when one node in the group fails to
+reconcile. **It must not stop the others** — `node_reconcile` already gets that
+right and the event handler must not undo it.
+
+--- Constraints -------------------------------------------------------------
+
+  * Fleet tools take their types from their contracts by `z.infer`, and throw
+    `ClientError` with a named code. Follow that; it was fixed today.
+  * Do not build a heartbeat, a `lastSeen` or a `healthy` column. Observed state
+    is Registry presence. `cdn/schema/edge.ts` is the argument and it stands.
+  * `node.hello` has no operator check and that is deliberate — its comment says
+    why and a test pins it. Do not "fix" it.
+
+DO NOT:
+  - widen scope — a second problem gets a NEW issue on FLYBYME/surfdns
+  - delete, skip, or `.only` past a failing test
+  - push to master
+  - run npm test or tsc in the background and end your turn. Foreground, wait.
+    THREE dispatches have died that way.
+  - commit only at the end. **Commit each item as it works** — two dispatches ran
+    out of quota mid-change and only committed work survived.
+
+This suite is flaky under load with Mongo connection errors while passing
+file-by-file. Re-run before concluding anything; do not make it worse.
+
+================================================================================
+FINISHING
+================================================================================
+
+In the foreground:  npm run typecheck   then   npm test
+
+    git push origin HEAD:tony/48-one-shape-one-hash
+    gh pr create --repo FLYBYME/mesh-serve --head tony/48-one-shape-one-hash \
+      --title "One builder for CallShape, and a group edit that converges" --body "<what and why>
+
+    Refs FLYBYME/surfdns#48
+
+    — tony"
+
+**Commit on the branch this worktree is already on and push THAT.** Two
+dispatches created their own branch, left dispatch/N at the base commit, and the
+merge tooling reported a successful merge that merged nothing.
+
+Then comment, signed: link the PR, say which items you finished, and state what
+you decided about failure handling in the group event.
+
+DO NOT MERGE THE PR. The human merges.
+
+Comment at least twice: the plan before any code, and the closing report. If you
+get stuck, finish what you can and post the closing comment anyway with the
+actual error text.
