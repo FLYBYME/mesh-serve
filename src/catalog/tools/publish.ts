@@ -56,13 +56,62 @@ export async function catalog_publish(
             return { partId: part.id, versionId: existing.id, existed: true };
         }
 
+        /**
+         * The development escape hatch — **server-side, off by default, and loud.**
+         *
+         * Ten versions a day while a thing is being built is not ten releases; it is one release
+         * being edited, and bumping a patch for each round trip buries the real history under noise
+         * and costs a `mesh.json` edit every time. So `MESH_ALLOW_REPUBLISH` lets a version be
+         * overwritten in place.
+         *
+         * **Read from the server's environment, never from the request.** An input flag would let
+         * any publisher decide the catalog's central invariant did not apply to them, which is not
+         * an escape hatch but a hole. The node operator opts in for a whole node, which is a
+         * decision made once, in a place someone can look.
+         *
+         * The row is moved back to `declared` and the artifact is not touched. A version that gets
+         * new bytes has not been built yet by definition, and an artifact is addressed by the hash
+         * of its own content — so a release already pinning the old digest keeps resolving to the
+         * old digest, which is exactly right. Republishing changes what `^0.15` *will* resolve to,
+         * not what an existing release *did*.
+         */
+        if (process.env['MESH_ALLOW_REPUBLISH'] === '1') {
+            const updated = await ctx.call('partVersion.update', {
+                id: existing.id,
+                commit: input.commit,
+                repository: input.repository,
+                ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
+                entry: input.entry,
+                ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
+                ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
+                requires: input.requires ?? [],
+                capabilities: input.capabilities ?? { needs: [], provides: [] },
+                state: 'declared',
+                publishedAt: new Date(),
+            });
+
+            // Every republish says so. The one thing worse than a mutable version is a mutable
+            // version nobody can tell happened.
+            ctx.logger.warn(
+                `${input.name}@${input.version} republished from ${existing.commit} to ` +
+                `${input.commit} under MESH_ALLOW_REPUBLISH. A version is normally immutable; ` +
+                `this node has the development hatch on.`,
+            );
+
+            ctx.emit('catalog.version_published', {
+                partName: input.name, version: input.version, kind: input.kind, commit: input.commit,
+            });
+
+            return { partId: part.id, versionId: updated?.id ?? existing.id, existed: true };
+        }
+
         // **The invariant.** Without it, `^1.0` resolves to bytes that changed underneath it and
         // every site pinning that range silently gets different code. Both commits are named,
         // because the useful question is which one is the impostor.
         throw new ClientError(
             `${input.name}@${input.version} is already published from commit ${existing.commit}, ` +
             `and cannot be republished from ${input.commit}. A version is immutable: publish a new ` +
-            `version instead.`,
+            `version instead. (A development node may set MESH_ALLOW_REPUBLISH=1 to overwrite.)`,
             'version_immutable', 409,
         );
     }
