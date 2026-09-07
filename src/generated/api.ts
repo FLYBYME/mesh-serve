@@ -78,6 +78,7 @@ declare global {
         'site.delete': { params: z.input<typeof Contract_4.siteCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_4.siteCrud['delete']['outputSchema']> };
         'node.hello': { params: z.input<typeof Contract_6.nodeHelloContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeHelloContract['outputSchema']> };
         'node.assign': { params: z.input<typeof Contract_6.nodeAssignContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeAssignContract['outputSchema']> };
+        'node.reconcile': { params: z.input<typeof Contract_6.nodeReconcileContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeReconcileContract['outputSchema']> };
         'node.status': { params: z.input<typeof Contract_6.nodeStatusContract['inputSchema']>, returns: z.infer<typeof Contract_6.nodeStatusContract['outputSchema']> };
         'node.create': { params: z.input<typeof Contract_6.nodeCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['create']['outputSchema']> };
         'node.find': { params: z.input<typeof Contract_6.nodeCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['find']['outputSchema']> };
@@ -87,6 +88,14 @@ declare global {
         'node.resolve': { params: z.input<typeof Contract_6.nodeCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['resolve']['outputSchema']> };
         'node.update': { params: z.input<typeof Contract_6.nodeCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['update']['outputSchema']> };
         'node.delete': { params: z.input<typeof Contract_6.nodeCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_6.nodeCrud['delete']['outputSchema']> };
+        'group.create': { params: z.input<typeof Contract_6.groupCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['create']['outputSchema']> };
+        'group.find': { params: z.input<typeof Contract_6.groupCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['find']['outputSchema']> };
+        'group.find_one': { params: z.input<typeof Contract_6.groupCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['findOne']['outputSchema']> };
+        'group.count': { params: z.input<typeof Contract_6.groupCrud['count']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['count']['outputSchema']> };
+        'group.get': { params: z.input<typeof Contract_6.groupCrud['get']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['get']['outputSchema']> };
+        'group.resolve': { params: z.input<typeof Contract_6.groupCrud['resolve']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['resolve']['outputSchema']> };
+        'group.update': { params: z.input<typeof Contract_6.groupCrud['update']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['update']['outputSchema']> };
+        'group.delete': { params: z.input<typeof Contract_6.groupCrud['delete']['inputSchema']>, returns: z.infer<typeof Contract_6.groupCrud['delete']['outputSchema']> };
         'identity.ticket_issue': { params: z.input<typeof Contract_7.ticketIssueContract['inputSchema']>, returns: z.infer<typeof Contract_7.ticketIssueContract['outputSchema']> };
         'identity.ticket_validate': { params: z.input<typeof Contract_7.ticketValidateContract['inputSchema']>, returns: z.infer<typeof Contract_7.ticketValidateContract['outputSchema']> };
         'identity.ticket_revoke': { params: z.input<typeof Contract_7.ticketRevokeContract['inputSchema']>, returns: z.infer<typeof Contract_7.ticketRevokeContract['outputSchema']> };

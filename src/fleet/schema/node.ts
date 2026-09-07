@@ -14,11 +14,39 @@ import { z } from 'zod';
 export const NodeSchema = z.object({
     /** The node's stable identity: its hostname. */
     hostname: z.string().min(1),
-    /** Which manifest entries this node is assigned to run (desired state). */
+    /** Which manifest entries this node is assigned to run directly (desired state). */
     services: z.array(z.string()).default([]),
+    /**
+     * Groups this node belongs to, **by name and not expanded**.
+     *
+     * Storing the reference is the whole decision. Expanding a group at assign time and keeping the
+     * result would mean every edit to a group needs a manual re-assign of every node in it, and the
+     * nodes nobody remembers go on running yesterday's set — the same failure that leaves a site
+     * serving a part from two days ago because nobody re-composed it.
+     *
+     * So a group edit rolls: `node.reconcile` recomputes from the group and applies the difference.
+     *
+     * A node holds groups **and** `services`, and the desired set is the union of both. One machine
+     * that also runs a builder does not need a group of its own.
+     */
+    groups: z.array(z.string()).default([]),
 }).strict();
 
 export type NodeRecord = z.infer<typeof NodeSchema>;
+
+/**
+ * A named set of services, so seven machines are not configured one service at a time.
+ *
+ * Deliberately thin: a name and a list. Everything that makes a group *useful* — that editing one
+ * changes every node in it — is behaviour in `reconcile`, not a field here.
+ */
+export const GroupSchema = z.object({
+    name: z.string().min(1),
+    services: z.array(z.string()).default([]),
+    description: z.string().optional(),
+}).strict();
+
+export type GroupRecord = z.infer<typeof GroupSchema>;
 
 export const ServiceRunStatusSchema = z.object({
     name: z.string(),

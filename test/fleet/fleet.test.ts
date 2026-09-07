@@ -14,6 +14,7 @@ import {
 } from '@flybyme/mesh';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { nodeHelloContract } from '../../src/fleet/contracts/node.contract.js';
 import { FleetService } from '../../src/fleet/fleet.service.js';
 import { loadManifest, Supervisor } from '../../src/supervisor/Supervisor.js';
 import { SupervisorService } from '../../src/supervisor/SupervisorService.js';
@@ -61,6 +62,18 @@ describe('Track E: Fleet layer', () => {
         await app.registerModule(new FleetService());
     });
 
+    /**
+     * Every operator call has to carry one now.
+     *
+     * These tests used to call `node.assign` and `node.status` with no caller at all and were
+     * admitted, because the check only ran when `ctx.meta.user` happened to be present. That is the
+     * hole `requireOperator` closes: reaching a tool over the mesh is not an identity, and the
+     * fleet's control surface was open to anything already on it.
+     */
+    const asOperator = {
+        meta: { user: { id: 'op-user', tenant_id: 'platform', roles: ['operator'] } },
+    };
+
     afterAll(async () => {
         await supervisor.stopAll();
         await destroyTestApp(app);
@@ -87,7 +100,7 @@ describe('Track E: Fleet layer', () => {
         await broker.call('node.assign' as never, {
             hostname: 'vps-persistent',
             services: ['alpha'],
-        } as never);
+        } as never, asOperator);
 
         // A rebooted node (calling hello anew) retrieves its existing desired state
         const rebooted = await broker.call('node.hello' as never, {
@@ -106,7 +119,7 @@ describe('Track E: Fleet layer', () => {
         const assignResult = await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: ['alpha'],
-        } as never) as {
+        } as never, asOperator) as {
             hostname: string;
             services: string[];
             applied: boolean;
@@ -122,7 +135,7 @@ describe('Track E: Fleet layer', () => {
         const assignBoth = await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: ['alpha', 'beta'],
-        } as never) as {
+        } as never, asOperator) as {
             applied: boolean;
             started?: string[];
             stopped?: string[];
@@ -136,7 +149,7 @@ describe('Track E: Fleet layer', () => {
         const dropBeta = await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: ['alpha'],
-        } as never) as {
+        } as never, asOperator) as {
             applied: boolean;
             started?: string[];
             stopped?: string[];
@@ -151,7 +164,7 @@ describe('Track E: Fleet layer', () => {
         const dropAll = await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: [],
-        } as never) as {
+        } as never, asOperator) as {
             applied: boolean;
             stopped?: string[];
         };
@@ -166,11 +179,11 @@ describe('Track E: Fleet layer', () => {
         await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: ['alpha'],
-        } as never);
+        } as never, asOperator);
 
         const status = await broker.call('node.status' as never, {
             hostname: testHostname,
-        } as never) as {
+        } as never, asOperator) as {
             hostname: string;
             connected: boolean;
             nodeID?: string;
@@ -193,7 +206,7 @@ describe('Track E: Fleet layer', () => {
         // Status for an offline node answers desired state with connected: false
         const offlineStatus = await broker.call('node.status' as never, {
             hostname: 'vps-persistent',
-        } as never) as {
+        } as never, asOperator) as {
             hostname: string;
             connected: boolean;
             desiredServices: string[];
@@ -209,7 +222,7 @@ describe('Track E: Fleet layer', () => {
         await broker.call('node.assign' as never, {
             hostname: testHostname,
             services: [],
-        } as never);
+        } as never, asOperator);
     });
 
     it('operator gate: refuses admin caller with no operator role (403)', async () => {
@@ -219,9 +232,23 @@ describe('Track E: Fleet layer', () => {
             },
         };
 
-        await expect(
-            broker.call('node.hello' as never, { hostname: 'any-host' } as never, adminCallerMeta),
-        ).rejects.toThrow(/operator/i);
+        /**
+         * **`hello` is the deliberate exception, and this assertion is inverted on purpose.**
+         *
+         * It used to demand that `hello` refuse a non-operator. A node has no user and never will
+         * have one, so that rule means no machine can ever register — and the workaround it pushes
+         * you toward, giving every box an operator credential, hands the fleet's whole control
+         * surface to every box in the fleet.
+         *
+         * What keeps it safe is not a role check: `nodeHelloContract` is `internal`, so no site can
+         * expose it (pinned by the test below), and a peer only reaches the broker at all by
+         * presenting the shared key at the WebSocket handshake. Announcing yourself is not the same
+         * act as directing somebody else, and only the second one is an operator's.
+         */
+        const announced = await broker.call(
+            'node.hello' as never, { hostname: 'any-host' } as never, adminCallerMeta,
+        ) as { hostname: string };
+        expect(announced.hostname).toBe('any-host');
 
         await expect(
             broker.call('node.assign' as never, { hostname: 'any-host', services: [] } as never, adminCallerMeta),
@@ -311,5 +338,94 @@ describe('Track E: Fleet layer', () => {
         await expect(
             broker.call('node.hello' as never, { hostname: 'conflict-host' } as never),
         ).rejects.toThrow(/already claimed by live node/i);
+    });
+
+    /**
+     * The check that makes `hello`'s missing operator gate defensible.
+     *
+     * If this contract ever becomes exposable, an unauthenticated caller on the internet can create
+     * node rows and read other machines' assignments. mesh defaults a contract to `internal` and
+     * `describeExposure` refuses to publish an internal one, so the property holds today — but it
+     * holds by a default nobody restated, and a default nobody restated is a default somebody
+     * eventually overrides.
+     */
+    it('node.hello is internal, which is what bounds its missing operator check', () => {
+        const visibility = (nodeHelloContract as { visibility?: unknown }).visibility;
+
+        // Undefined means internal (mesh's default). An explicit 'public' here would be the
+        // regression this test exists to catch.
+        expect(visibility === undefined || visibility === 'internal').toBe(true);
+    });
+
+    it('refuses an operator tool called with no caller at all', async () => {
+        // Being on the mesh is not an identity — roadmap C2.5, no internal bypass.
+        await expect(
+            broker.call('node.assign' as never, { hostname: 'x', services: [] } as never),
+        ).rejects.toThrow(/no caller/i);
+    });
+
+    describe('groups', () => {
+        it('resolves a node\'s services as the union of its own and its groups', async () => {
+            await broker.call('group.create' as never,
+                { name: 'edge-test', services: ['alpha'] } as never, asOperator);
+
+            const assigned = await broker.call('node.assign' as never, {
+                hostname: 'grouped-host',
+                services: ['beta'],
+                groups: ['edge-test'],
+            } as never, asOperator) as { services: string[] };
+
+            expect(assigned.services).toEqual(['alpha', 'beta']);
+        });
+
+        /**
+         * The whole reason a group stores a reference instead of an expanded list. If this failed,
+         * every group edit would need a manual re-assign of every node in it, and the nodes nobody
+         * remembered would go on running yesterday's set.
+         */
+        it('rolls a group edit onto the nodes that belong to it', async () => {
+            const group = await broker.call('group.create' as never,
+                { name: 'roll-test', services: ['alpha'] } as never, asOperator) as { id: string };
+
+            await broker.call('node.assign' as never,
+                { hostname: 'rolling-host', groups: ['roll-test'] } as never, asOperator);
+
+            await broker.call('group.update' as never,
+                { id: group.id, services: ['alpha', 'beta'] } as never, asOperator);
+
+            const out = await broker.call('node.reconcile' as never,
+                { group: 'roll-test' } as never, asOperator) as {
+                    reconciled: { hostname: string; services: string[] }[];
+                };
+
+            const rolled = out.reconciled.find((r) => r.hostname === 'rolling-host');
+            expect(rolled?.services).toEqual(['alpha', 'beta']);
+        });
+
+        it('does not clear direct services when only groups are given', async () => {
+            // `absent means unchanged` — the mistake the obvious implementation makes, and one that
+            // is invisible until a builder stops.
+            await broker.call('node.assign' as never,
+                { hostname: 'keep-host', services: ['alpha'] } as never, asOperator);
+
+            const after = await broker.call('node.assign' as never,
+                { hostname: 'keep-host', groups: [] } as never, asOperator) as { services: string[] };
+
+            expect(after.services).toEqual(['alpha']);
+        });
+
+        it('treats a group that no longer exists as contributing nothing', async () => {
+            // A group can be deleted while nodes still name it. Those nodes should lose its
+            // services, not fail to reconcile and freeze on whatever they happened to be running.
+            await broker.call('node.assign' as never,
+                { hostname: 'ghost-host', groups: ['never-existed'] } as never, asOperator);
+
+            const out = await broker.call('node.reconcile' as never,
+                { hostname: 'ghost-host' } as never, asOperator) as {
+                    reconciled: { services: string[] }[];
+                };
+
+            expect(out.reconciled[0]?.services).toEqual([]);
+        });
     });
 });

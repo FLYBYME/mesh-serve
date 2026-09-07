@@ -39,6 +39,9 @@ declare global {
         'node.created': z.infer<typeof Contract_6.nodeCrud['create']['outputSchema']>;
         'node.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.nodeCrud['update']['outputSchema']> };
         'node.deleted': { id: string };
+        'group.created': z.infer<typeof Contract_6.groupCrud['create']['outputSchema']>;
+        'group.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_6.groupCrud['update']['outputSchema']> };
+        'group.deleted': { id: string };
         'user.created': z.infer<typeof Contract_7.userCrud['create']['outputSchema']>;
         'user.updated': { id: string; patch: Record<string, unknown>; item: z.infer<typeof Contract_7.userCrud['update']['outputSchema']> };
         'user.deleted': { id: string };

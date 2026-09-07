@@ -739,6 +739,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_node_nodeAssignContract_assign, Contract_6.nodeAssignContract.inputSchema);
+    const cmd_node_nodeReconcileContract_reconcile = node.command('reconcile').description(`Make what each node is running match what it should be running.`);
+    cmd_node_nodeReconcileContract_reconcile.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('node.reconcile', o, Contract_6.nodeReconcileContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_node_nodeReconcileContract_reconcile, Contract_6.nodeReconcileContract.inputSchema);
     const cmd_node_nodeStatusContract_status = node.command('status').description(`Answers what a node (or this node) is running and what it is connected to.`);
     cmd_node_nodeStatusContract_status.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
@@ -829,6 +839,87 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_node_nodeCrud_delete_delete, Contract_6.nodeCrud['delete'].inputSchema);
+    const group = program.command('group').description('group tools');
+    const cmd_group_groupCrud_create_create = group.command('create').description(`CRUD create for group (groupCrud)`);
+    cmd_group_groupCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.create', o, Contract_6.groupCrud['create'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_create_create, Contract_6.groupCrud['create'].inputSchema);
+    const cmd_group_groupCrud_find_find = group.command('find').description(`CRUD find for group (groupCrud)`);
+    cmd_group_groupCrud_find_find.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.find', o, Contract_6.groupCrud['find'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_find_find, Contract_6.groupCrud['find'].inputSchema);
+    const cmd_group_groupCrud_findOne_find_one = group.command('find_one').description(`CRUD findOne for group (groupCrud)`);
+    cmd_group_groupCrud_findOne_find_one.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.find_one', o, Contract_6.groupCrud['findOne'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_findOne_find_one, Contract_6.groupCrud['findOne'].inputSchema);
+    const cmd_group_groupCrud_count_count = group.command('count').description(`CRUD count for group (groupCrud)`);
+    cmd_group_groupCrud_count_count.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.count', o, Contract_6.groupCrud['count'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_count_count, Contract_6.groupCrud['count'].inputSchema);
+    const cmd_group_groupCrud_get_get = group.command('get').description(`CRUD get for group (groupCrud)`);
+    cmd_group_groupCrud_get_get.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.get', o, Contract_6.groupCrud['get'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_get_get, Contract_6.groupCrud['get'].inputSchema);
+    const cmd_group_groupCrud_resolve_resolve = group.command('resolve').description(`CRUD resolve for group (groupCrud)`);
+    cmd_group_groupCrud_resolve_resolve.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.resolve', o, Contract_6.groupCrud['resolve'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_resolve_resolve, Contract_6.groupCrud['resolve'].inputSchema);
+    const cmd_group_groupCrud_update_update = group.command('update').description(`CRUD update for group (groupCrud)`);
+    cmd_group_groupCrud_update_update.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.update', o, Contract_6.groupCrud['update'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_update_update, Contract_6.groupCrud['update'].inputSchema);
+    const cmd_group_groupCrud_delete_delete = group.command('delete').description(`CRUD delete for group (groupCrud)`);
+    cmd_group_groupCrud_delete_delete.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('group.delete', o, Contract_6.groupCrud['delete'], cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_group_groupCrud_delete_delete, Contract_6.groupCrud['delete'].inputSchema);
     const identity = program.command('identity').description('identity tools');
     const cmd_identity_ticketIssueContract_ticket_issue = identity.command('ticket_issue').description(`Exchange credentials for an opaque ticket.`);
     cmd_identity_ticketIssueContract_ticket_issue.action(async (o: Record<string, unknown>, cmd: Command) => {
