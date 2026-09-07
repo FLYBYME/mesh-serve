@@ -83,6 +83,8 @@ declare global {
         'identity.whoami': { params: z.input<typeof Contract_6.whoamiContract['inputSchema']>, returns: z.infer<typeof Contract_6.whoamiContract['outputSchema']> };
         'identity.register': { params: z.input<typeof Contract_6.registerContract['inputSchema']>, returns: z.infer<typeof Contract_6.registerContract['outputSchema']> };
         'identity.permits': { params: z.input<typeof Contract_6.permitsContract['inputSchema']>, returns: z.infer<typeof Contract_6.permitsContract['outputSchema']> };
+        'identity.api_token_validate': { params: z.input<typeof Contract_6.apiTokenValidateContract['inputSchema']>, returns: z.infer<typeof Contract_6.apiTokenValidateContract['outputSchema']> };
+        'identity.api_token_issue': { params: z.input<typeof Contract_6.apiTokenIssueContract['inputSchema']>, returns: z.infer<typeof Contract_6.apiTokenIssueContract['outputSchema']> };
         'user.create': { params: z.input<typeof Contract_6.userCrud['create']['inputSchema']>, returns: z.infer<typeof Contract_6.userCrud['create']['outputSchema']> };
         'user.find': { params: z.input<typeof Contract_6.userCrud['find']['inputSchema']>, returns: z.infer<typeof Contract_6.userCrud['find']['outputSchema']> };
         'user.find_one': { params: z.input<typeof Contract_6.userCrud['findOne']['inputSchema']>, returns: z.infer<typeof Contract_6.userCrud['findOne']['outputSchema']> };

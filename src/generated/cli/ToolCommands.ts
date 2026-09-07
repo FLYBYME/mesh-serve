@@ -798,6 +798,26 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_identity_permitsContract_permits, Contract_6.permitsContract.inputSchema);
+    const cmd_identity_apiTokenValidateContract_api_token_validate = identity.command('api_token_validate').description(`Is this API token valid, and which principal does it represent.`);
+    cmd_identity_apiTokenValidateContract_api_token_validate.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('identity.api_token_validate', o, Contract_6.apiTokenValidateContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_identity_apiTokenValidateContract_api_token_validate, Contract_6.apiTokenValidateContract.inputSchema);
+    const cmd_identity_apiTokenIssueContract_api_token_issue = identity.command('api_token_issue').description(`Mint an API token for a principal.`);
+    cmd_identity_apiTokenIssueContract_api_token_issue.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('identity.api_token_issue', o, Contract_6.apiTokenIssueContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_identity_apiTokenIssueContract_api_token_issue, Contract_6.apiTokenIssueContract.inputSchema);
     const user = program.command('user').description('user tools');
     const cmd_user_userCrud_create_create = user.command('create').description(`CRUD create for user (userCrud)`);
     cmd_user_userCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {

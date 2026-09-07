@@ -20,9 +20,12 @@
  */
 
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
+
+import type { IMeshApp, IServiceToolRegistry } from '@flybyme/mesh';
 
 import { parseDescriptor, requirementsOf, type DescribedPart } from '../builder/schema/descriptor.js';
 
@@ -30,12 +33,14 @@ const run = promisify(execFile);
 
 export interface PublishArgs {
     readonly descriptor: string;
-    /** The organization that owns these parts. Checked by the builder before it clones anything. */
+    /** The organization that owns these parts. Checked against verified token if provided. */
     readonly publisher: string | undefined;
     /** Where the source is. Read from the git remote when not given. */
     readonly repository: string | undefined;
     /** Print what would be published and write nothing. */
     readonly dryRun: boolean;
+    /** API token for machine authentication. Read from --token, MESH_TOKEN, or ~/.mesh/token. */
+    readonly token: string | undefined;
     /**
      * A node already in the cluster, to join through.
      *
@@ -58,11 +63,25 @@ export function parseArgs(argv: readonly string[]): PublishArgs {
 
     const bootstrap = value('--bootstrap') ?? process.env['MESH_BOOTSTRAP'];
 
+    let token = value('--token') ?? process.env['MESH_TOKEN'] ?? process.env['MESH_API_TOKEN'];
+    if (token === undefined) {
+        try {
+            const tokenPath = resolve(homedir(), '.mesh', 'token');
+            if (existsSync(tokenPath)) {
+                const content = readFileSync(tokenPath, 'utf8').trim();
+                if (content !== '') token = content;
+            }
+        } catch {
+            // Ignore unreadable or missing token file
+        }
+    }
+
     return {
         descriptor: value('--descriptor') ?? 'mesh.json',
         publisher: value('--publisher'),
         repository: value('--repository'),
         dryRun: argv.includes('--dry-run'),
+        token,
         bootstrap: bootstrap === undefined
             ? []
             : bootstrap.split(',').map((node) => node.trim()).filter((node) => node !== ''),
@@ -163,6 +182,14 @@ export async function run_(argv: readonly string[]): Promise<number> {
 
     if (args.dryRun) return 0;
 
+    if (args.token === undefined) {
+        process.stderr.write(
+            'No credential. Publishing requires an API token. ' +
+            'Pass --token <token>, set MESH_TOKEN / MESH_API_TOKEN, or write ~/.mesh/token.\n',
+        );
+        return 1;
+    }
+
     if (args.bootstrap.length === 0) {
         process.stderr.write(
             '\nNo cluster to publish to. Pass --bootstrap ws://host:port (or set MESH_BOOTSTRAP), '
@@ -173,64 +200,82 @@ export async function run_(argv: readonly string[]): Promise<number> {
 
     const cluster = await join(args);
 
-    /**
-     * **One part's outcome must not decide the others'**, and it used to.
-     *
-     * This loop was wrapped in a single try/catch that returned on the first throw, which is wrong
-     * for the case the `parts` array exists to serve. In a repository of several parts, changing one
-     * of them means every *other* part is now at a commit later than the one it was published from
-     * — and `catalog.publish` refuses that, correctly, because a version is immutable.
-     *
-     * So publishing a repository of five parts after editing one of them aborted at the first
-     * unchanged part and never reached the rest. Observed twice on 2026-09-06: `whoami` published,
-     * `clock` refused, and `notes`, `theme` and `palette` were never attempted. The workaround was
-     * hand-written partial descriptors, which is the sort of thing nobody does twice before deciding
-     * multi-part repositories are more trouble than they are worth.
-     *
-     * The invariant stays where it belongs — in the contract, which still refuses. What changes is
-     * that the CLI treats *this part is unchanged and already published* as an outcome to report
-     * rather than a reason to stop. The exit code still says something was skipped, because a
-     * forgotten version bump is worth noticing in CI; it just no longer hides the four parts behind
-     * it.
-     */
     const skipped: string[] = [];
     let failed: Error | undefined;
 
     try {
+        await cluster.waitFor('identity.api_token_validate', args.timeoutMs);
+        await cluster.waitFor('catalog.publish', args.timeoutMs);
+
+        const validation = await cluster.call('identity.api_token_validate', { token: args.token });
+        if (!validation.valid) {
+            process.stderr.write('\nAuthentication failed: API token is invalid, expired, or revoked.\n');
+            return 1;
+        }
+
+        if (validation.organizationId === undefined) {
+            process.stderr.write('\nAuthentication failed: API token is not scoped to an organization.\n');
+            return 1;
+        }
+
+        const publisher = validation.organizationId;
+
+        if (args.publisher !== undefined) {
+            const matchesId = args.publisher === validation.organizationId;
+            const matchesSlug = validation.organizationSlug !== undefined && args.publisher === validation.organizationSlug;
+            if (!matchesId && !matchesSlug) {
+                process.stderr.write(
+                    `\nPublisher "${args.publisher}" does not match token organization ` +
+                    `("${validation.organizationSlug ?? validation.organizationId}").\n`,
+                );
+                return 1;
+            }
+        }
+
+        const callMeta = {
+            user: {
+                id: validation.userId ?? 'cli',
+                tenant_id: publisher,
+                roles: validation.roles ?? ['authenticated'],
+            },
+            tenant_id: publisher,
+        };
+
         for (const part of descriptor.parts) {
             const version = versionFrom(part, commit, descriptor.kernel);
 
             let published: { existed: boolean; versionId: string };
             try {
-                published = await cluster.call<{ existed: boolean; versionId: string }>(
-                'catalog.publish',
-                {
-                    name: part.id,
-                    kind: part.kind,
-                    repository,
-                    publisher: args.publisher,
+                published = await cluster.call(
+                    'catalog.publish',
+                    {
+                        name: part.id,
+                        kind: part.kind,
+                        repository,
+                        publisher,
 
-                    // Presentation, straight through from the descriptor. This is the link that was
-                    // missing: `part.description` has existed in the catalog since the beginning and
-                    // nothing filled it, so a live catalog of thirteen parts had thirteen empty
-                    // descriptions and a marketplace would have been a grid of bare ids.
-                    ...(part.description === undefined ? {} : { description: part.description }),
-                    ...(part.homepage === undefined ? {} : { homepage: part.homepage }),
-                    ...(part.license === undefined ? {} : { license: part.license }),
-                    ...(part.keywords === undefined ? {} : { keywords: part.keywords }),
-                    ...(part.icon === undefined ? {} : { icon: part.icon }),
-                    ...(part.changelog === undefined ? {} : { changelog: part.changelog }),
+                        // Presentation, straight through from the descriptor. This is the link that was
+                        // missing: `part.description` has existed in the catalog since the beginning and
+                        // nothing filled it, so a live catalog of thirteen parts had thirteen empty
+                        // descriptions and a marketplace would have been a grid of bare ids.
+                        ...(part.description === undefined ? {} : { description: part.description }),
+                        ...(part.homepage === undefined ? {} : { homepage: part.homepage }),
+                        ...(part.license === undefined ? {} : { license: part.license }),
+                        ...(part.keywords === undefined ? {} : { keywords: part.keywords }),
+                        ...(part.icon === undefined ? {} : { icon: part.icon }),
+                        ...(part.changelog === undefined ? {} : { changelog: part.changelog }),
 
-                    version: version.version,
-                    commit: version.commit,
-                    entry: version.entry,
-                    ...(version.kernel === undefined ? {} : { kernel: version.kernel }),
-                    requires: version.requires,
-                    capabilities: {
-                        needs: [],
-                        provides: [],
+                        version: version.version,
+                        commit: version.commit,
+                        entry: version.entry,
+                        ...(version.kernel === undefined ? {} : { kernel: version.kernel }),
+                        requires: version.requires,
+                        capabilities: {
+                            needs: [],
+                            provides: [],
+                        },
                     },
-                },
+                    { meta: callMeta },
                 );
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -280,6 +325,16 @@ export async function run_(argv: readonly string[]): Promise<number> {
     return 0;
 }
 
+interface ClusterNode {
+    waitFor(tool: string, ms: number): Promise<void>;
+    call<K extends keyof IServiceToolRegistry>(
+        tool: K,
+        params: IServiceToolRegistry[K]['params'],
+        options?: Parameters<IMeshApp['call']>[2],
+    ): Promise<IServiceToolRegistry[K]['returns']>;
+    stop(): Promise<void>;
+}
+
 /**
  * Join the cluster as a temporary node.
  *
@@ -288,10 +343,7 @@ export async function run_(argv: readonly string[]): Promise<number> {
  * peer that happens to be short-lived — which is what lets `catalog.publish` be an ordinary contract
  * rather than something with a second, CLI-shaped entrance.
  */
-async function join(args: PublishArgs): Promise<{
-    call<T>(tool: string, params: unknown): Promise<T>;
-    stop(): Promise<void>;
-}> {
+async function join(args: PublishArgs): Promise<ClusterNode> {
     const { BrokerModule, JSONSerializer, MeshApp, NetworkModule, RegistryModule } =
         await import('@flybyme/mesh');
     // The only piece that is node-specific: a WebSocket that dials out. Everything else is the same
@@ -310,21 +362,9 @@ async function join(args: PublishArgs): Promise<{
     app.use(new BrokerModule());
     await app.start();
 
-    // Discovery is not instant, and a call made before the catalog is known fails as "no such tool"
-    // — which reads as a broken cluster rather than as one this node has not met yet.
-    const deadline = Date.now() + args.timeoutMs;
-    const registry = app as unknown as { registry: { waitForTool?(tool: string, ms: number): Promise<unknown> } };
-
-    if (typeof registry.registry.waitForTool === 'function') {
-        await registry.registry.waitForTool('catalog.publish', args.timeoutMs);
-    } else {
-        while (Date.now() < deadline) await new Promise((done) => setTimeout(done, 100));
-    }
-
     return {
-        call: <T,>(tool: string, params: unknown): Promise<T> =>
-            (app as unknown as { call(t: string, p: unknown, o?: unknown): Promise<T> })
-                .call(tool, params, { meta: { user: { id: 'cli', tenant_id: args.publisher ?? '' } } }),
+        waitFor: (tool: string, ms: number) => app.registry.waitForTool(tool, ms),
+        call: (tool, params, options) => app.call(tool, params, options),
         stop: () => app.stop(),
     };
 }
