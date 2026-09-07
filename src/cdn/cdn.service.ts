@@ -32,6 +32,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { BlobStore } from '../builder/blobs.js';
 import { fileBlobStore } from '../builder/blobs.js';
 import type { Artifact } from '../builder/schema/artifact.js';
+import { callWithPlacement } from '../builder/methods/placement.js';
 import { edgeCrud, type Edge } from './contracts/edge.contract.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
@@ -579,10 +580,11 @@ export class CdnService extends ServiceModule {
             return undefined;
         }
 
-        // Re-enter build_start from catalog's commit
-        const buildResult = await this.call(
+        // Re-enter build_start from catalog's commit with placement awareness
+        const buildResult = await callWithPlacement<{ state: string; artifactDigest?: string }>(
+            this.broker ?? this,
             'builder.build_start',
-            { part: partId, version: partVersion },
+            { part: partId, version: partVersion, preferLocal: true },
             { meta: { tenant_id: partDoc.publisher } },
         );
 

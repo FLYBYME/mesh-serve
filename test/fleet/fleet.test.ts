@@ -306,7 +306,7 @@ describe('Track E: Fleet layer', () => {
         }) as typeof origCall;
 
         try {
-            const status = await broker.call('node.status' as never, {}, asOperator) as {
+            const status = await broker.call('node.status' as never, {} as never, asOperator) as {
                 nodes?: {
                     hostname: string;
                     connected: boolean;
