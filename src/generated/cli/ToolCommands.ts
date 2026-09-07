@@ -759,6 +759,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_node_nodeStatusContract_status, Contract_6.nodeStatusContract.inputSchema);
+    const cmd_node_nodeProvisionContract_provision = node.command('provision').description(`Provisions a service onto a node by acquiring its repository at a pinned ref, installing dependencies, and registering it in the Supervisor manifest.`);
+    cmd_node_nodeProvisionContract_provision.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('node.provision', o, Contract_6.nodeProvisionContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_node_nodeProvisionContract_provision, Contract_6.nodeProvisionContract.inputSchema);
     const cmd_node_nodeCrud_create_create = node.command('create').description(`CRUD create for node (nodeCrud)`);
     cmd_node_nodeCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
         try {
