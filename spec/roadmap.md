@@ -326,6 +326,33 @@ Nothing resolves until this exists. Every version a site names is a row here.
       What it needs beyond declaring: the resolver must not let a required part be omitted at
       compose, and the console should not offer to remove one. **M** · ⛔ B2
 
+- [ ] **C11 ★ Load a part on demand, from the catalog, into a running page.** The artifact model was
+      built for this and stops one step short. Parts are separately addressed, separately cached and
+      separately replaced — *"installing an extension is not a site rebuild"* is the sentence the
+      whole design rests on — but the **set** is fixed at compose time: the release names the parts,
+      the page gets an import map generated from it, and that is what can ever run.
+      The want is a button in the catalog that runs the thing it is describing. Three separate
+      problems, and only the first is ordinary work:
+      1. **The kernel loads a part after boot.** A dynamic `import()` of `/_a/<digest>/index.js`,
+         then registering its contributions into a live registry. The registry already does this at
+         mount and the pieces are re-entrant; what assumes boot is the *loader*, not the model.
+         mesh-web, medium.
+      2. **The page is allowed to fetch it.** `index.html` is generated per request from the
+         release, so a digest the release does not name is not in the import map and cannot be
+         imported. That is not an oversight — it is what stops a site being made to run arbitrary
+         code — so on-demand loading needs a site to say *parts from this catalog may be loaded on
+         demand*, which is a genuinely different posture from *this release is what runs here*.
+      3. **Its contracts are granted, and this is the interesting one.** `cdn.deploy` refuses a
+         release calling a contract the site does not expose, and the refusal is per *release*. A
+         part loaded at run time has never been through that check: it would load, render, call
+         something the site never granted, and get a 404 that looks like a bug in the part.
+         So a loaded part needs the grant check *at load time* — the same comparison `deploy` makes,
+         made per part instead of per release, with a refusal a person can read. That check is
+         `release.requires` against the site's `mesh` list and it already exists; what does not
+         exist is anywhere to run it that is not a deploy.
+      **Order matters:** 3 before 1. Loading a part that then fails opaquely is worse than not
+      loading it, and the check is the smaller piece. **L** · ⛔ C1
+
 ## Track D — The api
 
 - [x] **D1a ★ Server-sent events.** *(built 2026-09-06)* `methods/stream.ts` on `node:http`, an
