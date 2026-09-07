@@ -17,6 +17,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { nodeHelloContract } from '../../src/fleet/contracts/node.contract.js';
+import { CORE_SERVICES } from '../../src/fleet/schema/node.js';
 import { FleetService } from '../../src/fleet/fleet.service.js';
 import { loadManifest, Supervisor } from '../../src/supervisor/Supervisor.js';
 import { SupervisorService } from '../../src/supervisor/SupervisorService.js';
@@ -201,7 +202,11 @@ describe('Track E: Fleet layer', () => {
         expect(status.connected).toBe(true);
         expect(status.nodeID).toBe('fleet-test-node');
         expect(status.desiredServices).toEqual(['alpha']);
-        expect(status.runningServices).toEqual(['alpha']);
+        // Core services first, always: they run because the node runs, and the Supervisor — which
+        // this list otherwise comes from — deliberately does not own them. Reporting only what the
+        // Supervisor knows made a live node claim `fleet` was assigned and not running, about the
+        // very service answering the question.
+        expect(status.runningServices).toEqual([...CORE_SERVICES, 'alpha']);
         expect(status.provisionedServices).toEqual(['alpha', 'beta']);
         expect(status.services?.find((s) => s.name === 'alpha')?.status).toBe('running');
         expect(Array.isArray(status.peers)).toBe(true);
