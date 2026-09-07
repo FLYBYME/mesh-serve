@@ -175,6 +175,34 @@ Nothing resolves until this exists. Every version a site names is a row here.
       honestly from `ctx.meta.user.tenant_id`, caller with no identity is refused (401), and a part already
       published under an organization cannot be published to by another tenant (403). **M** · ⛔ B1, C1
 
+- [ ] **B9 ★ A git server, so a push is the whole deploy.** Every step from source to a hostname is
+      now an endpoint — `builder.import_repo`, `builder.release_part`, `builder.release_repo`, a
+      rolling release that recomposes and redeploys itself. **The only human step left is deciding
+      that a commit exists**, and that decision has already been made by the person who pushed.
+      The shape: the platform hosts the repository, so a push to the default branch is an event it
+      already has, rather than a webhook it has to be told about by something outside itself. That
+      event calls `release_repo` for that repository, which mints versions, publishes, builds — and
+      every release marked `rolling` follows, which is already built and already works in
+      production (`cdn.release_rolled`, 2026-09-07).
+      **Why hosting it rather than a GitHub webhook.** A webhook is the smaller change and it puts
+      the trigger outside the platform: a secret to rotate, an endpoint that must be reachable from
+      the internet, and a delivery nobody can replay when it is missed. Hosting the repository makes
+      the push a fact the platform observed, which is the same reason the catalog holds a part's
+      declaration rather than reading `mesh.json` on every build. It also answers the credential
+      question that shaped `build_start` — a builder holding a token that can read any repository is
+      the thing that contract was reshaped to avoid, and a repository the platform already has needs
+      no token at all.
+      **What it does not mean.** Not a deploy on every push: a release is composed and a *rolling*
+      release chooses to follow it. A repository can be pushed to all day and change nothing that is
+      serving, which is the separation between a registry and a deploy that the whole model rests
+      on. And not a build on every push either — an unchanged commit is already idempotent, and a
+      branch that is not the default branch should publish nothing.
+      **Prerequisites, all of them already true:** versions are minted rather than read from the
+      repository, so a push needs no version bump; `(partName, commit)` is the identity, so pushing
+      twice is not an immutability violation; the declaration lives in the catalog, so a repository
+      that edits `mesh.json` changes nothing until somebody imports it. Those three are what make a
+      push-triggered build safe rather than alarming, and each was a separate day's work. **L**
+
 ## Track C — Releases and the cdn edge
 
 - [x] **C1 ★ The `release` collection.** *(built 2026-09-06)* A kernel and N parts at exact versions,
@@ -407,7 +435,14 @@ Nothing resolves until this exists. Every version a site names is a row here.
       process may reach anything. That distinction exists in the transport and is not currently
       passed to the dispatcher. **L** · ⛔ mesh
 
-- [ ] **D7 ★ `release` is exposed on an argument for safety it never implemented.** `releaseCrud`
+- [x] **D7 ★ `release` is exposed on an argument for safety it never implemented.** *(fixed 2026-09-07)*
+      `scopedBy: 'tenantId'` is declared. Scoping it broke serving, which is the half worth
+      remembering: `site` is scoped and `cdn.resolve_site` exists because a browser is anonymous,
+      and `release` never grew that second door — the cdn, the api and `api.describe` all read it
+      directly and every deployed page 503'd. They read it as `site.tenantId` now, which
+      `cdn.deploy` already guarantees is its owner. It also fixed something that looked unrelated:
+      a CRUD event's delivery scope *is* the collection's `scopedBy`, so `release.*` events had
+      been reaching nobody. `releaseCrud`
       declares `visibility: { find, findOne, get, count: 'public' }` and its own comment says why that
       is safe: *"exposable now because `scopedBy` makes every generated read a read within the
       caller's own organization"* (`cdn/contracts/release.contract.ts:40`). **`releaseCrud` declares
