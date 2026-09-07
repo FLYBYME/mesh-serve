@@ -14,8 +14,13 @@
 import type { IServiceBroker, IServiceContext, IServiceModule, ToolContract, z } from '@flybyme/mesh';
 import { createHash } from 'node:crypto';
 
-import { allIdentityContracts } from './contracts/identity.contract.js';
+import {
+    allIdentityContracts,
+    apiTokenIssueContract,
+    apiTokenValidateContract,
+} from './contracts/identity.contract.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './methods/password.js';
+import { type ApiToken } from './schema/principals.js';
 import { BUILTIN_ROLES, permits, PUBLIC_ROLE, type Role } from './schema/roles.js';
 import { DEFAULT_TICKET_LIFETIME_MS, isLive, mintToken, type Validation } from './schema/tickets.js';
 import { memoryStore, type IdentityStore } from './store.js';
@@ -301,6 +306,85 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                             contract,
                             organizationId,
                         ),
+                    };
+                }
+
+                case 'identity.api_token_validate': {
+                    const { token } = apiTokenValidateContract.inputSchema.parse(input);
+                    const hash = hashApiToken(token);
+                    const found = await store.findApiToken(hash);
+
+                    if (found === undefined) {
+                        return { valid: false };
+                    }
+                    if (found.value.revokedAt !== undefined) {
+                        return { valid: false };
+                    }
+                    if (found.value.expiresAt !== undefined && found.value.expiresAt <= now()) {
+                        return { valid: false };
+                    }
+
+                    const user = await store.getUser(found.value.userId);
+                    if (user === undefined || user.value.suspendedAt !== undefined) {
+                        return { valid: false };
+                    }
+
+                    let organizationSlug: string | undefined;
+                    if (found.value.organizationId !== undefined) {
+                        const org = await store.getOrganization(found.value.organizationId);
+                        organizationSlug = org?.value.slug;
+                    }
+
+                    return {
+                        valid: true,
+                        userId: found.value.userId,
+                        ...(found.value.organizationId !== undefined ? { organizationId: found.value.organizationId } : {}),
+                        ...(organizationSlug !== undefined ? { organizationSlug } : {}),
+                        roles: Array.from(new Set([PUBLIC_ROLE, 'authenticated', ...found.value.roles])),
+                        name: found.value.name,
+                    };
+                }
+
+                case 'identity.api_token_issue': {
+                    const parsed = apiTokenIssueContract.inputSchema.parse(input);
+                    const targetUserId = parsed.userId;
+                    const user = await store.getUser(targetUserId);
+                    if (user === undefined) {
+                        throw new Error(`User "${targetUserId}" does not exist.`);
+                    }
+                    if (parsed.organizationId !== undefined) {
+                        const memberships = await store.membershipsOf(targetUserId);
+                        const isMember = memberships.some((m) => m.organizationId === parsed.organizationId);
+                        if (!isMember) {
+                            throw new Error(`User "${targetUserId}" is not a member of organization "${parsed.organizationId}".`);
+                        }
+                    }
+
+                    const token = mintToken();
+                    const hash = hashApiToken(token);
+                    const createdAt = now();
+                    const expiresAt = parsed.expiresInMs !== undefined ? createdAt + parsed.expiresInMs : undefined;
+
+                    const tokenRecord: ApiToken = {
+                        tokenHash: hash,
+                        name: parsed.name,
+                        userId: targetUserId,
+                        ...(parsed.organizationId !== undefined ? { organizationId: parsed.organizationId } : {}),
+                        roles: parsed.roles ?? ['authenticated'],
+                        createdAt,
+                        ...(expiresAt !== undefined ? { expiresAt } : {}),
+                    };
+
+                    const stored = await store.createApiToken(tokenRecord);
+                    return {
+                        token,
+                        tokenId: stored.id,
+                        name: tokenRecord.name,
+                        userId: tokenRecord.userId,
+                        ...(tokenRecord.organizationId !== undefined ? { organizationId: tokenRecord.organizationId } : {}),
+                        roles: tokenRecord.roles,
+                        createdAt: tokenRecord.createdAt,
+                        ...(tokenRecord.expiresAt !== undefined ? { expiresAt: tokenRecord.expiresAt } : {}),
                     };
                 }
 

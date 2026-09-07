@@ -377,6 +377,53 @@ export const permitsContract = defineContract({
     print: (o) => (o.permitted ? 'permitted' : 'denied'),
 });
 
+// ---------------------------------------------------------------------------- api tokens
+
+export const apiTokenValidateContract = defineContract({
+    domain: 'identity',
+    action: 'api_token_validate',
+    description: 'Is this API token valid, and which principal does it represent.',
+    inputSchema: z.object({
+        token: z.string().min(1),
+    }),
+    outputSchema: z.object({
+        valid: z.boolean(),
+        userId: z.string().optional(),
+        organizationId: z.string().optional(),
+        organizationSlug: z.string().optional(),
+        roles: z.array(z.string()).optional(),
+        name: z.string().optional(),
+    }),
+    rest: { method: 'POST', path: '/identity/api-token/validate' },
+    print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
+});
+
+export const apiTokenIssueContract = defineContract({
+    domain: 'identity',
+    action: 'api_token_issue',
+    description: 'Mint an API token for a principal.',
+    inputSchema: z.object({
+        name: z.string().min(1),
+        userId: z.string().min(1),
+        organizationId: z.string().optional(),
+        roles: z.array(z.string()).optional(),
+        expiresInMs: z.number().optional(),
+    }),
+    outputSchema: z.object({
+        token: z.string(),
+        tokenId: z.string(),
+        name: z.string(),
+        userId: z.string(),
+        organizationId: z.string().optional(),
+        roles: z.array(z.string()),
+        createdAt: z.number(),
+        expiresAt: z.number().optional(),
+    }),
+    rest: { method: 'POST', path: '/identity/api-token/issue' },
+    destructive: true,
+    print: (o) => `issued api token "${o.name}" for ${o.userId}`,
+});
+
 interface CrudContractSet {
     readonly find: ToolContract;
     readonly findOne: ToolContract;
@@ -414,6 +461,8 @@ export const identityContracts: readonly ToolContract[] = [
     whoamiContract,
     registerContract,
     permitsContract,
+    apiTokenValidateContract,
+    apiTokenIssueContract,
 ];
 
 export const identityCrudContracts: readonly ToolContract[] = [
