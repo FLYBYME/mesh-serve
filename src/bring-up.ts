@@ -73,6 +73,21 @@ const DEFAULT_BOOTSTRAP = 'ws://127.0.0.1:4001';
 /** What a node runs beyond the always-on core, and therefore what the fleet gets to decide. */
 const SWITCHABLE = ['catalog', 'builder', 'cdn'] as const;
 
+/**
+ * How long to wait on a call that clones and bundles.
+ *
+ * The broker's default is 10 seconds, which is right for a question and wrong for work: releasing
+ * mesh-core is seven clones and seven bundles and took 22 seconds on a warm machine. **The failure
+ * that produced this constant is the one worth naming** — the caller timed out at ten seconds and
+ * reported `RPC Timeout calling builder.release_repo`, while the builder carried on and finished
+ * every part correctly. So the run *failed* and the work *succeeded*, which is the most confusing
+ * pair of outcomes available: nothing was wrong, and nothing said so.
+ *
+ * Fifteen minutes rather than a tuned number. This bounds a hang; it does not schedule anything,
+ * and a build that legitimately takes eleven minutes should not fail because somebody guessed ten.
+ */
+const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+
 export interface BringUpContext {
     app: MeshApp;
     broker: IServiceBroker;
@@ -332,7 +347,7 @@ export async function importRepository(
         // Absent means the repository's own default branch, whatever it is called. Naming `main`
         // here is a guess about somebody else's repository, and it was wrong the first time it ran.
         ...(options.ref === undefined ? {} : { ref: options.ref }),
-    }, as);
+    }, { ...as, timeout: BUILD_TIMEOUT_MS });
 
     for (const part of imported.parts) {
         console.log(`[builder]   ${part.kind} ${part.name} ${part.existed ? 'updated' : 'declared'}`);
@@ -361,7 +376,7 @@ export async function releaseRepository(
         repository: options.repository,
         bump: options.bump ?? 'patch',
         ...(options.branch === undefined ? {} : { branch: options.branch }),
-    }, as);
+    }, { ...as, timeout: BUILD_TIMEOUT_MS });
 
     for (const part of result.released) {
         console.log(
@@ -592,15 +607,24 @@ export async function deploySite(
  * Ranges, because the release is rolling: these are what it re-resolves when any of these parts is
  * released again.
  */
-const CONSOLE_PARTS = [
-    { kind: 'extension', id: 'chrome', version: '^0.2' },
-    { kind: 'extension', id: 'ui', version: '^0.2' },
-    { kind: 'extension', id: 'auth', version: '^0.3' },
-    { kind: 'application', id: 'catalog', version: '^0.2' },
-    { kind: 'application', id: 'releases', version: '^0.2' },
-    { kind: 'application', id: 'fleet', version: '^0.2' },
-    { kind: 'application', id: 'sites', version: '^0.1' },
-] as const;
+/**
+ * The range that follows a minted version.
+ *
+ * `0.1.0` → `^0.1`, so a rolling release picks up every later patch of that line and stops at the
+ * next minor — which is what a caret means for a `0.x` version, and what somebody shipping
+ * pre-1.0 code actually wants.
+ *
+ * **Derived rather than written down, and that is the whole point.** This file listed the ranges
+ * by hand — `chrome ^0.2`, `auth ^0.3` — copied from a catalog that already had a version history.
+ * Against a *fresh* database every part mints at `0.1.0`, so every one of those ranges matched
+ * nothing and compose would have refused seven parts in a row, a few seconds after seven builds
+ * had visibly succeeded. A bring-up script that only works on a database that has already been
+ * brought up is not one.
+ */
+export function rangeFor(version: string): string {
+    const [major, minor] = version.split('.');
+    return major === undefined || minor === undefined ? `^${version}` : `^${major}.${minor}`;
+}
 
 export async function main(): Promise<void> {
     const ctx = await setup();
@@ -652,9 +676,22 @@ export async function main(): Promise<void> {
         ];
         const ref = optional('ref');
 
+        /**
+         * What each repository declared, and what each release actually minted.
+         *
+         * Kept because the composition is built from them: `import` knows a part's `kind`, `release`
+         * knows the version it chose, and only together do they say what to compose. Neither is
+         * something this file may assume.
+         */
+        const kinds = new Map<string, string>();
+        const versions = new Map<string, string>();
+
         let failures = 0;
         for (const repository of repositories) {
-            await importRepository(ctx, as, { repository, ...(ref === undefined ? {} : { ref }) });
+            const declared = await importRepository(ctx, as, {
+                repository, ...(ref === undefined ? {} : { ref }),
+            });
+            for (const part of declared) kinds.set(part.name, part.kind);
 
             if (has('import-only')) continue;
 
@@ -663,6 +700,7 @@ export async function main(): Promise<void> {
                 bump: 'patch',
                 ...(ref === undefined ? {} : { branch: ref }),
             });
+            for (const part of result.released) versions.set(part.part, part.version);
             failures += result.failed;
         }
 
@@ -684,9 +722,44 @@ export async function main(): Promise<void> {
             return;
         }
 
+        /**
+         * The composition, built from what was just released rather than from a list in this file.
+         *
+         * The kernel is separated out because a release names exactly one, as a range, and it is
+         * not one of the `parts`. Everything else goes in at the caret of its own minted version,
+         * so the release rolls forward within that line.
+         */
+        const kernelName = [...kinds].find(([, kind]) => kind === 'kernel')?.[0];
+        const kernelVersion = kernelName === undefined ? undefined : versions.get(kernelName);
+
+        if (kernelVersion === undefined) {
+            console.error(
+                '\nNo kernel was released, so there is nothing to compose against. The kernel ' +
+                'repository is the first one imported; check what it declared above.\n',
+            );
+            report({ email, orgId, ticket });
+            return;
+        }
+
+        const parts = [...versions]
+            .filter(([name]) => name !== kernelName)
+            .map(([name, version]) => ({
+                // A part is an application or an extension; the catalog said which at import.
+                kind: (kinds.get(name) === 'application' ? 'application' : 'extension') as
+                    'application' | 'extension',
+                id: name,
+                version: rangeFor(version),
+            }))
+            .sort((a, b) => (a.id < b.id ? -1 : 1));
+
+        console.log(
+            `[cdn] composing kernel ${rangeFor(kernelVersion)} with ` +
+            `${String(parts.length)} part(s): ${parts.map((p) => `${p.id}@${p.version}`).join(', ')}`,
+        );
+
         const composed = await composeRelease(ctx, as, {
-            kernel: flag('kernel-range', '^0.15'),
-            parts: CONSOLE_PARTS,
+            kernel: optional('kernel-range') ?? rangeFor(kernelVersion),
+            parts,
             name: 'console',
             rolling: true,
         });
