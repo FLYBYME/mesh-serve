@@ -70,6 +70,11 @@ export interface CallShape {
     readonly errors?: readonly string[];
 }
 
+export interface DescribedEvent {
+    readonly name: string;
+    readonly gate?: Gate;
+}
+
 export interface ExposureDescriptor {
     /** The site this exposure belongs to, e.g. `surfdns.console`. */
     readonly application: string;
@@ -88,6 +93,7 @@ export interface ExposureDescriptor {
      */
     readonly shapeHash: string;
     readonly calls: readonly DescribedCall[];
+    readonly events?: readonly DescribedEvent[];
 }
 
 export interface DescribeOptions {
@@ -101,6 +107,11 @@ export interface DescribeOptions {
      * the public internet is a decision that deserves to be made out loud rather than by omission.
      */
     readonly allowInternal?: boolean;
+    /**
+     * Events this site streams over /events, derived from the site record and eventTable.
+     * Filtered to only exposed collection domains and sorted deterministically.
+     */
+    readonly events?: readonly DescribedEvent[];
 }
 
 export const DEFAULT_BASE_PATH = '/api';
@@ -173,7 +184,41 @@ export function describeExposure(
     const shapeHash = hashShape(calls);
     const exposure = hash({ application: options.application, base, calls });
 
-    return { application: options.application, base, exposure, shapeHash, calls };
+    let events: DescribedEvent[] | undefined;
+    if (options.events !== undefined) {
+        const exposedDomains = new Set(calls.map((c) => c.domain));
+        const filtered: DescribedEvent[] = [];
+        const seenEvents = new Set<string>();
+
+        for (const event of options.events) {
+            if (seenEvents.has(event.name)) continue;
+            seenEvents.add(event.name);
+
+            // A collection the site does not expose must not appear.
+            const dot = event.name.indexOf('.');
+            const domain = dot === -1 ? event.name : event.name.slice(0, dot);
+            if (!exposedDomains.has(domain)) {
+                continue;
+            }
+
+            filtered.push({
+                name: event.name,
+                ...(event.gate !== undefined ? { gate: event.gate } : {}),
+            });
+        }
+
+        filtered.sort((a, b) => a.name.localeCompare(b.name));
+        events = filtered;
+    }
+
+    return {
+        application: options.application,
+        base,
+        exposure,
+        shapeHash,
+        calls,
+        ...(events !== undefined ? { events } : {}),
+    };
 }
 
 /**

@@ -16,6 +16,8 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ApiService, EVENTS_PATH } from '../../src/api/api.service.js';
+import { emitClient } from '../../src/api/methods/client.js';
+import type { ExposureDescriptor } from '../../src/api/schema/descriptor.js';
 import { CdnService } from '../../src/cdn/cdn.service.js';
 import { createIdentityModule, memoryStore } from '../../src/identity/index.js';
 
@@ -230,7 +232,103 @@ describe.skipIf(!reachable)('what arrives', () => {
 
         expect(answer.frames.some((f) => f.includes('other.com'))).toBe(false);
     });
+
+    it('delivers a collection write performed from another connection across the broker to SSE stream', async () => {
+        const CRUD_HOST = 'live-crud.test';
+        await call('site.create', {
+            host: CRUD_HOST, application: 'crud-app', tenantId: ORG, api: '/api',
+            mesh: [{
+                package: '@flybyme/mesh-serve', version: '^0.1',
+                contracts: [
+                    { key: 'identity.whoami', auth: 'user' },
+                    { key: 'site.find', auth: 'user' },
+                    { key: 'site.get', auth: 'user' },
+                ],
+                events: [
+                    { key: 'site.created', auth: 'user' },
+                    { key: 'site.updated', auth: 'user' },
+                    { key: 'site.deleted', auth: 'user' },
+                ],
+            }],
+            theme: {}, policy: {}, title: 'Live CRUD test',
+        });
+
+        // 1. Generate client from the site's descriptor and verify events are declared
+        const desc = await fetchDescriptor(port(), CRUD_HOST, ticket);
+        expect(desc.events).toEqual([
+            { name: 'site.created', gate: { kind: 'auth', level: 'user' } },
+            { name: 'site.deleted', gate: { kind: 'auth', level: 'user' } },
+            { name: 'site.updated', gate: { kind: 'auth', level: 'user' } },
+        ]);
+
+        const clientCode = emitClient(desc);
+        expect(clientCode).toContain('events: [');
+        expect(clientCode).toContain('{ name: "site.created", gate: { kind: \'auth\', level: \'user\' } }');
+
+        // Evaluate emitted client to test isCollectionStreamed contract
+        const mockCall = (_method: string, _path: string, gate: unknown) => ({ gate });
+        const defineApiArg = clientCode.slice(
+            clientCode.indexOf('defineApi(') + 'defineApi('.length,
+            clientCode.lastIndexOf(');'),
+        ).replace(/call<[^>]+>\(/g, 'mockCall(');
+        const fn = new Function('mockCall', `return (${defineApiArg});`);
+        const client = fn(mockCall) as { events?: Array<{ name: string; gate?: unknown }> };
+
+        const isStreamed = (name: string, events?: Array<{ name: string }>) =>
+            Boolean(events && events.some((e) => e.name === `${name}.created` || e.name === `${name}.updated` || e.name === `${name}.deleted`));
+        expect(isStreamed('site', client.events)).toBe(true);
+        expect(isStreamed('unexposed', client.events)).toBe(false);
+
+        // 2. Open SSE stream on this site, perform collection write from another connection, observe delivery
+        const newHost = `created-by-write-${String(Date.now())}.test`;
+        const answer = await listen(port(), {
+            host: CRUD_HOST,
+            ticket,
+            onOpen: () => {
+                // Trigger collection write from another connection (simulated via broker)
+                void call('site.create', {
+                    host: newHost, application: 'another-app', tenantId: ORG, api: '/api',
+                    mesh: [{
+                        package: '@flybyme/mesh-serve', version: '^0.1',
+                        contracts: [{ key: 'identity.whoami', auth: 'user' }],
+                        events: [],
+                    }],
+                    theme: {}, policy: {}, title: 'Another',
+                });
+            },
+        });
+
+        expect(answer.status).toBe(200);
+        expect(answer.frames.some((f) => f.includes('event: site.created'))).toBe(true);
+        expect(answer.frames.some((f) => f.includes(newHost))).toBe(true);
+    });
 });
+
+async function fetchDescriptor(port: number, host: string, ticket?: string): Promise<ExposureDescriptor> {
+    const { request: httpRequest } = await import('node:http');
+    return new Promise((resolve, reject) => {
+        const req = httpRequest({
+            host: '127.0.0.1', port, path: '/api/_describe', method: 'GET',
+            headers: {
+                host,
+                ...(ticket === undefined ? {} : { authorization: `Bearer ${ticket}` }),
+            },
+        }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => { text += chunk; });
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(text) as ExposureDescriptor);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
 
 describe.skipIf(!reachable)('an event that cannot be narrowed', () => {
     it('is refused at subscribe time rather than streamed silently', async () => {

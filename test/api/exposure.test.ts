@@ -529,4 +529,87 @@ describe('client emission', () => {
         expect(api.calls['domains.zone_find']?.gate).toEqual({ kind: 'auth', level: 'public' });
         expect(api.calls['domains.zone_delete']?.gate).toEqual({ kind: 'permission', permission: 'domains.delete' });
     });
+
+    it('emits events array in defineApi when descriptor has events', () => {
+        const desc = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+        ], {
+            application: 'surfdns',
+            events: [
+                { name: 'domains.created', gate: { kind: 'auth', level: 'user' } },
+                { name: 'domains.updated', gate: { kind: 'permission', permission: 'domains.write' } },
+            ],
+        });
+
+        const code = emitClient(desc);
+
+        expect(code).toContain('events: [');
+        expect(code).toContain('{ name: "domains.created", gate: { kind: \'auth\', level: \'user\' } }');
+        expect(code).toContain('{ name: "domains.updated", gate: { kind: \'permission\', permission: "domains.write" } }');
+
+        // Evaluation check
+        const mockCall = (_method: string, _path: string, gate: unknown) => ({ gate });
+        const defineApiArg = code.slice(
+            code.indexOf('defineApi(') + 'defineApi('.length,
+            code.lastIndexOf(');'),
+        ).replace(/call<[^>]+>\(/g, 'mockCall(');
+
+        const fn = new Function('mockCall', `return (${defineApiArg});`);
+        const api = fn(mockCall) as { events?: Array<{ name: string; gate?: unknown }> };
+
+        expect(api.events).toEqual([
+            { name: 'domains.created', gate: { kind: 'auth', level: 'user' } },
+            { name: 'domains.updated', gate: { kind: 'permission', permission: 'domains.write' } },
+        ]);
+    });
+
+    it('omits events key when descriptor has no events', () => {
+        const desc = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+        ], { application: 'surfdns' });
+
+        const code = emitClient(desc);
+        expect(code).not.toContain('events:');
+    });
+
+    it('filters events to only exposed domains and sorts deterministically', () => {
+        const desc = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+        ], {
+            application: 'surfdns',
+            events: [
+                { name: 'domains.updated', gate: { kind: 'auth', level: 'user' } },
+                { name: 'unexposed.created', gate: { kind: 'auth', level: 'user' } },
+                { name: 'domains.created', gate: { kind: 'auth', level: 'user' } },
+                { name: 'domains.deleted', gate: { kind: 'auth', level: 'user' } },
+            ],
+        });
+
+        expect(desc.events).toEqual([
+            { name: 'domains.created', gate: { kind: 'auth', level: 'user' } },
+            { name: 'domains.deleted', gate: { kind: 'auth', level: 'user' } },
+            { name: 'domains.updated', gate: { kind: 'auth', level: 'user' } },
+        ]);
+    });
+
+    it('adding events to descriptor does not change shapeHash or exposure', () => {
+        const withoutEvents = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+        ], { application: 'surfdns' });
+
+        const withEvents = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+        ], {
+            application: 'surfdns',
+            events: [
+                { name: 'domains.created', gate: { kind: 'auth', level: 'user' } },
+                { name: 'domains.updated', gate: { kind: 'auth', level: 'user' } },
+                { name: 'domains.deleted', gate: { kind: 'auth', level: 'user' } },
+            ],
+        });
+
+        expect(withEvents.shapeHash).toBe(withoutEvents.shapeHash);
+        expect(withEvents.exposure).toBe(withoutEvents.exposure);
+        expect(withEvents.events).toHaveLength(3);
+    });
 });
