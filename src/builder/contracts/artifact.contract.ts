@@ -61,10 +61,28 @@ export const buildCrud = defineCrud('build', BuildSchema, {
 
 // ---------------------------------------------------------------------------- doing the work
 
+export interface ContractRequirements {
+    /** Minimum required memory in MB (e.g. 2048 for builder.build_start). */
+    readonly memory?: number;
+    /** Whether this service prefers running on a node already holding the data. */
+    readonly preferData?: boolean;
+}
+
+declare module '@flybyme/mesh' {
+    interface ToolContract {
+        readonly requirements?: ContractRequirements;
+    }
+}
+
 export const buildStartContract = defineContract({
     domain: 'builder',
     action: 'build_start',
     description: 'Build one published version of a part into its artifact.',
+    dependencies: [],
+    requirements: {
+        memory: 2048,
+        preferData: true,
+    },
     /**
      * **A part and a version — never a repository URL.**
      *
@@ -84,6 +102,7 @@ export const buildStartContract = defineContract({
     inputSchema: z.object({
         part: z.string().min(1).describe('→ part.name'),
         version: z.string().min(1).describe('An exact published version, never a range'),
+        preferLocal: z.boolean().optional().describe('Prefer local execution for work that is cheap locally and expensive remotely'),
     }),
     outputSchema: z.object({
         part: z.string(),

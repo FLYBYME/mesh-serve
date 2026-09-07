@@ -24,12 +24,13 @@
 
 import { ClientError, z, type IServiceContext } from '@flybyme/mesh';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { BuilderService } from '../builder.service.js';
 import { buildStartContract } from '../contracts/artifact.contract.js';
 import { dependenciesFrom } from '../methods/lockfile.js';
+import { getNodeMemoryMB } from '../methods/placement.js';
 import { publishPart } from '../methods/publish.js';
 import { describeSource } from '../methods/source.js';
 import type { SourceRef } from '../schema/build.js';
@@ -42,6 +43,18 @@ export async function builder_build_start(
     input: Input,
     ctx: IServiceContext,
 ): Promise<Output> {
+    // Enforce contract placement requirements: decline work this node cannot do
+    const reqs = buildStartContract.requirements;
+    const nodeMemMB = getNodeMemoryMB();
+    if (reqs?.memory !== undefined && nodeMemMB < reqs.memory) {
+        throw new ClientError(
+            `Node "${os.hostname()}" has ${nodeMemMB}MB memory, declining build for ` +
+            `"${input.part}@${input.version}" (requires ${reqs.memory}MB).`,
+            'insufficient_memory',
+            507,
+        );
+    }
+
     const part = await ctx.call('part.find_one', { query: { name: input.part } });
     if (part === null || part === undefined) {
         throw new ClientError(`No part named "${input.part}" is published.`, 'part_not_found', 404);

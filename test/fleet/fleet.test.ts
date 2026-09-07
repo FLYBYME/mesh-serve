@@ -243,6 +243,99 @@ describe('Track E: Fleet layer', () => {
         } as never, asOperator);
     });
 
+    it('node.status reports observed services for connected peers and captures supervisor errors distinctly', async () => {
+        const peerNodeID = 'peer-observed-node';
+        const peerHostname = 'peer-observed-host';
+        const failingNodeID = 'failing-peer-node';
+        const failingHostname = 'failing-peer-host';
+
+        app.registry.registerNode({
+            nodeID: peerNodeID,
+            hostname: peerHostname,
+            available: true,
+            addresses: [],
+            services: [],
+            capabilities: { transports: [], features: [] },
+            metadata: {},
+            nodeSeq: 1,
+            pid: 1,
+            timestamp: Date.now(),
+            bootedAt: Date.now(),
+            cpu: 0,
+            activeRequests: 0,
+            healthScore: 1,
+            trustLevel: 'internal',
+            namespace: 'fleet-test',
+        } as never);
+
+        app.registry.registerNode({
+            nodeID: failingNodeID,
+            hostname: failingHostname,
+            available: true,
+            addresses: [],
+            services: [],
+            capabilities: { transports: [], features: [] },
+            metadata: {},
+            nodeSeq: 1,
+            pid: 1,
+            timestamp: Date.now(),
+            bootedAt: Date.now(),
+            cpu: 0,
+            activeRequests: 0,
+            healthScore: 1,
+            trustLevel: 'internal',
+            namespace: 'fleet-test',
+        } as never);
+
+        const origCall = broker.call.bind(broker);
+        (broker as unknown as { call: typeof origCall }).call = (async (action: string, params: unknown, opts?: { nodeID?: string }) => {
+            if (action === 'supervisor.service_status') {
+                if (opts?.nodeID === peerNodeID) {
+                    return {
+                        services: [
+                            { name: 'cdn', status: 'running', dependsOn: [] },
+                            { name: 'builder', status: 'stopped', dependsOn: [] },
+                        ],
+                    };
+                }
+                if (opts?.nodeID === failingNodeID) {
+                    throw new Error('Supervisor unreachable');
+                }
+            }
+            return origCall(action as never, params as never, opts as never);
+        }) as typeof origCall;
+
+        try {
+            const status = await broker.call('node.status' as never, {} as never, asOperator) as {
+                nodes?: {
+                    hostname: string;
+                    connected: boolean;
+                    runningServices: string[];
+                    provisionedServices?: string[];
+                    error?: string;
+                }[];
+            };
+
+            const peerSummary = status.nodes?.find((n) => n.hostname === peerHostname);
+            expect(peerSummary).toBeDefined();
+            expect(peerSummary?.connected).toBe(true);
+            expect(peerSummary?.runningServices).toEqual([...CORE_SERVICES, 'cdn']);
+            expect(peerSummary?.provisionedServices).toEqual(['cdn', 'builder']);
+            expect(peerSummary?.error).toBeUndefined();
+
+            const failingSummary = status.nodes?.find((n) => n.hostname === failingHostname);
+            expect(failingSummary).toBeDefined();
+            expect(failingSummary?.connected).toBe(true);
+            expect(failingSummary?.runningServices).toEqual([]);
+            expect(failingSummary?.provisionedServices).toEqual([]);
+            expect(failingSummary?.error).toMatch(/Supervisor unreachable/i);
+        } finally {
+            (broker as unknown as { call: typeof origCall }).call = origCall;
+            app.registry.unregisterNode(peerNodeID);
+            app.registry.unregisterNode(failingNodeID);
+        }
+    });
+
     it('operator gate: refuses admin caller with no operator role (403)', async () => {
         const adminCallerMeta = {
             meta: {
