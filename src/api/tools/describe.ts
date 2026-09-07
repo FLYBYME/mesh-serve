@@ -35,8 +35,21 @@ export async function api_describe(
 
     let release: Release | undefined;
     if (site.releaseHash !== undefined) {
-        const found = await ctx.call('release.find_one', { query: { hash: site.releaseHash } })
-            .catch(() => null);
+        /**
+         * Read as the site's own tenant — the third of the three places that do this, and the one
+         * that was missed when `release` became scoped.
+         *
+         * It fails quietly, which is why it was missed: the `.catch` turns a refusal into
+         * `undefined`, so `api.describe` would have answered *this site has no release* for a site
+         * that plainly has one, and the generated client would have been built against an exposure
+         * with no parts in it. `cdn.deploy` guarantees a deployed `releaseHash` belongs to
+         * `site.tenantId`, so this is reading it as its owner.
+         */
+        const found = await ctx.call(
+            'release.find_one',
+            { query: { hash: site.releaseHash } },
+            { meta: { tenantId: site.tenantId, organizationId: site.tenantId } },
+        ).catch(() => null);
         if (found !== null && found !== undefined) release = found;
     }
 
