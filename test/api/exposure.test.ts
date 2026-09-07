@@ -459,4 +459,35 @@ describe('client emission', () => {
         expect(code).toContain(`exposure: "${desc.exposure}"`);
         expect(code).toContain(`shapeHash: "${desc.shapeHash}"`);
     });
+
+    it('emits the gate as readable runtime data for auth and permission gates', () => {
+        const desc = describeExposure([
+            { contract: zoneFindContract, auth: 'public' },
+            { contract: zoneDeleteContract, permission: 'domains.delete' },
+        ], { application: 'surfdns' });
+
+        const code = emitClient(desc);
+
+        // Textual check: runtime call arguments carry the gate literals
+        expect(code).toContain(
+            '"domains.zone_find": call<DomainsZoneFindInput, DomainsZoneFindOutput, never>("GET", "/zones", { kind: \'auth\', level: \'public\' })',
+        );
+        expect(code).toContain(
+            '"domains.zone_delete": call<DomainsZoneDeleteInput, DomainsZoneDeleteOutput, never>("DELETE", "/zones/:zoneId", { kind: \'permission\', permission: "domains.delete" })',
+        );
+
+        // Evaluation check: execute the emitted calls map to verify the gate is a readable property at runtime
+        const mockCall = (_method: string, _path: string, gate: unknown) => ({ gate });
+
+        const defineApiArg = code.slice(
+            code.indexOf('defineApi(') + 'defineApi('.length,
+            code.lastIndexOf(');'),
+        ).replace(/call<[^>]+>\(/g, 'mockCall(');
+
+        const fn = new Function('mockCall', `return (${defineApiArg});`);
+        const api = fn(mockCall) as { calls: Record<string, { gate: unknown }> };
+
+        expect(api.calls['domains.zone_find']?.gate).toEqual({ kind: 'auth', level: 'public' });
+        expect(api.calls['domains.zone_delete']?.gate).toEqual({ kind: 'permission', permission: 'domains.delete' });
+    });
 });

@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ApiService, EXPOSURE_HEADER, SHAPE_HEADER } from '../../src/api/api.service.js';
 import { SCOPE_HEADER } from '../../src/api/methods/gate.js';
 import { verifyClientExposure, ExposureMismatchError } from '../../src/api/methods/client.js';
+import type { ExposureDescriptor } from '../../src/api/schema/descriptor.js';
 import { CdnService } from '../../src/cdn/cdn.service.js';
 import { createIdentityModule, memoryStore } from '../../src/identity/index.js';
 
@@ -55,6 +56,7 @@ async function request(
         origin?: string;
         exposure?: string;
         shape?: string;
+        ifNoneMatch?: string;
     } = {},
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
     const { request: send } = await import('node:http');
@@ -73,6 +75,7 @@ async function request(
                 ...(options.origin === undefined ? {} : { origin: options.origin }),
                 ...(options.exposure === undefined ? {} : { [EXPOSURE_HEADER]: options.exposure }),
                 ...(options.shape === undefined ? {} : { [SHAPE_HEADER]: options.shape }),
+                ...(options.ifNoneMatch === undefined ? {} : { 'if-none-match': options.ifNoneMatch }),
                 ...(payload === undefined ? {} : {
                     'content-type': 'application/json',
                     'content-length': String(Buffer.byteLength(payload)),
@@ -587,4 +590,118 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
         }
     });
 });
+
+describe.skipIf(!reachable)('the exposure descriptor (GET /api/_describe)', () => {
+    const DESCRIBE_SITE = 'describe-site.test';
+
+    beforeAll(async () => {
+        await world.call('site.create', {
+            host: DESCRIBE_SITE,
+            application: 'describe-app',
+            tenantId: ORG,
+            api: '/api',
+            mesh: [{
+                package: '@flybyme/mesh-serve',
+                version: '^0.1',
+                contracts: [
+                    { key: 'identity.register', auth: 'public' },
+                    { key: 'identity.ticket_issue', auth: 'public' },
+                    { key: 'identity.whoami', auth: 'user' },
+                ],
+            }],
+            theme: {},
+            policy: {},
+            title: 'Describe Site Under Test',
+        });
+    });
+
+    it('returns the exposure descriptor with exposed calls and no internal contracts', async () => {
+        const answer = await request(port(), 'GET', '/api/_describe', { host: DESCRIBE_SITE });
+
+        expect(answer.status).toBe(200);
+        const body = answer.body as ExposureDescriptor;
+        expect(body.application).toBe('describe-app');
+        expect(body.base).toBe('/api');
+        expect(body.exposure).toMatch(/^sha256:/);
+        expect(body.shapeHash).toMatch(/^sha256:/);
+        expect(Array.isArray(body.calls)).toBe(true);
+        expect(body.calls).toHaveLength(3);
+
+        const keys = body.calls.map((c) => c.key);
+        expect(keys).toEqual(['identity.register', 'identity.ticket_issue', 'identity.whoami']);
+
+        // None are internal contracts
+        expect(keys).not.toContain('identity.ticket_revoke');
+    });
+
+    it('carries x-exposure-shape and deliberately omits x-exposure', async () => {
+        const answer = await request(port(), 'GET', '/api/_describe', { host: DESCRIBE_SITE });
+
+        expect(answer.status).toBe(200);
+        const body = answer.body as ExposureDescriptor;
+        expect(answer.headers[SHAPE_HEADER]).toBe(body.shapeHash);
+        expect(answer.headers[EXPOSURE_HEADER]).toBeUndefined();
+    });
+
+    it('carries ETag matching descriptor.exposure and returns 304 on matching If-None-Match', async () => {
+        const answer = await request(port(), 'GET', '/api/_describe', { host: DESCRIBE_SITE });
+        expect(answer.status).toBe(200);
+        const body = answer.body as ExposureDescriptor;
+        expect(answer.headers['etag']).toBe(body.exposure);
+        expect(answer.headers['cache-control']).toBe('no-cache');
+
+        // Conditional request with matching If-None-Match
+        const cached = await request(port(), 'GET', '/api/_describe', {
+            host: DESCRIBE_SITE,
+            ifNoneMatch: body.exposure,
+        });
+        expect(cached.status).toBe(304);
+        expect(cached.body).toBe('');
+        expect(cached.headers[SHAPE_HEADER]).toBe(body.shapeHash);
+        expect(cached.headers[EXPOSURE_HEADER]).toBeUndefined();
+    });
+
+    it('serves an anonymous caller with no ticket (public gate)', async () => {
+        // No ticket passed — should succeed with 200
+        const answer = await request(port(), 'GET', '/api/_describe', { host: DESCRIBE_SITE });
+        expect(answer.status).toBe(200);
+    });
+
+    it('returns 409 when client shape hash does not match API shape hash', async () => {
+        const answer = await request(port(), 'GET', '/api/_describe', {
+            host: DESCRIBE_SITE,
+            shape: 'sha256:stale-shape-hash',
+        });
+        expect(answer.status).toBe(409);
+        const body = answer.body as { error: string; message: string };
+        expect(body.error).toBe('EXPOSURE_MISMATCH');
+        expect(body.message).toContain('Client shape hash');
+    });
+
+    it('supports HEAD method returning headers without body', async () => {
+        const answer = await request(port(), 'HEAD', '/api/_describe', { host: DESCRIBE_SITE });
+        expect(answer.status).toBe(200);
+        expect(answer.headers[SHAPE_HEADER]).toMatch(/^sha256:/);
+        expect(answer.headers['etag']).toMatch(/^sha256:/);
+        expect(answer.body).toBe('');
+    });
+
+    it('refuses non-GET/HEAD methods with 405', async () => {
+        const answer = await request(port(), 'POST', '/api/_describe', { host: DESCRIBE_SITE });
+        expect(answer.status).toBe(405);
+        expect(answer.headers['allow']).toBe('GET, HEAD');
+        const body = answer.body as { error: string; message: string };
+        expect(body.error).toBe('METHOD_NOT_ALLOWED');
+    });
+
+    it('refuses to describe a site exposing an internal contract (allowInternal: false)', async () => {
+        // HOST ('api.test') exposes identity.ticket_revoke which has visibility: 'internal'
+        const answer = await request(port(), 'GET', '/api/_describe', { host: HOST });
+        expect(answer.status).toBe(500);
+        const body = answer.body as { error: string; message: string };
+        expect(body.error).toBe('INTERNAL_CONTRACT');
+        expect(body.message).toContain('marked internal by its own domain');
+    });
+});
+
 
