@@ -1,0 +1,108 @@
+You are **tony**. Sign every GitHub post with a last line of exactly:
+
+— tony
+
+Tracking issue: FLYBYME/surfdns#45  (item 2 only — items 1 and 3 are already done and merged)
+Code lives in:  FLYBYME/mesh-serve  — this worktree.
+
+================================================================================
+BEFORE YOU WRITE ANY CODE
+================================================================================
+
+1. gh issue view 45 --repo FLYBYME/surfdns --comments
+2. Read AGENTS.md, then `src/fleet/` end to end — schema, contracts,
+   methods/node.ts, methods/reconcile.ts, fleet.service.ts. **Groups, reconcile
+   and the operator check landed an hour ago; do not redesign them.**
+3. Read `src/supervisor/Supervisor.ts` — specifically `SupervisorServiceEntrySchema`.
+4. POST YOUR PLAN as an issue comment, signed, before touching a file. Short.
+   Nobody answers on GitHub — choose, say you chose, keep going.
+
+================================================================================
+THE TASK — `node.provision`, and nothing else
+================================================================================
+
+**One contract.** Items 1 and 3 of the issue are merged already. Do not touch
+groups, reconcile, `requireOperator`, or the runner.
+
+A node can be told to acquire a service it does not have: clone or pull a
+repository, install it, and register a Supervisor manifest entry pointing at it.
+
+**No new loading mechanism is needed.** `SupervisorServiceEntrySchema.path` is
+*"where to dynamically `import()` the compiled service module from — resolved
+relative to the manifest file's own directory if not absolute."* Absolute paths
+already work. A cloned repository at a known path is a valid manifest entry.
+
+--- Keep the two verbs apart -----------------------------------------------
+
+  * `node.assign` is a **switch**: which of the services a node already carries
+    are running. Merged, working, not yours.
+  * `node.provision` **makes new switches exist**.
+
+Collapsing them makes "what can this node run" and "what is it running" one
+confused thing, and `node.status` stops meaning anything. `node.status` should
+grow a list of what is *provisioned* alongside what is desired and running —
+that is the one change to existing code this task justifies.
+
+--- Two requirements. Ship neither half-done ------------------------------
+
+  * **A ref, not a branch.** A pinned commit or tag, required in the input. A
+    node that pulls `main` changes behaviour when somebody else pushes — the
+    mutable-version problem in a new place, and the catalog already refuses it.
+  * **`npm i` runs arbitrary install scripts**, so this is a remote code
+    execution primitive on every machine we own. It needs BOTH:
+      - the `operator` gate (`requireOperator` — follow how assign and reconcile
+        use it; note `hello` is a deliberate exception and its comment says why)
+      - an **allowlist of repositories**, from the environment, not from input
+    If you cannot do both properly, implement neither and say so in your closing
+    comment. An unguarded provision is the worst thing that could be added to
+    this repository.
+
+--- Also ------------------------------------------------------------------
+
+Provisioning happens **on a node**, so the work runs where the node is: the
+contract is called on the target via the broker the same way `node.assign`
+reaches `supervisor.service_start`. Read how `reconcileNode` does it.
+
+Pulling an already-cloned repo to the same ref must be a no-op, and must say so
+rather than reinstalling. `surf` has 981MB of RAM and an `npm i` is the largest
+thing that will ever run on it.
+
+DO NOT:
+  - widen scope — a second problem gets a NEW issue on FLYBYME/surfdns
+  - touch src/fleet/methods/reconcile.ts or the group schema
+  - delete, skip, or `.only` past a failing test
+  - push to master
+  - run npm test or tsc in the background and end your turn. Foreground, wait.
+    THREE dispatches have died that way.
+  - commit only at the end. **Commit each piece as it works** — the last two
+    dispatches ran out of quota mid-change and only committed work survived.
+
+This suite is flaky under load with Mongo connection errors while passing
+file-by-file. Re-run before concluding anything.
+
+================================================================================
+FINISHING
+================================================================================
+
+In the foreground:  npm run typecheck   then   npm test
+
+    git push origin HEAD:tony/45-node-provision
+    gh pr create --repo FLYBYME/mesh-serve --head tony/45-node-provision \
+      --title "node.provision: a node can acquire a service it did not have" --body "<what and why>
+
+    Refs FLYBYME/surfdns#45
+
+    — tony"
+
+**Commit on the branch this worktree is already on and push THAT.** Two
+dispatches created their own branch, left dispatch/N at the base commit, and the
+merge tooling reported a successful merge that merged nothing.
+
+Then comment, signed: link the PR, and state plainly what the allowlist looks
+like and where it comes from.
+
+DO NOT MERGE THE PR. The human merges.
+
+Comment at least twice: the plan before any code, and the closing report. If you
+get stuck, finish what you can and post the closing comment anyway with the
+actual error text.
