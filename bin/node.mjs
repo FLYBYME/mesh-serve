@@ -59,7 +59,46 @@ await app.start();
 await app.registerModule(new CatalogService());
 await app.registerModule(new BuilderService({ blobRoot }));
 await app.registerModule(new CdnService({ port: cdnPort, url: cdnUrl, blobRoot }));
-await app.registerModule(new ApiService({ port: apiPort }));
+/**
+ * The `authorize` hook, without which **every scoped collection is unreachable over HTTP**.
+ *
+ * `api.service.ts` says it plainly: *"The usual cause is a site with no `authorize` hook. The coarse
+ * gate cannot resolve a scope — only the site knows what an organization means to it."* The gate
+ * resolves a caller's identity and stops there; the hook turns that caller into the **scope** the
+ * request runs in, which becomes `meta.user.tenant_id` and confines every `scopedBy` collection.
+ *
+ * With no hook the resolved scope is always empty, so D3's `scopedBy` refuses every read and write —
+ * `site.find` answered 401 for a correctly signed-in caller while `part.find` and `release.find`
+ * answered 200, because those two are not scoped. Found by the first console to get past sign-in,
+ * which is the third time that sentence has been written about this repository.
+ *
+ * **A caller-supplied organization is a request, never a grant.** The header names one; this hook
+ * checks the caller is actually a member before honouring it, and refuses rather than falling back
+ * to a different organization — silently acting in the wrong scope is the failure that matters.
+ */
+const authorize = async ({ caller, requestedScope }) => {
+    if (caller === undefined) return { authorized: true };
+
+    const me = await app.call('identity.whoami', {}, { meta: { user: { id: caller.userId } } });
+    const memberships = me?.organizations ?? [];
+
+    if (requestedScope !== undefined) {
+        const member = memberships.some((m) => m.organizationId === requestedScope);
+        return member
+            ? { authorized: true, resolvedScope: requestedScope }
+            : { authorized: false, status: 404, code: 'no_such_organization',
+                // 404, not 403: whether an organization exists is not something an unrelated caller
+                // gets to confirm by probing. Same reasoning as `build_start`'s publisher check.
+                message: 'No such organization.' };
+    }
+
+    // Exactly one membership is the ordinary case and needs no header. More than one is ambiguous,
+    // and guessing which is how a request reads the wrong organization's data.
+    if (memberships.length === 1) return { authorized: true, resolvedScope: memberships[0].organizationId };
+    return { authorized: true };
+};
+
+await app.registerModule(new ApiService({ port: apiPort, authorize }));
 const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
