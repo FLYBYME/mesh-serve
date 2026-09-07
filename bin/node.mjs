@@ -7,11 +7,11 @@
  * every service in this repository could only be exercised by a test that constructed it.
  *
  * ```
- * MONGODB_URI=mongodb://localhost:27017 node bin/node.mjs --ws 4001 --cdn 8080 --api 5005
+ * node bin/node.mjs --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-live
  * ```
  *
- * Everything is a flag with a default, because a node that needs a configuration file before it can
- * start is a node nobody runs by hand — and until the fleet exists, by hand is the only way.
+ * Configuration comes from a `.env` beside the checkout, or `/etc/mesh/node.env`. Flags override it
+ * for ports and paths; secrets are only ever in the file. See `docs/operating.md`.
  */
 
 import {
@@ -20,6 +20,7 @@ import {
 import { WSTransport } from '@flybyme/mesh/node';
 
 import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +42,66 @@ const flag = (name, fallback) => {
     const at = argv.indexOf(`--${name}`);
     return at === -1 ? fallback : argv[at + 1];
 };
+
+/**
+ * Configuration comes from a file, not from the command line.
+ *
+ * **A node is started by systemd, or by a person who ssh'd into the box** — and in both cases
+ * typing `MESH_KEY=… MONGODB_URI=… node bin/node.mjs …` is wrong twice over. Every value is visible
+ * in `ps` to anyone on the machine, and the invocation is different on every host, so nobody can
+ * say what a node is actually running with except by reading somebody's shell history.
+ *
+ * So the node reads its own `.env`, in this order, first match wins:
+ *
+ *   1. `--env <path>`
+ *   2. `MESH_ENV_FILE`
+ *   3. `./.env` beside the checkout — what a person working in the directory expects
+ *   4. `/etc/mesh/node.env` — what systemd uses
+ *
+ * **The real environment always wins.** A value already exported is never overwritten, so a
+ * one-off `MESH_KEY=… node bin/node.mjs` still works for a quick experiment, and systemd's
+ * `EnvironmentFile` is not fighting a file the node also reads.
+ *
+ * This is deliberately not `dotenv`: one dependency, forty lines, for a format that is four rules.
+ */
+const loadEnvFile = () => {
+    const candidates = [
+        flag('env', undefined),
+        process.env.MESH_ENV_FILE,
+        path.join(repoRoot, '.env'),
+        '/etc/mesh/node.env',
+    ].filter((p) => p !== undefined);
+
+    for (const file of candidates) {
+        if (!fs.existsSync(file)) continue;
+
+        for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed === '' || trimmed.startsWith('#')) continue;
+
+            const eq = trimmed.indexOf('=');
+            if (eq === -1) continue;
+
+            const key = trimmed.slice(0, eq).trim();
+            let value = trimmed.slice(eq + 1).trim();
+
+            // Quotes are stripped, because a URI with a `?` in it is one somebody will quote.
+            if ((value.startsWith('"') && value.endsWith('"'))
+                || (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+
+            // Never overwrite. The environment is the more specific answer.
+            if (process.env[key] === undefined) process.env[key] = value;
+        }
+
+        return file;
+    }
+
+    return undefined;
+};
+
+const envFile = loadEnvFile();
 
 const wsPort = Number(flag('ws', '4001'));
 const wsHost = flag('ws-host', '127.0.0.1');
@@ -201,7 +262,8 @@ process.stdout.write(
     `  cdn       ${cdnUrl}\n` +
     `  api       http://127.0.0.1:${String(apiPort)}\n` +
     `  mongo     ${safeMongo}/${dbName}\n` +
-    `  artifacts ${blobRoot}\n\n` +
+    `  artifacts ${blobRoot}\n` +
+    `  config    ${envFile ?? "(no .env found — using the environment only)"}\n\n` +
     `Ctrl-C to stop.\n`,
 );
 
