@@ -28,6 +28,8 @@ import { ReleaseSchema } from '../schema/release.js';
 export const releaseCrud = defineCrud('release', ReleaseSchema, {
     pluralPath: 'releases',
 
+    scopedBy: 'tenantId',
+
     // The hash is derived from the contents, so two rows under one hash would be two rows describing
     // one composition — and the whole reason a release is *checkable* is that it cannot happen.
     unique: [{ fields: 'hash', scope: 'global' }],

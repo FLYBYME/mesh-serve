@@ -287,7 +287,7 @@ export class CdnService extends ServiceModule {
                 return send(res, 503, {}, 'This site has not been deployed yet.');
             }
 
-            const release = await this.releaseFor(site.releaseHash);
+            const release = await this.releaseFor(site.releaseHash, site.tenantId);
             if (release === undefined) {
                 return send(res, 503, {}, 'That release is not available from this node yet.');
             }
@@ -455,12 +455,32 @@ export class CdnService extends ServiceModule {
         return site;
     }
 
-    private async releaseFor(hash: string): Promise<Release | undefined> {
+    /**
+     * A release, read **as the site that points at it**.
+     *
+     * `release` became `scopedBy: 'tenantId'` on 2026-09-07, and the serving path has no caller —
+     * a browser is anonymous, which is the whole reason `cdn.resolve_site` exists as a second door
+     * for `site`. `release` never grew one, so scoping it turned every page into a 503: the cdn
+     * could find the site, and then could not read the composition the site named.
+     *
+     * The scope is not invented to get past the check; it is the answer the check is asking for.
+     * `cdn.deploy` refuses to point a hostname at another tenant's release — that is the origin
+     * isolation boundary — so a deployed `site.releaseHash` *is* a release belonging to
+     * `site.tenantId`, and reading it as that tenant is reading it as its owner.
+     *
+     * The alternative was a `cdn.resolve_release` contract mirroring `resolve_site`. Not taken:
+     * that door would have to answer *any* release hash to *any* caller in order to be useful to
+     * an anonymous serving path, which is a wider hole than the one being closed.
+     */
+    private async releaseFor(hash: string, tenantId: string): Promise<Release | undefined> {
         const held = this.releases.get(hash);
         if (held !== undefined) return held;
 
-        const found = await this.call('release.find_one', { query: { hash } })
-            .catch(() => null);
+        const found = await this.call(
+            'release.find_one',
+            { query: { hash } },
+            { meta: { tenantId, organizationId: tenantId } },
+        ).catch(() => null);
         // Cached without a TTL, and safely: a release hash is derived from its contents, so a hash
         // can never come to mean a different composition.
         if (found !== null && found !== undefined) this.releases.set(hash, found);

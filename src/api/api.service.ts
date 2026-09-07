@@ -240,7 +240,7 @@ export class ApiService extends ServiceModule {
 
             let release: Release | undefined;
             if (site.releaseHash !== undefined) {
-                release = await this.releaseFor(site.releaseHash);
+                release = await this.releaseFor(site.releaseHash, site.tenantId);
                 if (release === undefined) {
                     return send(res, 503, this.cors(origin, site), {
                         error: 'RELEASE_UNAVAILABLE', message: 'That release is not available from this node yet.',
@@ -661,12 +661,27 @@ export class ApiService extends ServiceModule {
         return site;
     }
 
-    private async releaseFor(hash: string): Promise<Release | undefined> {
+    /**
+     * A release, read **as the site that points at it** — see `CdnService.releaseFor`.
+     *
+     * The same reasoning and the same reason it is not a bypass: `release` is scoped by tenant, a
+     * request arriving here has not been authenticated yet (this is what builds the route table
+     * that decides whether it needs to be), and `cdn.deploy` guarantees a deployed
+     * `site.releaseHash` belongs to `site.tenantId`.
+     *
+     * Missing it turned every request on a deployed site into `RELEASE_UNAVAILABLE` — a 503 that
+     * reads as *this node has not caught up yet* when the truth was that the node was refusing
+     * itself.
+     */
+    private async releaseFor(hash: string, tenantId: string): Promise<Release | undefined> {
         const held = this.releases.get(hash);
         if (held !== undefined) return held;
 
-        const found = await this.call<Release | null>('release.find_one', { query: { hash } })
-            .catch(() => null);
+        const found = await this.call<Release | null>(
+            'release.find_one',
+            { query: { hash } },
+            { meta: { tenantId, organizationId: tenantId } },
+        ).catch(() => null);
         if (found !== null && found !== undefined) this.releases.set(hash, found);
         return found ?? undefined;
     }
@@ -680,7 +695,7 @@ export class ApiService extends ServiceModule {
     private async tableFor(site: Site, release?: Release): Promise<RouteTable> {
         let activeRelease = release;
         if (activeRelease === undefined && site.releaseHash !== undefined) {
-            activeRelease = await this.releaseFor(site.releaseHash);
+            activeRelease = await this.releaseFor(site.releaseHash, site.tenantId);
         }
 
         const releaseHash = activeRelease?.hash ?? site.releaseHash ?? '';
@@ -717,7 +732,7 @@ export class ApiService extends ServiceModule {
     private async descriptorFor(site: Site, release?: Release): Promise<ExposureDescriptor> {
         let activeRelease = release;
         if (activeRelease === undefined && site.releaseHash !== undefined) {
-            activeRelease = await this.releaseFor(site.releaseHash);
+            activeRelease = await this.releaseFor(site.releaseHash, site.tenantId);
         }
 
         const releaseHash = activeRelease?.hash ?? site.releaseHash ?? '';
