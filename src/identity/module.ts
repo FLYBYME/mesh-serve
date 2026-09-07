@@ -329,16 +329,27 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         return { valid: false };
                     }
 
+                    let organizationId = found.value.organizationId;
+                    if (organizationId === undefined) {
+                        const memberships = await store.membershipsOf(found.value.userId);
+                        if (memberships.length === 1) {
+                            const first = memberships[0];
+                            if (first !== undefined) {
+                                organizationId = first.organizationId;
+                            }
+                        }
+                    }
+
                     let organizationSlug: string | undefined;
-                    if (found.value.organizationId !== undefined) {
-                        const org = await store.getOrganization(found.value.organizationId);
+                    if (organizationId !== undefined) {
+                        const org = await store.getOrganization(organizationId);
                         organizationSlug = org?.value.slug;
                     }
 
                     return {
                         valid: true,
                         userId: found.value.userId,
-                        ...(found.value.organizationId !== undefined ? { organizationId: found.value.organizationId } : {}),
+                        ...(organizationId !== undefined ? { organizationId } : {}),
                         ...(organizationSlug !== undefined ? { organizationSlug } : {}),
                         roles: Array.from(new Set([PUBLIC_ROLE, 'authenticated', ...found.value.roles])),
                         name: found.value.name,

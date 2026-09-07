@@ -47,7 +47,7 @@ if (command === 'dev') {
         'usage: mesh-serve client  [--descriptor mesh.json] [--out src/generated/api.ts]\n' +
         '                          [--descriptor-out descriptor.json] [--check]\n' +
         '       mesh-serve dev     [--descriptor mesh.json] [--port 8080] [--no-serve]\n' +
-        '       mesh-serve publish --publisher <org> [--repository <url>] [--dry-run]\n',
+        '       mesh-serve publish [--publisher <org>] [--repository <url>] [--dry-run]\n',
     );
     process.exit(command === undefined ? 1 : 2);
 }
