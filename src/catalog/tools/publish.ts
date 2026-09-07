@@ -20,6 +20,22 @@ export async function catalog_publish(
     input: Input,
     ctx: IServiceContext,
 ): Promise<Output> {
+    const caller = ctx.meta?.user?.tenant_id ?? ctx.meta?.tenant_id;
+    if (caller === undefined || caller === '') {
+        throw new ClientError(
+            'Publishing a part changes what runs on hostnames resolving to it, so it requires ' +
+            'an authenticated caller. This call carries none.',
+            'caller_unknown', 401,
+        );
+    }
+
+    if (input.publisher !== undefined && input.publisher !== caller) {
+        // Asserted publisher does not match caller's verified identity.
+        // Not found, not forbidden: which organization publishes a part is not something an
+        // unrelated caller gets to confirm by probing. Matches builder.build_start.
+        throw new ClientError('No such part.', 'part_not_found', 404);
+    }
+
     // Refused here rather than at resolve time. An unparseable version sits in the catalog matching
     // no range, which is indistinguishable from never having been published at all.
     if (parse(input.version) === undefined) {
@@ -29,7 +45,7 @@ export async function catalog_publish(
         );
     }
 
-    const part = await upsertPart.call(this, input, ctx);
+    const part = await upsertPart.call(this, input, ctx, caller);
     const existing = await ctx.call('partVersion.find_one', {
         query: { partName: input.name, version: input.version },
     });
@@ -91,6 +107,7 @@ async function upsertPart(
     this: CatalogService,
     input: Input,
     ctx: IServiceContext,
+    caller: string,
 ): Promise<{ id: string }> {
     const found = await ctx.call('part.find_one', { query: { name: input.name } });
 
@@ -99,7 +116,7 @@ async function upsertPart(
             name: input.name,
             kind: input.kind,
             repository: input.repository,
-            publisher: input.publisher,
+            publisher: caller,
             description: input.description ?? '',
             ...(input.homepage === undefined ? {} : { homepage: input.homepage }),
             ...(input.license === undefined ? {} : { license: input.license }),
@@ -117,12 +134,11 @@ async function upsertPart(
         );
     }
 
-    if (found.publisher !== input.publisher) {
+    if (found.publisher !== caller) {
         // Whoever writes a version changes what runs on every site naming this part.
-        throw new ClientError(
-            `"${input.name}" belongs to another publisher.`,
-            'part_not_yours', 403,
-        );
+        // Not found, not forbidden: which organization publishes a part is not something an
+        // unrelated caller gets to confirm by probing. Matches builder.build_start.
+        throw new ClientError('No such part.', 'part_not_found', 404);
     }
 
     /**

@@ -114,7 +114,14 @@ export const publishContract = defineContract({
         name: z.string().min(1),
         kind: PartKindSchema,
         repository: z.string().min(1),
-        publisher: z.string().min(1),
+        /**
+         * Optional assertion of who publishes this part.
+         *
+         * The server derives the publisher from the caller's authenticated identity (`ctx.meta`),
+         * never from this field. If provided, it is checked as an assertion and rejected if it
+         * disagrees with the caller's organization.
+         */
+        publisher: z.string().min(1).optional(),
 
         // Presentation. Written to the `part` row on every publish, because a description is
         // fixable without minting a version — see `PartSchema`.
