@@ -19,7 +19,7 @@ import type {
     nodeStatusContract,
 } from '../contracts/node.contract.js';
 import { CORE_SERVICES, type GroupRecord, type NodeRecord, type NodeSummary, type ServiceRunStatus } from '../schema/node.js';
-import { nodesInGroup, reconcileNode } from './reconcile.js';
+import { nodesInGroup, reconcileNode, resolveDesired } from './reconcile.js';
 
 const run = promisify(execFile);
 
@@ -137,9 +137,25 @@ export async function node_hello(
     }) as (NodeRecord & { id: string }) | null;
 
     if (existing !== null && existing !== undefined) {
+        /**
+         * **Resolved, not raw.** This returned `existing.services` — the node's *direct*
+         * assignments only, with its groups ignored entirely.
+         *
+         * A node whose whole assignment comes from a group therefore heard "you should be running
+         * nothing", and `bin/node.mjs` reads an empty answer as *unassigned* and falls back to
+         * starting everything it carries. So `surf`, assigned exactly `serve`, started `builder`
+         * and `cdn` as well — and `builder.build_start` began round-robining onto it. A build is
+         * the heaviest thing that runs here, `surf` has 981MB, and a node under that much memory
+         * pressure stops answering pings and is dropped as a dead peer mid-build.
+         *
+         * Groups are stored by reference precisely so that the resolution happens at read time.
+         * Doing it in `reconcile` and not here left the two disagreeing about what a node should be
+         * running, which is the one thing this collection exists to answer.
+         */
+        const groups = (await ctx.call('group.find', { query: {} }) as GroupRecord[]) ?? [];
         return {
             hostname: existing.hostname,
-            services: existing.services ?? [],
+            services: resolveDesired(existing, groups),
         };
     }
 
