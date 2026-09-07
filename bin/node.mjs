@@ -20,12 +20,17 @@ import {
 import { WSTransport } from '@flybyme/mesh/node';
 
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { ApiService } from '../dist/api/api.service.js';
-import { BuilderService } from '../dist/builder/builder.service.js';
-import { CatalogService } from '../dist/catalog/catalog.service.js';
-import { CdnService } from '../dist/cdn/cdn.service.js';
 import { FleetService } from '../dist/fleet/fleet.service.js';
+import { Supervisor } from '../dist/supervisor/Supervisor.js';
+import { SupervisorService } from '../dist/supervisor/SupervisorService.js';
+
+// Manifest paths are resolved against this, so `./dist/...` means this repository wherever it is
+// checked out — not the directory somebody happened to run the command from.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { createIdentityModule, mongoStore } from '../dist/identity/index.js';
 
 const argv = process.argv.slice(2);
@@ -60,10 +65,69 @@ await app.start();
 
 // After start, always: registerModule queues into pendingModules before it and that flush is
 // unawaited, so a module registered earlier may never be mounted.
+
+/**
+ * **The fleet is always on, and the rest are switches.**
+ *
+ * This node registered every service directly, so the Supervisor owned nothing and
+ * `supervisor.service_status` was not mounted anywhere. `node.assign` then failed with *"Local tool
+ * not found: supervisor.service_status — no domain 'supervisor' is mounted"*, which is the fleet
+ * correctly reporting that it has no mechanism to switch anything. Assignment was a control surface
+ * over nothing.
+ *
+ * `fleet` stays direct because it is the thing that answers *what should I be running* — a node
+ * that had to be told to run the service that receives its assignment could never receive one.
+ * Same reason `identity` and `api` stay direct: without them nobody can authenticate to give the
+ * order, and a node that can be switched off from the outside and not back on is a node somebody
+ * drives to a datacentre for.
+ *
+ * Everything else goes into the Supervisor's manifest and can be started and stopped live.
+ */
 await app.registerModule(new FleetService());
-await app.registerModule(new CatalogService());
-await app.registerModule(new BuilderService({ blobRoot }));
-await app.registerModule(new CdnService({ port: cdnPort, url: cdnUrl, blobRoot }));
+
+const supervisor = new Supervisor(app, { services: [] }, repoRoot);
+await app.registerModule(new SupervisorService(supervisor));
+
+/**
+ * The switchable set, built in code rather than read from a manifest file.
+ *
+ * A file would be a second place to keep the same list, and it would go stale the first time a
+ * service moved — the paths are `dist/*` in this repository and this repository already knows them.
+ * `node.provision` writes *new* entries at run time through `registerEntry`; these are the ones
+ * that ship with the node.
+ *
+ * None of these takes a constructor argument it cannot default: the Supervisor does `new
+ * ServiceClass()`, and `blobRoot`, the CDN port and the CDN URL all fall back to the environment.
+ * They are exported here so a Supervisor-constructed instance lands on the same values this
+ * process was started with.
+ */
+process.env.MESH_BLOB_ROOT = blobRoot;
+process.env.CDN_PORT = String(cdnPort);
+process.env.CDN_URL = cdnUrl;
+
+for (const [name, path] of [
+    ['catalog', './dist/catalog/catalog.service.js'],
+    ['builder', './dist/builder/builder.service.js'],
+    ['cdn', './dist/cdn/cdn.service.js'],
+]) {
+    supervisor.registerEntry({ name, path, dependsOn: [] });
+}
+
+/**
+ * What this node runs, asked rather than assumed.
+ *
+ * `node.hello` answers with the desired set, which is the whole point of the fleet: a node is dumb
+ * and loads what it is told to load. **A node with no assignment yet starts everything**, because
+ * the alternative is that adding the fleet silently turned every existing deployment off.
+ */
+const assignment = await app.call('node.hello', { hostname: app.nodeID }).catch(() => null);
+const desired = assignment?.services ?? [];
+
+for (const name of desired.length > 0 ? desired : ['catalog', 'builder', 'cdn']) {
+    await supervisor.serviceStart(name).catch((error) => {
+        process.stderr.write(`[node] could not start ${name}: ${String(error?.message ?? error)}\n`);
+    });
+}
 /**
  * The `authorize` hook, without which **every scoped collection is unreachable over HTTP**.
  *

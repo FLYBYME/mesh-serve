@@ -106,14 +106,51 @@ export async function reconcileNode(
         const toStop = [...running].filter((s) => !wanted.has(s));
         const toStart = services.filter((s) => !running.has(s));
 
+        /**
+         * **One service that will not switch must not fail the node.**
+         *
+         * Some services are always on and are therefore not in the Supervisor's manifest — `api`,
+         * `identity` and `fleet` are registered directly by the runner, because a node that can be
+         * told to switch off the service that receives its orders cannot be told anything again.
+         * Assigning one of those answered *"Unknown service: api"* and abandoned the whole
+         * reconcile, so a node with five correct services and one impossible one converged on
+         * nothing.
+         *
+         * The same reasoning as `node_reconcile` not stopping at the first failed node, one level
+         * down: the services that can move should move, and the ones that cannot should say so by
+         * name rather than by taking the others with them.
+         */
+        const started: string[] = [];
+        const stopped: string[] = [];
+        const refused: string[] = [];
+
         for (const name of toStop) {
-            await broker.call('supervisor.service_stop', { name, cascade: true }, target);
+            try {
+                await broker.call('supervisor.service_stop', { name, cascade: true }, target);
+                stopped.push(name);
+            } catch (error) {
+                refused.push(`${name} (${error instanceof Error ? error.message : String(error)})`);
+            }
         }
         for (const name of toStart) {
-            await broker.call('supervisor.service_start', { name }, target);
+            try {
+                await broker.call('supervisor.service_start', { name }, target);
+                started.push(name);
+            } catch (error) {
+                refused.push(`${name} (${error instanceof Error ? error.message : String(error)})`);
+            }
         }
 
-        return { hostname: node.hostname, services, applied: true, started: toStart, stopped: toStop };
+        return {
+            hostname: node.hostname,
+            services,
+            // Applied means something moved, or nothing needed to. A node whose every change was
+            // refused has not been reconciled and must not report that it has.
+            applied: refused.length === 0 || started.length > 0 || stopped.length > 0,
+            started,
+            stopped,
+            ...(refused.length === 0 ? {} : { error: `could not switch: ${refused.join('; ')}` }),
+        };
     } catch (error) {
         // Reported, never thrown. Reconciling ten nodes must not stop at the first one that is
         // wedged — the other nine still need to converge, and the operator needs to see which failed.

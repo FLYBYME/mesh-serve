@@ -153,10 +153,20 @@ export class CdnService extends ServiceModule {
 
         // Thrown from onStart when the port is taken, so the mesh sees a module that failed to start
         // rather than a node registered as a cdn that answers nothing.
-        this.listener = await this.listen(this.options.port ?? 0, this.options.host ?? '0.0.0.0');
+        /**
+         * The port falls back to the environment before it falls back to zero.
+         *
+         * The Supervisor constructs a service with `new ServiceClass()` and no options — that is how
+         * a service becomes switchable. Without this, a cdn started by an assignment bound a
+         * **random** port and every artifact URL on the platform pointed at a port nothing was
+         * listening on. `blobRoot` already read the environment for exactly this reason; the port
+         * and the URL did not, and they are the two that break silently.
+         */
+        const port = this.options.port ?? Number(process.env['CDN_PORT'] ?? '') ?? 0;
+        this.listener = await this.listen(Number.isFinite(port) ? port : 0, this.options.host ?? '0.0.0.0');
         const address = this.listener.address();
-        this.port = typeof address === 'object' && address !== null ? address.port : this.options.port;
-        this.url = this.options.url ?? `http://127.0.0.1:${String(this.port)}`;
+        this.port = typeof address === 'object' && address !== null ? address.port : port;
+        this.url = this.options.url ?? process.env['CDN_URL'] ?? `http://127.0.0.1:${String(this.port)}`;
 
         broker.logger.info(`[cdn] serving on ${String(this.port)}, url ${this.url}, artifacts in ${root}`);
 
