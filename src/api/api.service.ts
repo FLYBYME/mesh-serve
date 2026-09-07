@@ -45,12 +45,17 @@ import { openStream, type Stream } from './methods/stream.js';
 import type { Subscriber } from './methods/delivery.js';
 import { createTicketCache, type TicketCache } from './methods/tickets.js';
 import type { AuthorizeHook } from './methods/gate.js';
+import { describeExposure, type ExposureDescriptor } from './schema/descriptor.js';
+import type { ExposeEntry } from './schema/expose.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
 export const SHAPE_HEADER = 'x-exposure-shape';
 
 /** Where a browser subscribes. One path per site, not one per event: a stream carries them all. */
 export const EVENTS_PATH = '/events';
+
+/** Where a browser discovers the site's exposure descriptor. */
+export const DESCRIBE_PATH = '/_describe';
 
 export interface ApiServiceOptions {
     /** `0` picks one, which is what a test wants. */
@@ -94,6 +99,7 @@ export class ApiService extends ServiceModule {
     private readonly sites = new Map<string, { site: Site | undefined; expires: number }>();
     private readonly releases = new Map<string, Release>();
     private readonly tables = new Map<string, RouteTable>();
+    private readonly descriptors = new Map<string, ExposureDescriptor>();
     private readonly eventTables = new Map<string, EventTable>();
 
     /**
@@ -227,6 +233,10 @@ export class ApiService extends ServiceModule {
 
             if (inner === EVENTS_PATH) {
                 return await this.subscribe(req, res, site, origin);
+            }
+
+            if (inner === DESCRIBE_PATH) {
+                return await this.describe(req, res, site, release, origin);
             }
 
             const table = await this.tableFor(site, release);
@@ -455,6 +465,74 @@ export class ApiService extends ServiceModule {
     }
 
     /**
+     * Serve the exposure descriptor for a site.
+     *
+     * Gated as `public`: the routes and their gates are already discoverable by probing, and
+     * an anonymous client (such as a browser running schema-driven UI or models on boot) needs
+     * to know which calls require authentication in advance so it can prompt for sign-in rather
+     * than firing guaranteed 401s (refs surfdns#39, surfdns#40).
+     *
+     * Internal contracts are strictly forbidden: `descriptorFor` calls `describeExposure` with
+     * `allowInternal: false`, inheriting the deny-by-default invariant.
+     */
+    private async describe(
+        req: IncomingMessage,
+        res: ServerResponse,
+        site: Site,
+        release: Release | undefined,
+        origin: string | undefined,
+    ): Promise<void> {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            return send(res, 405, { ...this.cors(origin, site), allow: 'GET, HEAD' }, {
+                error: 'METHOD_NOT_ALLOWED', message: 'The descriptor is a GET.',
+            });
+        }
+
+        const caller: Caller | undefined = await this.tickets?.resolve(bearer(req));
+
+        const outcome = await executeGate({
+            gate: { kind: 'auth', level: 'public' },
+            contract: describePseudoContract(),
+            caller,
+            requestedScope: header(req, SCOPE_HEADER),
+            input: {},
+            ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
+        });
+
+        if (!outcome.ok) {
+            return send(res, outcome.status, this.cors(origin, site), {
+                error: outcome.code, message: outcome.message,
+            });
+        }
+
+        const descriptor = await this.descriptorFor(site, release);
+
+        // It MUST carry shapeHash, NOT the exposure hash (spec/schema-driven-ui.md §3.1, net/client.ts).
+        // A client asking "is my rendering stale?" is asking a site-independent question.
+        const headers: Record<string, string> = {
+            ...this.cors(origin, site),
+            etag: descriptor.exposure,
+            [SHAPE_HEADER]: descriptor.shapeHash,
+            'cache-control': 'no-cache',
+        };
+
+        const clientShape = header(req, SHAPE_HEADER);
+        if (clientShape !== undefined && clientShape !== descriptor.shapeHash) {
+            return send(res, 409, headers, {
+                error: 'EXPOSURE_MISMATCH',
+                message: `Client shape hash (${clientShape}) does not match API shape hash (${descriptor.shapeHash}).`,
+            });
+        }
+
+        const ifNoneMatch = header(req, 'if-none-match');
+        if (ifNoneMatch !== undefined && (ifNoneMatch === descriptor.exposure || ifNoneMatch === `"${descriptor.exposure}"`)) {
+            return send(res, 304, headers, '');
+        }
+
+        send(res, 200, headers, req.method === 'HEAD' ? '' : descriptor);
+    }
+
+    /**
      * An event arrived over the mesh. Offer it to every open stream.
      *
      * **Offer, not send.** Each stream decides for its own subscriber, because two connections on one
@@ -611,6 +689,73 @@ export class ApiService extends ServiceModule {
     }
 
     /**
+     * The exposure descriptor for a site, derived and cached on the record it came from.
+     *
+     * Cached on the same key as the route table: `${site.id}:${release.hash}:${site.updatedAt}`.
+     * Built with `allowInternal: false` — an internal contract exposed by accident fails closed
+     * rather than leaking implementation details to the internet.
+     */
+    private async descriptorFor(site: Site, release?: Release): Promise<ExposureDescriptor> {
+        let activeRelease = release;
+        if (activeRelease === undefined && site.releaseHash !== undefined) {
+            activeRelease = await this.releaseFor(site.releaseHash);
+        }
+
+        const releaseHash = activeRelease?.hash ?? site.releaseHash ?? '';
+        const key = `${site.id}:${releaseHash}:${site.updatedAt?.toISOString() ?? ''}`;
+        const held = this.descriptors.get(key);
+        if (held !== undefined) return held;
+
+        const entries: ExposeEntry[] = [];
+        const seen = new Set<string>();
+        const required = activeRelease?.requires !== undefined ? new Set(activeRelease.requires) : undefined;
+        const lookup = this.lookup();
+
+        for (const dependency of site.mesh) {
+            for (const exposed of dependency.contracts) {
+                const contractKey = exposed.key;
+                if (seen.has(contractKey)) continue;
+                seen.add(contractKey);
+
+                if (required !== undefined && !required.has(contractKey)) {
+                    continue;
+                }
+
+                const contract = lookup(contractKey);
+                if (contract === undefined) {
+                    continue;
+                }
+
+                if ('auth' in exposed) {
+                    entries.push({ contract, auth: exposed.auth });
+                } else {
+                    entries.push({ contract, permission: exposed.permission });
+                }
+            }
+        }
+
+        try {
+            const descriptor = describeExposure(entries, {
+                application: site.application,
+                base: BASE_PATH,
+                allowInternal: false,
+            });
+            this.descriptors.set(key, descriptor);
+            return descriptor;
+        } catch (error) {
+            if (error instanceof Error) {
+                const code = error.message.includes('marked internal') ? 'INTERNAL_CONTRACT' : 'INVALID_EXPOSURE';
+                throw new MeshError({
+                    code,
+                    message: error.message,
+                    status: 500,
+                });
+            }
+            throw error;
+        }
+    }
+
+    /**
      * How a contract key becomes a contract.
      *
      * `globalContractRegistry` is populated at **import time** by every module that defined a
@@ -658,6 +803,21 @@ function streamPseudoContract(eventName: string): Parameters<typeof executeGate>
         outputSchema: emptySchema,
         rest: { method: 'GET', path: EVENTS_PATH },
         print: () => eventName,
+    };
+}
+
+/**
+ * A stand-in contract for GET /api/_describe, so the gate can evaluate the descriptor endpoint.
+ */
+function describePseudoContract(): Parameters<typeof executeGate>[0]['contract'] {
+    return {
+        domain: 'api',
+        action: 'describe',
+        description: 'site exposure descriptor',
+        inputSchema: emptySchema,
+        outputSchema: emptySchema,
+        rest: { method: 'GET', path: DESCRIBE_PATH },
+        print: () => 'api.describe',
     };
 }
 

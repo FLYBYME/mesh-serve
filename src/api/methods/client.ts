@@ -100,6 +100,9 @@ function entry(call: DescribedCall, input: string, output: string): string {
     const inputType = input === 'Record<string, never>' ? 'void' : input;
 
     const gate = call.gate.kind === 'auth' ? `auth: ${call.gate.level}` : `permission: ${call.gate.permission}`;
+    const gateLiteral = call.gate.kind === 'auth'
+        ? `{ kind: 'auth', level: '${call.gate.level}' }`
+        : `{ kind: 'permission', permission: ${JSON.stringify(call.gate.permission)} }`;
 
     return [
         `        /**`,
@@ -108,7 +111,7 @@ function entry(call: DescribedCall, input: string, output: string): string {
         `         * ${call.method} ${call.path} — ${gate}${call.destructive ? ', destructive' : ''}`,
         `         */`,
         `        ${JSON.stringify(call.key)}: call<${inputType}, ${output}, ${errors}>(` +
-        `${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}),`,
+        `${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}, ${gateLiteral}),`,
     ].join('\n');
 }
 
