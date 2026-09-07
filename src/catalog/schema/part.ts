@@ -60,9 +60,14 @@ export const PartDeclarationSchema = z.object({
 
     /**
      * Which branch a release is cut from. Resolved to an exact commit at release time, always —
-     * a build keyed on `main` would answer the same forever while the code moved underneath it.
+     * a build keyed on a branch name would answer the same forever while the code moved underneath.
+     *
+     * **`HEAD` means *whatever this repository's default branch is*, and that is the only safe
+     * default.** It was `main`, which is a guess about somebody else's repository: `mesh-web`'s
+     * default is `master`, so the first real import failed with *has no ref "main"* — a confusing
+     * answer, because the branch it names is not one anybody chose.
      */
-    branch: z.string().min(1).default('main'),
+    branch: z.string().min(1).default('HEAD'),
 
     /** For a monorepo. A name within the repository, never a path on a disk. */
     subdirectory: z.string().min(1).optional(),

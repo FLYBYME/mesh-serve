@@ -205,8 +205,40 @@ export async function resolveSource(source: {
     const commit = stdout.split(/\s/)[0];
 
     if (commit === undefined || !/^[0-9a-f]{40}$/.test(commit)) {
-        throw new Error(`${repository} has no ref "${ref}".`);
+        /**
+         * **Say what the default branch actually is.**
+         *
+         * *"has no ref main"* is true and useless: the caller usually did not type `main`, a default
+         * did, and the repository calls its default branch something else. `mesh-web` uses `master`,
+         * which is exactly how this was found. One extra round trip to the remote turns a puzzle
+         * into an instruction.
+         */
+        const actual = await defaultBranchOf(repository);
+
+        throw new Error(
+            actual === undefined
+                ? `${repository} has no ref "${ref}".`
+                : `${repository} has no ref "${ref}" — its default branch is "${actual}". ` +
+                  `Use that, or leave the branch unset to follow whatever the repository's ` +
+                  `default is.`,
+        );
     }
 
     return { kind: 'git', repository, ref: commit, ...at };
+}
+
+/**
+ * What a repository calls its default branch, asked of the remote.
+ *
+ * `git ls-remote --symref <repo> HEAD` answers `ref: refs/heads/master  HEAD`. Only used to make a
+ * failure message specific, so it answers `undefined` rather than throwing — a diagnostic that can
+ * itself fail is worse than a vague message.
+ */
+async function defaultBranchOf(repository: string): Promise<string | undefined> {
+    try {
+        const { stdout } = await run('git', ['ls-remote', '--symref', repository, 'HEAD']);
+        return /ref:\s+refs\/heads\/(\S+)\s+HEAD/.exec(stdout)?.[1];
+    } catch {
+        return undefined;
+    }
 }

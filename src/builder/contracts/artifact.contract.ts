@@ -149,7 +149,9 @@ export const importRepoContract = defineContract({
     dependencies: [],
     inputSchema: z.object({
         repository: z.string().min(1).describe('A clonable reference — never a path on a disk'),
-        ref: z.string().min(1).default('main').describe('Branch, tag or commit to read the descriptor at'),
+        // `HEAD` is the repository's own default branch, whatever it is called. Defaulting to `main`
+        // is a guess about somebody else's repository, and the first real import proved it wrong.
+        ref: z.string().min(1).default('HEAD').describe('Branch, tag or commit to read the descriptor at'),
         subdirectory: z.string().min(1).optional().describe('Where in the repository the descriptor is'),
         /** Report what would be declared and write nothing. */
         dryRun: z.boolean().optional(),
