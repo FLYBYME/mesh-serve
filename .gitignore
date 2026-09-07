@@ -9,3 +9,10 @@ dist/
 # Dispatch output. Results are agy stdout and are destroyed with the worktree; reports are committed.
 agent-runs/results/*.result.md
 agent-runs/results/*-verify.log
+
+# Never commit a node's configuration: it holds MESH_KEY and the database URI.
+# `bin/node.mjs` reads ./.env beside the checkout, so this file exists on every
+# machine that runs a node, including this one.
+.env
+.env.*
+!.env.example
