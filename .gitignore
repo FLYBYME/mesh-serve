@@ -16,3 +16,17 @@ agent-runs/results/*-verify.log
 .env
 .env.*
 !.env.example
+
+# Generated from the contracts by `mesh generate`, which runs at the front of both
+# `build` and `typecheck` — and therefore on every deploy box, on every build.
+#
+# Committing them made every deploy a merge conflict. A machine that had built at an
+# older commit held an older `ToolCommands.ts`, so its next `git pull` aborted with
+# *"local changes would be overwritten"* on a file nobody had edited. That happened on
+# two machines in one afternoon, and the fix each time was `git checkout -- src/generated`
+# — a step somebody has to know, on a box they are already ssh'd into at speed.
+#
+# Safe to ignore because nothing outside this package reads them: consumers import
+# `dist/`, and `prepare` runs `build` on `npm install`, so a fresh clone generates them
+# before anything needs them.
+src/generated/
