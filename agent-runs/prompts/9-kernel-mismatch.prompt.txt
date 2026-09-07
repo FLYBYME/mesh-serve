@@ -1,0 +1,96 @@
+Code lives in:  FLYBYME/mesh-serve — this worktree. All commits go here.
+
+================================================================================
+THE TASK
+================================================================================
+
+**F5 — `partVersion.kernel` is stored and never read.** Rated **S**. Make a
+kernel mismatch a fatal composition problem.
+
+`publish-cli` writes the range a part was built against, with the comment *"the
+only thing standing between a stale part and a browser"*. `build_start` forwards
+it. **Nothing reads it.** `checkComposition` checks missing required parts, unmet
+contracts and unused grants, and has **no kernel case at all**.
+
+Add a `kernel_mismatch` problem, **fatal** — the same class as a missing required
+part, not a warning like an unused grant.
+
+================================================================================
+IT IS NOT THEORETICAL, AND HERE IS THE MEASUREMENT
+================================================================================
+
+The roadmap entry cites one historical violation. Measured against the live
+platform on 2026-09-06, before that day's rebuild, **five of six live sites were
+serving parts outside their declared range**:
+
+| site | kernel served | parts declaring |
+| --- | --- | --- |
+| `demos.localhost` | 0.11.4 | `theme` `clock` `notes` `calc` — all `^0.6` |
+| `todo.localhost` | 0.11.4 | `todo` `^0.6` |
+| `demo.localhost` · `localhost` · `127.0.0.1` | 0.11.4 | `auth@0.2.0` `^0.6` |
+| `console.localhost` | 0.11.4 | `chrome` `catalog` `releases` `^0.11` ✓ |
+
+`^0.6` is `>=0.6.0 <0.7.0`. Every one of those compositions should have been
+refused and none was.
+
+**And when the range was finally enforced by hand**, bumping `mesh-demos` from
+`^0.6` to `^0.13` immediately failed to compile: `workbench` had narrowed the
+window mode to `'windowed' | 'tiled'` in four places and the kernel had gained
+`'single'`. That is a real incompatibility this check would have surfaced at
+compose time instead of leaving it to a browser.
+
+================================================================================
+WHERE IT GOES
+================================================================================
+
+    src/cdn/methods/release.ts       checkComposition — the distinctions are the
+                                     point: a required part absent **refuses**,
+                                     an optional one **reports**, an unmet
+                                     contract **refuses**, an unused grant
+                                     **reports**. A kernel mismatch refuses.
+    src/catalog/schema/part.ts       partVersion.kernel, and its comment
+    src/cdn/tools/compose.ts         the caller
+    spec/unread.md §1                the `partVersion.kernel` row, which this
+                                     closes — update it to say what happened,
+                                     the way the `release.exposure` row was
+                                     updated by D4
+
+**A kernel artifact has no kernel requirement of its own** — the one thing that
+has no kernel. `DeclarationSchema.kernel` is `.optional()` for exactly that
+reason. An absent range is not a mismatch.
+
+**Decide what an absent range means for a *part*, and say why.** Versions
+published before the field existed have none. Refusing them breaks every existing
+release; accepting them silently is how the field became decorative in the first
+place. There is a third option — accept, and report it as a non-fatal problem —
+and it may be the right one. Argue it rather than picking quietly.
+
+================================================================================
+WHAT GOOD LOOKS LIKE
+================================================================================
+
+- **A test composing kernel 0.13 with a part declaring `^0.6`, refused, naming
+  both the part and the range.** That is the whole item.
+- A test that a kernel artifact's own absent requirement is not a mismatch.
+- A test for whatever you decide an absent range means on a part.
+- A test that a satisfied range composes cleanly — the six live sites are all in
+  range as of the rebuild, so a false positive here breaks production.
+- Every existing test passing. `npm run typecheck` clean, **zero casts**.
+- Tick F5 in `spec/roadmap.md`; update the `partVersion.kernel` row in
+  `spec/unread.md` §1.
+
+**Run every command in the foreground. Commit as you go.**
+
+================================================================================
+YOUR REPORT
+================================================================================
+
+`agent-runs/reports/9-kernel-mismatch.md`
+
+- what an absent range means on a part, and the argument
+- **whether any release currently in the database would now be refused.** The
+  platform was rebuilt clean earlier today so the answer should be none — if it
+  is not none, that is the finding and it matters more than the code.
+- whether `checkComposition`'s four problem kinds are still the right set, now
+  that there are five
+- anything for `spec/unread.md`
