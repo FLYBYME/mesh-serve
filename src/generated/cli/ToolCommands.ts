@@ -17,13 +17,14 @@ async function executeCommand(toolName: string, args: Record<string, unknown>, c
     const app = new MeshApp({ nodeID: nodeId, logger });
     const serializer = new JSONSerializer();
     const port = parseInt(options.port || '0', 10);
-    const host = options.host || '0.0.0.0';
+    const host = options.host || '127.0.0.1';
     const wsTransport = new WSTransport(serializer, port, host);
     
     const bootstrapStr = options.bootstrap || 'ws://127.0.0.1:5005';
     app.use(new RegistryModule());
     app.use(new NetworkModule({
         port,
+        host,
         transports: [wsTransport],
         bootstrapNodes: bootstrapStr ? bootstrapStr.split(',').map((s: string) => s.trim()) : []
     }));

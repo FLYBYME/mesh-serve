@@ -1,0 +1,18 @@
+ISOLATION BREACH -- dispatch 16 wrote outside its worktree.
+
+  repo:     /home/ubuntu/code/mesh-serve
+  worktree: /home/ubuntu/code/mesh-serve-dispatch-16
+
+Uncommitted source changes appeared in the main tree while the dispatch
+was running. Transcripts under agent-runs/results/ are excluded, and a
+moved HEAD is not counted -- committing in the main tree is the
+operator's business, not a breach.
+
+Before:
+  (clean)
+Now:
+ M package.json
+
+The dispatch's own branch may therefore be missing that work. Review the
+main tree directly rather than trusting the branch diff -- and if you
+made these edits yourself, this is a false alarm: delete this file.
