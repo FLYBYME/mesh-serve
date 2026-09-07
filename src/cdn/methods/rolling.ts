@@ -66,7 +66,21 @@ export function follows(release: Release, released: Pick<PartReleased, 'part' | 
  * from rolling.
  */
 export async function rollForPart(ctx: IServiceContext, released: PartReleased): Promise<void> {
-    const rolling = await ctx.call('release.find', { query: { rolling: true }, limit: 200 });
+    /**
+     * **Scoped explicitly, rather than relying on what the event handler inherited.**
+     *
+     * `release` became scoped on 2026-09-07 and this call was not updated. It kept working, which
+     * is the uncomfortable part: an event handler inherits the emitting call's meta, so the scope
+     * arrived by accident of who happened to trigger the release. An unscoped read on a scoped
+     * collection *throws* — verified — so the day that inheritance changes, or a release is
+     * triggered by something with no caller, rolling stops silently. It runs from an event, so the
+     * throw reaches nobody.
+     *
+     * Naming the tenant also narrows the query instead of fetching every rolling release on the
+     * platform and filtering in a loop, which the check below still does as a second line.
+     */
+    const meta = { tenant_id: released.tenantId, user: { id: 'rolling', tenant_id: released.tenantId } };
+    const rolling = await ctx.call('release.find', { query: { rolling: true }, limit: 200 }, { meta });
 
     for (const release of rolling) {
         /**
@@ -140,18 +154,18 @@ async function rollOne(
      */
     await ctx.call('release.update', {
         id: release.id, rolling: false, supersededBy: composed.hash,
-    });
+    }, { meta });
 
-    const next = await ctx.call('release.find_one', { query: { hash: composed.hash } });
+    const next = await ctx.call('release.find_one', { query: { hash: composed.hash } }, { meta });
     if (next !== null && next !== undefined && !next.rolling) {
         // `compose` was told `rolling: true`, but the composition may have already existed from
         // before — an earlier manual compose, or a roll that was interrupted after the write.
-        await ctx.call('release.update', { id: next.id, rolling: true });
+        await ctx.call('release.update', { id: next.id, rolling: true }, { meta });
     }
 
     const sites = await ctx.call('site.find', {
         query: { releaseHash: release.hash }, limit: 200,
-    });
+    }, { meta });
 
     for (const site of sites) {
         try {
