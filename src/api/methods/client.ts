@@ -17,6 +17,7 @@ import {
     ExposureMismatchError,
     type CheckExposureOptions,
     type DescribedCall,
+    type DescribedEvent,
     type ExposureDescriptor,
     type ExposureDifference,
     type ExposureTarget,
@@ -28,6 +29,7 @@ export {
     diffExposure,
     ExposureMismatchError,
     type CheckExposureOptions,
+    type DescribedEvent,
     type ExposureDifference,
     type ExposureTarget,
 };
@@ -72,6 +74,15 @@ export function emitClient(descriptor: ExposureDescriptor, options: EmitOptions 
         entries.push(entry(call, input.type, output.type));
     }
 
+    const eventsBlock: string[] = [];
+    if (descriptor.events !== undefined && descriptor.events.length > 0) {
+        eventsBlock.push('    events: [');
+        for (const event of descriptor.events) {
+            eventsBlock.push(`        ${formatEvent(event)},`);
+        }
+        eventsBlock.push('    ],');
+    }
+
     return [
         header(descriptor),
         `import { call, defineApi } from '${from}';`,
@@ -85,9 +96,20 @@ export function emitClient(descriptor: ExposureDescriptor, options: EmitOptions 
         '    calls: {',
         ...entries,
         '    },',
+        ...eventsBlock,
         '});',
         '',
     ].join('\n');
+}
+
+function formatEvent(event: DescribedEvent): string {
+    if (event.gate === undefined) {
+        return `{ name: ${JSON.stringify(event.name)} }`;
+    }
+    const gateLiteral = event.gate.kind === 'auth'
+        ? `{ kind: 'auth', level: '${event.gate.level}' }`
+        : `{ kind: 'permission', permission: ${JSON.stringify(event.gate.permission)} }`;
+    return `{ name: ${JSON.stringify(event.name)}, gate: ${gateLiteral} }`;
 }
 
 function entry(call: DescribedCall, input: string, output: string): string {

@@ -78,6 +78,12 @@ export interface ApiServiceOptions {
 
 export const DEFAULT_TTL_MS = 30_000;
 
+declare global {
+    interface EventRegistry {
+        '*': unknown;
+    }
+}
+
 export class ApiService extends ServiceModule {
     public readonly domain = 'api';
 
@@ -86,6 +92,7 @@ export class ApiService extends ServiceModule {
 
     private broker: IServiceBroker | undefined;
     private tickets: TicketCache | undefined;
+    private unsubscribeEvents: (() => void) | undefined;
     private readonly ttl: number;
 
     /**
@@ -131,6 +138,13 @@ export class ApiService extends ServiceModule {
     async onStart(broker: IServiceBroker): Promise<void> {
         this.broker = broker;
 
+        this.unsubscribeEvents = broker.on('*', (payload, packet) => {
+            const topic = packet?.topic;
+            if (topic !== undefined) {
+                this.deliver(topic, payload);
+            }
+        });
+
         /**
          * The one adapter between identity's answer and the cache's question.
          *
@@ -168,6 +182,11 @@ export class ApiService extends ServiceModule {
     }
 
     async onStop(): Promise<void> {
+        if (this.unsubscribeEvents !== undefined) {
+            this.unsubscribeEvents();
+            this.unsubscribeEvents = undefined;
+        }
+
         // Ended explicitly rather than dropped: a process that exits without closing its streams
         // leaves browsers reconnecting to a node that is gone, and the reconnect is indistinguishable
         // from a network blip.
@@ -734,11 +753,14 @@ export class ApiService extends ServiceModule {
             }
         }
 
+        const table = this.eventsFor(site);
+
         try {
             const descriptor = describeExposure(entries, {
                 application: site.application,
                 base: BASE_PATH,
                 allowInternal: false,
+                events: table.events,
             });
             this.descriptors.set(key, descriptor);
             return descriptor;

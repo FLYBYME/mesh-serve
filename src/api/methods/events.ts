@@ -20,7 +20,7 @@
  * errors and nothing arrives.
  */
 
-import { globalEventRegistry } from '@flybyme/mesh';
+import { globalCrudRegistry, globalEventRegistry } from '@flybyme/mesh';
 
 import type { ExposedContract, MeshDependency } from '../../cdn/schema/site.js';
 import type { EventScope } from '../schema/events.js';
@@ -48,7 +48,24 @@ export interface EventTable {
 /** How an event name becomes a definition. The framework's registry; a Map in a test. */
 export type EventLookup = (name: string) => { readonly scopedBy?: string } | undefined;
 
-export const registryLookup: EventLookup = (name) => globalEventRegistry.get(name);
+export const registryLookup: EventLookup = (name) => {
+    const fromEvents = globalEventRegistry.get(name);
+    if (fromEvents !== undefined) {
+        return fromEvents;
+    }
+    const dot = name.lastIndexOf('.');
+    if (dot > 0) {
+        const domain = name.slice(0, dot);
+        const action = name.slice(dot + 1);
+        if (action === 'created' || action === 'updated' || action === 'deleted') {
+            const crud = globalCrudRegistry.get(domain);
+            if (crud !== undefined) {
+                return { scopedBy: crud.scopedBy };
+            }
+        }
+    }
+    return undefined;
+};
 
 export function eventTable(
     mesh: readonly MeshDependency[],

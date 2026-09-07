@@ -204,7 +204,11 @@ export async function main(): Promise<void> {
                         { key: 'site.find', auth: 'user' },
                         { key: 'site.get', auth: 'user' },
                     ],
-                    events: [],
+                    events: [
+                        { key: 'site.created', auth: 'user' },
+                        { key: 'site.updated', auth: 'user' },
+                        { key: 'site.deleted', auth: 'user' },
+                    ],
                 }],
                 theme: {},
                 policy: {},
