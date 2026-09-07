@@ -231,6 +231,45 @@ describe('shape hash vs gate hash invariants', () => {
         // Gate hashes differ
         expect(tablePub.exposure).not.toBe(tableUser.exposure);
     });
+
+    it('descriptor shapeHash and routeTable shapeHash agree for contract declaring errors', () => {
+        const zoneCreateWithErrors = defineContract({
+            domain: 'domains',
+            action: 'zone_create',
+            description: 'Create domain zone',
+            inputSchema: z.object({ name: z.string() }),
+            outputSchema: z.object({ id: z.string() }),
+            rest: { method: 'POST', path: '/zones' },
+            visibility: 'public',
+            errors: ['NAME_TAKEN', 'QUOTA_EXCEEDED'],
+            print: () => '',
+        });
+
+        const lookup: ContractLookup = (key) => {
+            if (key === 'domains.zone_create') return zoneCreateWithErrors;
+            return undefined;
+        };
+
+        const mesh: readonly MeshDependency[] = [{
+            package: '@flybyme/surfdns-domains',
+            version: '1.0.0',
+            contracts: [{ key: 'domains.zone_create', auth: 'public' }],
+            events: [],
+        }];
+
+        const desc = describeExposure([
+            { contract: zoneCreateWithErrors, auth: 'public', errors: ['NAME_TAKEN', 'QUOTA_EXCEEDED'] },
+        ], { application: 'surfdns' });
+
+        const descContractOnly = describeExposure([
+            { contract: zoneCreateWithErrors, auth: 'public' },
+        ], { application: 'surfdns' });
+
+        const table = routeTable(mesh, lookup, hash);
+
+        expect(desc.shapeHash).toBe(table.shapeHash);
+        expect(descContractOnly.shapeHash).toBe(table.shapeHash);
+    });
 });
 
 describe('client meets API exposure verification', () => {

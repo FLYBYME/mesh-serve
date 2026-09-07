@@ -23,6 +23,16 @@ import { isPublicContract, type ToolContract, type z } from '@flybyme/mesh';
 
 import { gateOf, keyOf, type ExposeEntry, type Gate } from './expose.js';
 
+declare module '@flybyme/mesh' {
+    interface ToolContract<
+        TInput extends z.ZodTypeAny = z.ZodTypeAny,
+        TOutput extends z.ZodTypeAny = z.ZodTypeAny,
+        TPrint = z.infer<TOutput>,
+    > {
+        readonly errors?: readonly string[];
+    }
+}
+
 /** One exposed call, flattened. Everything a client generator or a router needs, and nothing live. */
 export interface DescribedCall {
     /** `domain.action` — the name the browser calls it by. */
@@ -143,20 +153,16 @@ export function describeExposure(
         }
         routes.set(route, key);
 
+        const shape = callShapeOf(contract, key, entry.errors);
         calls.push({
-            key,
+            ...shape,
             domain: contract.domain,
             action: contract.action,
             description: contract.description,
-            method: contract.rest.method.toUpperCase(),
-            path: contract.rest.path,
             gate,
-            input: schemaOf(contract, 'inputSchema'),
-            output: schemaOf(contract, 'outputSchema'),
-            destructive: contract.destructive === true,
-            stream: contract.rest.isStream === true,
-            // Sorted, so a reordered declaration is not a change to the exposure hash.
-            errors: [...(entry.errors ?? [])].sort(),
+            destructive: shape.destructive === true,
+            stream: shape.stream === true,
+            errors: shape.errors ?? [],
         });
     }
 
@@ -168,6 +174,30 @@ export function describeExposure(
     const exposure = hash({ application: options.application, base, calls });
 
     return { application: options.application, base, exposure, shapeHash, calls };
+}
+
+/**
+ * Build the structural shape of a contract call: keys, methods, paths, schemas, and errors.
+ *
+ * One builder used by both `describeExposure` (offline descriptor emission) and `routeTable`
+ * (runtime serving and HTTP exposure validation) so that one exposure produces one hash.
+ */
+export function callShapeOf(
+    contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny>,
+    key?: string,
+    errors?: readonly string[],
+): CallShape {
+    return {
+        key: key ?? `${contract.domain}.${contract.action}`,
+        method: contract.rest.method.toUpperCase(),
+        path: contract.rest.path,
+        input: schemaOf(contract, 'inputSchema'),
+        output: schemaOf(contract, 'outputSchema'),
+        destructive: contract.destructive === true,
+        stream: contract.rest.isStream === true,
+        // Sorted, so a reordered declaration is not a change to the exposure hash.
+        errors: [...(errors ?? contract.errors ?? [])].sort(),
+    };
 }
 
 /**
@@ -283,11 +313,7 @@ export function diffExposure(
     } else {
         for (const route of client.routes) {
             clientMap.set(route.key, {
-                key: route.key,
-                method: route.method,
-                path: route.path,
-                input: schemaOf(route.contract, 'inputSchema'),
-                output: schemaOf(route.contract, 'outputSchema'),
+                ...callShapeOf(route.contract, route.key),
                 gate: route.gate,
             });
         }
@@ -299,11 +325,7 @@ export function diffExposure(
     } else {
         for (const route of api.routes) {
             apiMap.set(route.key, {
-                key: route.key,
-                method: route.method,
-                path: route.path,
-                input: schemaOf(route.contract, 'inputSchema'),
-                output: schemaOf(route.contract, 'outputSchema'),
+                ...callShapeOf(route.contract, route.key),
                 gate: route.gate,
             });
         }

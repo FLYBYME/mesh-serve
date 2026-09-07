@@ -21,7 +21,7 @@
 
 import type { ToolContract, z as Zod } from '@flybyme/mesh';
 import type { ExposedContract, MeshDependency } from '../../cdn/schema/site.js';
-import { type CallShape, hashShape, schemaOf } from '../schema/descriptor.js';
+import { type CallShape, callShapeOf, hashShape } from '../schema/descriptor.js';
 import type { Gate } from '../schema/expose.js';
 
 type AnyContract = ToolContract<Zod.ZodTypeAny, Zod.ZodTypeAny>;
@@ -125,16 +125,7 @@ export function routeTable(
     }
 
     routes.sort((a, b) => a.key.localeCompare(b.key));
-
-    const shapes: CallShape[] = routes.map((route) => ({
-        key: route.key,
-        method: route.method,
-        path: route.path,
-        input: schemaOf(route.contract, 'inputSchema'),
-        output: schemaOf(route.contract, 'outputSchema'),
-        destructive: route.contract.destructive === true,
-        stream: route.contract.rest.isStream === true,
-    }));
+    const shapes: CallShape[] = routes.map((route) => callShapeOf(route.contract, route.key));
 
     return {
         routes,

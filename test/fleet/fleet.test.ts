@@ -77,6 +77,15 @@ describe('Track E: Fleet layer', () => {
         meta: { user: { id: 'op-user', tenant_id: 'platform', roles: ['operator'] } },
     };
 
+    const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            if (await predicate()) return;
+            await new Promise((r) => setTimeout(r, 25));
+        }
+        throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    };
+
     afterAll(async () => {
         await supervisor.stopAll();
         await destroyTestApp(app);
@@ -435,6 +444,134 @@ describe('Track E: Fleet layer', () => {
                 };
 
             expect(out.reconciled[0]?.services).toEqual([]);
+        });
+
+        it('group.update converges running services on group members via event without calling node.reconcile', async () => {
+            const group = await broker.call('group.create' as never,
+                { name: 'event-converge-test', services: ['alpha'] } as never, asOperator) as { id: string };
+
+            try {
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    groups: ['event-converge-test'],
+                } as never, asOperator);
+
+                expect(supervisor.serviceStatus('alpha')[0]?.status).toBe('running');
+                expect(supervisor.serviceStatus('beta')[0]?.status).toBe('stopped');
+
+                // Update group with alpha and beta
+                await broker.call('group.update' as never, {
+                    id: group.id,
+                    services: ['alpha', 'beta'],
+                } as never, asOperator);
+
+                // Converges asynchronously via group.updated event without calling node.reconcile
+                await waitFor(() => supervisor.serviceStatus('beta')[0]?.status === 'running');
+                expect(supervisor.serviceStatus('alpha')[0]?.status).toBe('running');
+                expect(supervisor.serviceStatus('beta')[0]?.status).toBe('running');
+            } finally {
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    services: [],
+                    groups: [],
+                } as never, asOperator);
+            }
+        });
+
+        it('group.create converges pre-assigned nodes via event', async () => {
+            try {
+                // Assign testHostname to a group that has not been created yet
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    services: [],
+                    groups: ['pre-created-group'],
+                } as never, asOperator);
+
+                expect(supervisor.serviceStatus('alpha')[0]?.status).toBe('stopped');
+
+                // Create the group
+                await broker.call('group.create' as never, {
+                    name: 'pre-created-group',
+                    services: ['alpha'],
+                } as never, asOperator);
+
+                // Converges asynchronously via group.created event
+                await waitFor(() => supervisor.serviceStatus('alpha')[0]?.status === 'running');
+                expect(supervisor.serviceStatus('alpha')[0]?.status).toBe('running');
+            } finally {
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    services: [],
+                    groups: [],
+                } as never, asOperator);
+            }
+        });
+
+        it('failure on one node in a group does not abort reconciliation for peers', async () => {
+            const wedgedHostname = 'wedged-peer-host';
+            const wedgedNodeId = 'wedged-peer-node';
+
+            app.registry.registerNode({
+                nodeID: wedgedNodeId,
+                hostname: wedgedHostname,
+                available: true,
+                addresses: [],
+                services: [],
+                capabilities: { transports: [], features: [] },
+                metadata: {},
+                nodeSeq: 1,
+                pid: 1,
+                timestamp: Date.now(),
+                bootedAt: Date.now(),
+                cpu: 0,
+                activeRequests: 0,
+                healthScore: 1,
+                trustLevel: 'internal',
+                namespace: 'fleet-test',
+            } as never);
+
+            try {
+                // Pre-create wedged node in DB assigned to isolate-group
+                await broker.call('node.create' as never, {
+                    hostname: wedgedHostname,
+                    groups: ['isolate-group'],
+                    services: [],
+                } as never, asOperator);
+
+                // Assign testHostname to isolate-group
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    groups: ['isolate-group'],
+                    services: [],
+                } as never, asOperator);
+
+                // Create the group with alpha
+                const group = await broker.call('group.create' as never, {
+                    name: 'isolate-group',
+                    services: ['alpha'],
+                } as never, asOperator) as { id: string };
+
+                // testHostname converged to running alpha despite wedged peer
+                await waitFor(() => supervisor.serviceStatus('alpha')[0]?.status === 'running');
+                expect(supervisor.serviceStatus('alpha')[0]?.status).toBe('running');
+
+                // Update group to include beta
+                await broker.call('group.update' as never, {
+                    id: group.id,
+                    services: ['alpha', 'beta'],
+                } as never, asOperator);
+
+                // testHostname converges to running beta despite wedged peer failing
+                await waitFor(() => supervisor.serviceStatus('beta')[0]?.status === 'running');
+                expect(supervisor.serviceStatus('beta')[0]?.status).toBe('running');
+            } finally {
+                app.registry.unregisterNode(wedgedNodeId);
+                await broker.call('node.assign' as never, {
+                    hostname: testHostname,
+                    services: [],
+                    groups: [],
+                } as never, asOperator);
+            }
         });
     });
 
