@@ -150,6 +150,17 @@ export const nodeProvisionContract = defineContract({
     description: 'Provisions a service onto a node by acquiring its repository at a pinned ref, installing dependencies, and registering it in the Supervisor manifest.',
     inputSchema: NodeProvisionInputSchema,
     outputSchema: NodeProvisionOutcomeSchema,
+    /**
+     * Exposable, and gated `operator` by every site that exposes it.
+     *
+     * `public` here means *may be exposed*, never *unauthenticated* — and this is the contract where
+     * that distinction matters most, because provisioning runs `npm install` on a real machine and
+     * therefore executes arbitrary install scripts. Two things stand in front of it and both are
+     * required: the operator gate, and `MESH_PROVISION_ALLOWED_REPOSITORIES`.
+     *
+     * It was internal, which meant the console could offer the form and never call it.
+     */
+    visibility: 'public',
     rest: { method: 'POST', path: '/node/provision' },
     destructive: true,
     print: defaultPrint,
