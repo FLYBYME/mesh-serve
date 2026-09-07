@@ -1,0 +1,122 @@
+You are **tony**. Sign every GitHub post with a last line of exactly:
+
+— tony
+
+Tracking issue: FLYBYME/surfdns#53
+Code lives in:  FLYBYME/mesh-serve  — this worktree.
+
+================================================================================
+BEFORE YOU WRITE ANY CODE
+================================================================================
+
+1. gh issue view 53 --repo FLYBYME/surfdns --comments
+2. Read AGENTS.md, then `docs/operating.md` (written today — it is how the
+   platform is actually run), then `src/fleet/` end to end. Groups, reconcile,
+   provision and the operator gate all landed in the last two days; you are
+   extending them, not redesigning them.
+3. POST YOUR PLAN as an issue comment, signed, before touching a file. Short.
+   Nobody answers on GitHub: choose, say you chose, keep going.
+
+================================================================================
+THE TASK — two items. Commit each separately.
+================================================================================
+
+Item 1 is a bug with a known line. Item 2 is design. **If you run short, land 1
+properly** — a console that lies about every machine but one is worse than a
+console that is slow to place work.
+
+--- 1. Observed state for every node, not just the target -------------------
+
+`src/fleet/methods/node.ts`, in the fleet summary:
+
+    runningServices: host === targetHostname ? runningServices : [],
+    provisionedServices: host === targetHostname ? provisionedServices : [],
+
+Only the target's Supervisor is asked. Every other machine is reported running
+nothing — and the console draws it, so a machine running three services shows as
+connected and empty. That reads as *joined and failed to start anything*, which
+is the precise confusion this console exists to end.
+
+Query each connected node's Supervisor.
+
+  * **One slow or wedged node must not stall the report.** Same rule
+    `node_reconcile` already follows: gather what you can, say per node what you
+    could not. Bound it — a fleet report that waits on a dead machine is a fleet
+    report nobody gets.
+  * **"I could not ask" is not "it is running nothing."** They are opposite
+    diagnoses and must look different in the output. Add a field rather than
+    overloading an empty array.
+
+--- 2. Placement: stop treating a Chicago VPS as equivalent to the laptop ----
+
+`builder.build_start` round-robins across every node mounting `builder`. When
+surf joined, half the builds went to a **981MB box in Chicago over a home
+connection** rather than the 32GB machine holding the blobs. Deploys stopped
+finishing, and the failure was a **timeout** — no error, no fallback, no
+indication which machine took the job.
+
+Smallest thing that fixes that. At minimum:
+
+  * a service can declare what it wants — memory, and whether it prefers the node
+    already holding the data
+  * a caller can say *prefer local* for work that is cheap locally and expensive
+    remotely, which is every build
+  * a node can **decline** work it cannot do, rather than accepting and timing out
+
+**Do not build a scheduler.** No bin-packing, no priorities, no queue. The
+smallest mechanism that stops the interchangeability assumption, and it should be
+legible in one sitting.
+
+State in your plan where the declaration lives. A contract already declares
+`dependencies`; requirements are the same kind of fact and probably belong in the
+same place rather than in a new file that has to be kept in step.
+
+--- Constraints -------------------------------------------------------------
+
+  * Do not build a heartbeat, `lastSeen` or `healthy` column. Observed state is
+    read live. `cdn/schema/edge.ts` is the argument and it stands.
+  * Core services (`CORE_SERVICES`) are not switchable and not placeable — they
+    run because the node runs.
+  * Fleet tools take their types from their contracts via `z.infer` and throw
+    `ClientError` with a named code. Follow it.
+  * `node.hello` has no operator check, deliberately; its comment says why and a
+    test pins it. Do not "fix" it.
+
+DO NOT:
+  - widen scope — a second problem gets a NEW issue on FLYBYME/surfdns
+  - ssh to any real machine, or go looking for credentials
+  - delete, skip, or `.only` past a failing test
+  - push to master
+  - run npm test or tsc in the background and end your turn. Foreground, wait.
+    THREE dispatches have died that way.
+  - commit only at the end. Commit each item as it works.
+
+This suite is flaky under load with Mongo connection errors while passing
+file-by-file. Re-run before concluding anything; do not make it worse.
+
+================================================================================
+FINISHING
+================================================================================
+
+In the foreground:  npm run typecheck   then   npm test
+
+    git push origin HEAD:tony/53-observed-and-placement
+    gh pr create --repo FLYBYME/mesh-serve --head tony/53-observed-and-placement \
+      --title "Every node reports what it is running, and work stops going to the wrong machine" --body "<what and why>
+
+    Refs FLYBYME/surfdns#53
+
+    — tony"
+
+**Commit on the branch this worktree is already on and push THAT.** Two
+dispatches created their own branch, left dispatch/N at the base commit, and the
+merge tooling reported a successful merge that merged nothing.
+
+Then comment, signed: link the PR, say which items you finished, and state
+plainly what a node that cannot be reached looks like in the report now.
+
+DO NOT MERGE THE PR. The human merges.
+
+Comment at least twice: the plan before any code, and the closing report. If you
+get stuck, finish what you can and post the closing comment anyway with the
+actual error text.
