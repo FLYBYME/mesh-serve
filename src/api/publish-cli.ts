@@ -20,9 +20,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { IMeshApp, IServiceToolRegistry } from '@flybyme/mesh';
@@ -39,7 +38,7 @@ export interface PublishArgs {
     readonly repository: string | undefined;
     /** Print what would be published and write nothing. */
     readonly dryRun: boolean;
-    /** API token for machine authentication. Read from --token, MESH_TOKEN, or ~/.mesh/token. */
+    /** API token for machine authentication. Read from --token, MESH_TOKEN, or MESH_API_TOKEN. */
     readonly token: string | undefined;
     /**
      * A node already in the cluster, to join through.
@@ -64,16 +63,8 @@ export function parseArgs(argv: readonly string[]): PublishArgs {
     const bootstrap = value('--bootstrap') ?? process.env['MESH_BOOTSTRAP'];
 
     let token = value('--token') ?? process.env['MESH_TOKEN'] ?? process.env['MESH_API_TOKEN'];
-    if (token === undefined) {
-        try {
-            const tokenPath = resolve(homedir(), '.mesh', 'token');
-            if (existsSync(tokenPath)) {
-                const content = readFileSync(tokenPath, 'utf8').trim();
-                if (content !== '') token = content;
-            }
-        } catch {
-            // Ignore unreadable or missing token file
-        }
+    if (token !== undefined && token.trim() === '') {
+        token = undefined;
     }
 
     return {
@@ -150,9 +141,18 @@ async function originUrl(root: string): Promise<string | undefined> {
 
 export async function run_(argv: readonly string[]): Promise<number> {
     const args = parseArgs(argv);
-    const root = process.cwd();
 
-    const descriptor = parseDescriptor(readFileSync(resolve(args.descriptor), 'utf8'));
+    if (!args.dryRun && args.token === undefined) {
+        process.stderr.write(
+            'No credential. Publishing requires an API token. ' +
+            'Pass --token <token> or set MESH_TOKEN.\n',
+        );
+        return 1;
+    }
+
+    const descriptorPath = resolve(args.descriptor);
+    const root = dirname(descriptorPath);
+    const descriptor = parseDescriptor(readFileSync(descriptorPath, 'utf8'));
     const commit = await currentCommit(root);
     const repository = args.repository ?? await originUrl(root);
 
@@ -160,13 +160,6 @@ export async function run_(argv: readonly string[]): Promise<number> {
         process.stderr.write(
             'No repository. This tree has no `origin` remote, so pass --repository.\n',
         );
-        return 1;
-    }
-
-    if (args.publisher === undefined) {
-        // Not defaulted. A publisher is who may build this part with whatever credential a builder
-        // holds, so guessing one would be guessing at an authorization boundary.
-        process.stderr.write('No publisher. Pass --publisher <organization>.\n');
         return 1;
     }
 
@@ -182,10 +175,11 @@ export async function run_(argv: readonly string[]): Promise<number> {
 
     if (args.dryRun) return 0;
 
-    if (args.token === undefined) {
+    const token = args.token;
+    if (token === undefined) {
         process.stderr.write(
             'No credential. Publishing requires an API token. ' +
-            'Pass --token <token>, set MESH_TOKEN / MESH_API_TOKEN, or write ~/.mesh/token.\n',
+            'Pass --token <token> or set MESH_TOKEN.\n',
         );
         return 1;
     }
@@ -207,28 +201,72 @@ export async function run_(argv: readonly string[]): Promise<number> {
         await cluster.waitFor('identity.api_token_validate', args.timeoutMs);
         await cluster.waitFor('catalog.publish', args.timeoutMs);
 
-        const validation = await cluster.call('identity.api_token_validate', { token: args.token });
+        const validation = await cluster.call('identity.api_token_validate', { token });
         if (!validation.valid) {
             process.stderr.write('\nAuthentication failed: API token is invalid, expired, or revoked.\n');
             return 1;
         }
 
-        if (validation.organizationId === undefined) {
-            process.stderr.write('\nAuthentication failed: API token is not scoped to an organization.\n');
-            return 1;
-        }
+        let publisher: string;
 
-        const publisher = validation.organizationId;
-
-        if (args.publisher !== undefined) {
-            const matchesId = args.publisher === validation.organizationId;
-            const matchesSlug = validation.organizationSlug !== undefined && args.publisher === validation.organizationSlug;
-            if (!matchesId && !matchesSlug) {
-                process.stderr.write(
-                    `\nPublisher "${args.publisher}" does not match token organization ` +
-                    `("${validation.organizationSlug ?? validation.organizationId}").\n`,
-                );
+        if (validation.organizationId !== undefined) {
+            if (args.publisher !== undefined) {
+                const matchesId = args.publisher === validation.organizationId;
+                const matchesSlug = validation.organizationSlug !== undefined && args.publisher === validation.organizationSlug;
+                if (!matchesId && !matchesSlug) {
+                    process.stderr.write(
+                        `\nPublisher "${args.publisher}" does not match token organization ` +
+                        `("${validation.organizationSlug ?? validation.organizationId}").\n`,
+                    );
+                    return 1;
+                }
+            }
+            publisher = validation.organizationId;
+        } else {
+            if (validation.userId === undefined) {
+                process.stderr.write('\nAuthentication failed: API token has no associated user.\n');
                 return 1;
+            }
+
+            await cluster.waitFor('identity.whoami', args.timeoutMs);
+            const me = await cluster.call(
+                'identity.whoami',
+                {},
+                { meta: { user: { id: validation.userId, tenant_id: '' } } },
+            );
+            const memberships = me?.organizations ?? [];
+
+            if (memberships.length === 0) {
+                process.stderr.write('\nAuthentication failed: caller belongs to no organization.\n');
+                return 1;
+            }
+
+            if (args.publisher !== undefined) {
+                const matched = memberships.find(
+                    (m) => m.organizationId === args.publisher || m.name === args.publisher,
+                );
+                if (matched === undefined) {
+                    process.stderr.write(
+                        `\nPublisher "${args.publisher}" does not match caller organization memberships.\n`,
+                    );
+                    return 1;
+                }
+                publisher = matched.organizationId;
+            } else {
+                if (memberships.length === 1) {
+                    const only = memberships[0];
+                    if (only === undefined) {
+                        process.stderr.write('\nAuthentication failed: caller belongs to no organization.\n');
+                        return 1;
+                    }
+                    publisher = only.organizationId;
+                } else {
+                    process.stderr.write(
+                        `\nCaller belongs to ${String(memberships.length)} organizations. ` +
+                        `Pass --publisher <organization> to specify which organization to publish as.\n`,
+                    );
+                    return 1;
+                }
             }
         }
 

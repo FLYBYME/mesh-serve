@@ -82,4 +82,28 @@ describe('arguments', () => {
             publisher: 'flybyme', repository: 'https://x/y.git', dryRun: true,
         });
     });
+
+    it('reads token from MESH_TOKEN environment variable', () => {
+        const orig = process.env['MESH_TOKEN'];
+        try {
+            process.env['MESH_TOKEN'] = 'env-token-xyz';
+            const args = parseArgs([]);
+            expect(args.token).toBe('env-token-xyz');
+        } finally {
+            if (orig === undefined) delete process.env['MESH_TOKEN'];
+            else process.env['MESH_TOKEN'] = orig;
+        }
+    });
+
+    it('prefers --token flag over environment variable', () => {
+        const orig = process.env['MESH_TOKEN'];
+        try {
+            process.env['MESH_TOKEN'] = 'env-token-xyz';
+            const args = parseArgs(['--token', 'flag-token-123']);
+            expect(args.token).toBe('flag-token-123');
+        } finally {
+            if (orig === undefined) delete process.env['MESH_TOKEN'];
+            else process.env['MESH_TOKEN'] = orig;
+        }
+    });
 });
