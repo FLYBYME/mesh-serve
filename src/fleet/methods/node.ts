@@ -225,6 +225,58 @@ export async function node_reconcile(
     return { reconciled };
 }
 
+interface NodeSupervisorQueryResult {
+    runningServices: string[];
+    provisionedServices: string[];
+    services?: ServiceRunStatus[];
+    error?: string;
+}
+
+async function queryNodeSupervisor(
+    broker: unknown,
+    mNode: MeshRegistryNode,
+    timeoutMs = 3000,
+): Promise<NodeSupervisorQueryResult> {
+    const b = broker as {
+        nodeID: string;
+        call(tool: string, input: unknown, options?: { nodeID?: string; timeout?: number }): Promise<unknown>;
+    };
+    try {
+        const callTargetOpt = {
+            ...(mNode.nodeID !== b.nodeID ? { nodeID: mNode.nodeID } : {}),
+            timeout: timeoutMs,
+        };
+        let timer: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`query timed out after ${timeoutMs}ms`)), timeoutMs);
+            timer.unref?.();
+        });
+        try {
+            const statusResult = await Promise.race([
+                b.call('supervisor.service_status', {}, callTargetOpt) as Promise<{ services: ServiceRunStatus[] }>,
+                timeoutPromise,
+            ]);
+            const services = statusResult?.services ?? [];
+            return {
+                services,
+                runningServices: [
+                    ...CORE_SERVICES,
+                    ...services.filter((s) => s.status === 'running').map((s) => s.name),
+                ],
+                provisionedServices: services.map((s) => s.name),
+            };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    } catch (err) {
+        return {
+            runningServices: [],
+            provisionedServices: [],
+            error: `Failed to query supervisor on node "${mNode.hostname ?? mNode.nodeID}": ${err instanceof Error ? err.message : String(err)}`,
+        };
+    }
+}
+
 /**
  * node.status: answers what this node is running and what it is connected to.
  *
@@ -268,35 +320,11 @@ export async function node_status(
     let error: string | undefined;
 
     if (connected && targetMeshNode) {
-        try {
-            const callTargetOpt = targetMeshNode.nodeID !== broker.nodeID ? { nodeID: targetMeshNode.nodeID } : undefined;
-            const statusResult = await broker.call(
-                'supervisor.service_status' as never,
-                {} as never,
-                callTargetOpt,
-            ) as { services: ServiceRunStatus[] };
-
-            services = statusResult.services ?? [];
-
-            /**
-             * Core services are running, and the Supervisor is the wrong thing to ask.
-             *
-             * It reports only what it owns, and it deliberately does not own `api`, `identity` or
-             * `fleet` — the node registers those directly so that no assignment can switch off the
-             * service that receives assignments. Reporting only the Supervisor's view therefore made
-             * a connected, working node display *"assigned but not running: fleet"* about the very
-             * service answering the question.
-             *
-             * If this node answered, its core services are up by definition.
-             */
-            runningServices = [
-                ...CORE_SERVICES,
-                ...services.filter((s) => s.status === 'running').map((s) => s.name),
-            ];
-            provisionedServices = services.map((s) => s.name);
-        } catch (err) {
-            error = `Failed to query supervisor on node "${targetHostname}": ${err instanceof Error ? err.message : String(err)}`;
-        }
+        const targetRes = await queryNodeSupervisor(broker, targetMeshNode);
+        services = targetRes.services;
+        runningServices = targetRes.runningServices;
+        provisionedServices = targetRes.provisionedServices;
+        error = targetRes.error;
     }
 
     // Build fleet summary
@@ -307,19 +335,47 @@ export async function node_status(
         if (mNode.hostname) knownHostnames.add(mNode.hostname);
     }
 
-    const nodesSummary: NodeSummary[] = [];
-    for (const host of knownHostnames) {
+    const nodeSummaryPromises = Array.from(knownHostnames).map(async (host) => {
         const mNode = registryNodes.find((n) => n.hostname === host);
         const dRow = (allDbNodes ?? []).find((r) => r.hostname === host);
-        nodesSummary.push({
+        const isConnected = mNode !== undefined && (mNode.available ?? true);
+
+        if (host === targetHostname) {
+            return {
+                hostname: host,
+                nodeID: mNode?.nodeID,
+                connected: isConnected,
+                desiredServices: dRow?.services ?? [],
+                runningServices,
+                provisionedServices,
+                ...(error !== undefined ? { error } : {}),
+            };
+        }
+
+        if (!isConnected || !mNode) {
+            return {
+                hostname: host,
+                nodeID: mNode?.nodeID,
+                connected: false,
+                desiredServices: dRow?.services ?? [],
+                runningServices: [],
+                provisionedServices: [],
+            };
+        }
+
+        const queryRes = await queryNodeSupervisor(broker, mNode);
+        return {
             hostname: host,
-            nodeID: mNode?.nodeID,
-            connected: mNode !== undefined && (mNode.available ?? true),
+            nodeID: mNode.nodeID,
+            connected: true,
             desiredServices: dRow?.services ?? [],
-            runningServices: host === targetHostname ? runningServices : [],
-            provisionedServices: host === targetHostname ? provisionedServices : [],
-        });
-    }
+            runningServices: queryRes.runningServices,
+            provisionedServices: queryRes.provisionedServices,
+            ...(queryRes.error !== undefined ? { error: queryRes.error } : {}),
+        };
+    });
+
+    const nodesSummary = await Promise.all(nodeSummaryPromises);
 
     return {
         hostname: targetHostname,

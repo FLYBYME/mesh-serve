@@ -89,6 +89,8 @@ export const NodeSummarySchema = z.object({
     desiredServices: z.array(z.string()),
     runningServices: z.array(z.string()),
     provisionedServices: z.array(z.string()).optional(),
+    /** Error encountered when querying this node's supervisor live. */
+    error: z.string().optional(),
 });
 export type NodeSummary = z.infer<typeof NodeSummarySchema>;
 

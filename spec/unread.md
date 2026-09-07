@@ -125,11 +125,12 @@ one test reads it and no reviewer can.
 `artifact.builtAt`, `build.startedAt`, `part.publishedAt`, `release.composedAt`,
 `principals.createdAt`, `principals.joinedAt`, `tickets.issuedAt`, `principals.invitedBy`,
 `principals.lastUsedAt`, `principals.suspendedReason`, `tickets.revokedReason`, `tickets.via`,
-`NodeStatusReport.provisionedServices`.
+`NodeStatusReport.provisionedServices`, `NodeSummary.error`.
 
 Timestamps and audit strings are read by people and by queries, not by code. Having no caller is
 their normal state. They are listed so a future run of this audit does not re-raise them.
 `provisionedServices` is read by operators querying `node.status` to see which service switches exist.
+`NodeSummary.error` is read by operators querying `node.status` and fleet consoles to see which connected nodes could not be reached.
 
 The line between this section and §1 is whether the field **encodes an invariant**. `createdAt`
 records something. `builtin` promises something.
