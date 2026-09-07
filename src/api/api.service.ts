@@ -37,7 +37,7 @@ import { hostOf } from '../cdn/methods/hostname.js';
 import { describeContract } from './contracts/api.contract.js';
 import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
-import { executeGate, SCOPE_HEADER, type Caller } from './methods/gate.js';
+import { executeGate, isOperator, SCOPE_HEADER, type Caller } from './methods/gate.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { eventTable, type EventTable } from './methods/events.js';
 import { matchRoute, routeTable, type ContractLookup, type RouteTable } from './methods/routes.js';
@@ -412,9 +412,9 @@ export class ApiService extends ServiceModule {
             return {
                 userId: current?.userId ?? '',
                 scope: outcome.scope,
-                // An operator sees across organizations, and it is granted by the coarse gate having
-                // admitted them to an admin stream rather than by a role read here.
-                operator: current?.roles.includes('admin') ?? false,
+                // An operator sees across organizations. Platform operator is distinct from admin:
+                // only a caller holding the operator role has cross-organization operator visibility.
+                operator: isOperator(current),
             };
         };
 
