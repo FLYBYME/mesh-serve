@@ -272,6 +272,27 @@ Nothing resolves until this exists. Every version a site names is a row here.
       knows it is releasing a set, so the event it fires at the end should describe the set. That
       keeps `release_part` firing per part for the case where a part really is released alone. **S**
 
+- [ ] **C10 ★ A kernel ships with the extensions it cannot run without.** A release names one kernel
+      and a set of parts, and every part is equally optional — so a release composed with a kernel
+      and nothing else is valid, resolves, deploys, and renders a blank page. The kernel needs a
+      chrome to draw windows into and an auth Extension to hold a session; a page without them is
+      not a smaller page, it is a broken one.
+      `requiredParts` already exists and already says this — *"a kernel may declare these too. A
+      kernel that ships no chrome and expects one is stating a real requirement, and the alternative
+      is a bare kernel rendering nothing with no explanation"* (`schema/descriptor.ts`). It is
+      resolved transitively at compose. **So the mechanism is built and the kernel does not use it**:
+      mesh-web declares none, because its `mesh.json` describes a kernel with no dependencies, which
+      was true when nothing else existed.
+      Two ways to say it and they are not the same. `requiredParts` on the kernel's *version* makes
+      compose pull them in and refuse without them, which is the existing machinery and the smaller
+      change. A **bundled** set — shipped inside the kernel artifact — is a different claim: that
+      those extensions are not separately versioned or replaceable, which contradicts the whole
+      reason a part is its own artifact ("installing an extension is not a site rebuild"). Prefer
+      the first unless there is something a page genuinely cannot boot without having *already*
+      loaded, in which case say what and why, because that is a real exception to the model.
+      What it needs beyond declaring: the resolver must not let a required part be omitted at
+      compose, and the console should not offer to remove one. **M** · ⛔ B2
+
 ## Track D — The api
 
 - [x] **D1a ★ Server-sent events.** *(built 2026-09-06)* `methods/stream.ts` on `node:http`, an
