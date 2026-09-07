@@ -114,6 +114,96 @@ const blobRoot = flag('artifacts', process.env.MESH_BLOB_ROOT ?? './.artifacts')
 const bootstrap = (flag('bootstrap', process.env.MESH_BOOTSTRAP ?? '') || '')
     .split(',').map((n) => n.trim()).filter((n) => n !== '');
 
+/**
+ * Say where the credential is going, without printing it.
+ *
+ * Hoisted above the banner because the pre-flight below needs it too — a diagnostic that leaks the
+ * password while explaining why the password did not work would be its own incident.
+ */
+const safeUri = (uri) => uri.replace(/^(\w+(?:\+\w+)?:\/\/)([^@/]*)@/, (_all, scheme, userinfo) =>
+    `${scheme}${String(userinfo).split(':')[0]}:***@`);
+
+/**
+ * **Connect once, quickly, and say what went wrong.**
+ *
+ * `DatabaseModule` builds `new MongoClient(uri)` with no options, so it inherits the driver's
+ * 30-second server-selection default and prints nothing at all while it waits. Pointing a node at
+ * Atlas for the first time therefore looks exactly like a hang: `Starting module: database`, then
+ * half a minute of silence, then a stack trace — and the stack trace names `MongoServerSelectionError`,
+ * which is the same message for a wrong password, an unlisted IP and a typo in the hostname.
+ *
+ * Those three have completely different fixes and only one of them is in this repository, so this
+ * asks first, with a short timeout, and translates the answer. It changes nothing about how the
+ * node connects — `DatabaseModule` still opens its own client immediately afterwards — it just
+ * makes the ten seconds before a failure informative instead of blank.
+ */
+async function preflightDatabase(uri, name) {
+    process.stdout.write(`connecting to ${safeUri(uri)}/${name} ... `);
+
+    const { MongoClient } = await import('mongodb');
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
+
+    try {
+        await client.connect();
+        await client.db(name).command({ ping: 1 });
+        process.stdout.write('ok\n');
+        return true;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stdout.write('FAILED\n\n');
+
+        // Each branch is a different person's problem: the first two are in the Atlas console, the
+        // third is in `.env`, and only the last is worth reading a stack trace over.
+        if (/bad auth|Authentication failed/i.test(message)) {
+            process.stderr.write(
+                `The cluster answered and refused the credential.\n` +
+                `  · check the username and password in ${envFile ?? '.env'}\n` +
+                `  · a password with @ : / or ? in it must be percent-encoded in a URI\n`,
+            );
+        } else if (/querySrv|ENOTFOUND|EAI_AGAIN/i.test(message)) {
+            process.stderr.write(
+                `The cluster hostname did not resolve, so nothing was contacted.\n` +
+                `  · check the host in MONGODB_URI against the Atlas connect dialog\n` +
+                `  · mongodb+srv:// needs working DNS SRV lookups from this machine\n`,
+            );
+        } else if (/ECONNREFUSED/i.test(message)) {
+            /**
+             * **Refused is not the same as ignored**, and saying so is the whole value of this.
+             *
+             * Something answered and said no, which means the address and the port are right and
+             * nothing is listening there. A firewall or an allowlist does not refuse — it drops,
+             * and that is the branch below. Leading with *"check the IP allowlist"* here would send
+             * somebody to the Atlas console over a mongo they forgot to start.
+             */
+            process.stderr.write(
+                `Nothing is listening there — the connection was refused, not dropped.\n` +
+                `  · start the database, or check the host and port in MONGODB_URI\n` +
+                `  · a container that exited looks exactly like this\n`,
+            );
+        } else if (/ServerSelection|timed out|ETIMEDOUT/i.test(message)) {
+            process.stderr.write(
+                `The cluster did not answer within 10s — dropped rather than refused, which is what\n` +
+                `a firewall does. **On Atlas this is almost always the IP allowlist.**\n` +
+                `  · Atlas → Network Access → add this machine's current address\n` +
+                `  · a home or office address changes; one that worked last week may not now\n`,
+            );
+        } else {
+            process.stderr.write(`${message}\n`);
+        }
+
+        process.stderr.write(`\n${message}\n`);
+        return false;
+    } finally {
+        await client.close().catch(() => {});
+    }
+}
+
+if (!await preflightDatabase(mongo, dbName)) {
+    // Exit rather than hand a URI that is known not to work to the framework, which would spend
+    // another 30 seconds arriving at the same conclusion less usefully.
+    process.exit(1);
+}
+
 const app = new MeshApp({ nodeID: flag('id', os.hostname()) });
 
 app.use(new RegistryModule());
@@ -249,10 +339,7 @@ await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
  * A banner exists to say *where am I pointed*, which the host and database name answer completely.
  * The credential was never part of the question.
  */
-const safeMongo = mongo.replace(/^(\w+(?:\+\w+)?:\/\/)([^@/]*)@/, (_all, scheme, userinfo) => {
-    const user = String(userinfo).split(':')[0];
-    return `${scheme}${user}:***@`;
-});
+const safeMongo = safeUri(mongo);
 
 process.stdout.write(
     `\nmesh-serve is up\n` +

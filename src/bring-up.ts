@@ -660,8 +660,27 @@ export async function main(): Promise<void> {
             return;
         }
 
+        /**
+         * Which machine runs what, and **why this is a flag rather than a constant.**
+         *
+         * `builder.build_start` declares `requirements: { memory: 2048 }` and refuses below it with
+         * a 507. surf has 981MB. So assigning the default set to surf produces a node that accepts
+         * `catalog` and `cdn` and then declines every single build — correctly, and confusingly, in
+         * the middle of a bring-up that looked like it was working.
+         *
+         *     --services catalog,cdn        on a small public node
+         *     --services builder            on a box with the memory for it
+         *
+         * The refusal is the fix for an earlier failure, not a new limitation: builds used to
+         * round-robin onto surf, which then missed its pings mid-bundle and dropped off the mesh.
+         */
         const node = optional('node');
-        await assignServices(ctx, as, { ...(node === undefined ? {} : { hostname: node }) });
+        const services = optional('services')?.split(',').map((s) => s.trim()).filter((s) => s !== '');
+
+        await assignServices(ctx, as, {
+            ...(node === undefined ? {} : { hostname: node }),
+            ...(services === undefined ? {} : { services }),
+        });
 
         /**
          * The kernel repository first, then everything built against it.
