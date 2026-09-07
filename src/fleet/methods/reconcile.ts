@@ -12,7 +12,7 @@
 
 import type { IServiceContext } from '@flybyme/mesh';
 
-import type { GroupRecord, NodeRecord } from '../schema/node.js';
+import { CORE_SERVICES, type GroupRecord, type NodeRecord } from '../schema/node.js';
 
 export interface ReconcileOutcome {
     readonly hostname: string;
@@ -103,8 +103,16 @@ export async function reconcileNode(
         );
         const wanted = new Set(services);
 
-        const toStop = [...running].filter((s) => !wanted.has(s));
-        const toStart = services.filter((s) => !running.has(s));
+        /**
+         * Core services are already satisfied, by definition.
+         *
+         * They run because the node runs — the Supervisor does not own them, so it does not report
+         * them and cannot start them. Without this filter, assigning `api` produced *"Unknown
+         * service"* and, before the per-service tolerance below, took the rest of the node's
+         * reconcile with it.
+         */
+        const toStop = [...running].filter((s) => !wanted.has(s) && !CORE_SERVICES.includes(s));
+        const toStart = services.filter((s) => !running.has(s) && !CORE_SERVICES.includes(s));
 
         /**
          * **One service that will not switch must not fail the node.**

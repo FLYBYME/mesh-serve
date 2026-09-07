@@ -40,6 +40,24 @@ export type NodeRecord = z.infer<typeof NodeSchema>;
  * Deliberately thin: a name and a list. Everything that makes a group *useful* — that editing one
  * changes every node in it — is behaviour in `reconcile`, not a field here.
  */
+/**
+ * Services every node runs and no assignment can switch.
+ *
+ * **A node that can be told to switch off the service that receives its orders cannot be told
+ * anything again.** `fleet` answers *what should I be running*; `identity` and `api` are how a
+ * person authenticates to give the order at all. A node that went dark because somebody unticked
+ * one of these would need a drive to a datacentre.
+ *
+ * So the runner registers them directly and the Supervisor never owns them — which means
+ * `supervisor.service_start` does not know their names, and assigning one used to answer
+ * *"Unknown service: api"* and abandon the whole reconcile.
+ *
+ * **One list, two readers**: `bin/node.mjs` registers exactly these directly, and `reconcileNode`
+ * treats them as permanently satisfied. Two copies of this list would disagree on the day somebody
+ * adds a fourth, and the symptom would be a node that cannot converge.
+ */
+export const CORE_SERVICES: readonly string[] = ['api', 'identity', 'fleet', 'supervisor'];
+
 export const GroupSchema = z.object({
     name: z.string().min(1),
     services: z.array(z.string()).default([]),

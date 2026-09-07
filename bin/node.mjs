@@ -25,6 +25,9 @@ import { fileURLToPath } from 'node:url';
 
 import { ApiService } from '../dist/api/api.service.js';
 import { FleetService } from '../dist/fleet/fleet.service.js';
+// The one list. `reconcileNode` reads it too and treats these as permanently satisfied; two copies
+// would disagree the day somebody adds a fourth, and the symptom is a node that cannot converge.
+import { CORE_SERVICES } from '../dist/fleet/schema/node.js';
 import { Supervisor } from '../dist/supervisor/Supervisor.js';
 import { SupervisorService } from '../dist/supervisor/SupervisorService.js';
 
@@ -123,7 +126,10 @@ for (const [name, path] of [
 const assignment = await app.call('node.hello', { hostname: app.nodeID }).catch(() => null);
 const desired = assignment?.services ?? [];
 
-for (const name of desired.length > 0 ? desired : ['catalog', 'builder', 'cdn']) {
+const switchable = (desired.length > 0 ? desired : ['catalog', 'builder', 'cdn'])
+    .filter((name) => !CORE_SERVICES.includes(name));
+
+for (const name of switchable) {
     await supervisor.serviceStart(name).catch((error) => {
         process.stderr.write(`[node] could not start ${name}: ${String(error?.message ?? error)}\n`);
     });

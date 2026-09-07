@@ -18,7 +18,7 @@ import type {
     nodeAssignContract, nodeHelloContract, nodeProvisionContract, nodeReconcileContract,
     nodeStatusContract,
 } from '../contracts/node.contract.js';
-import type { GroupRecord, NodeRecord, NodeSummary, ServiceRunStatus } from '../schema/node.js';
+import { CORE_SERVICES, type GroupRecord, type NodeRecord, type NodeSummary, type ServiceRunStatus } from '../schema/node.js';
 import { nodesInGroup, reconcileNode } from './reconcile.js';
 
 const run = promisify(execFile);
@@ -277,7 +277,22 @@ export async function node_status(
             ) as { services: ServiceRunStatus[] };
 
             services = statusResult.services ?? [];
-            runningServices = services.filter((s) => s.status === 'running').map((s) => s.name);
+
+            /**
+             * Core services are running, and the Supervisor is the wrong thing to ask.
+             *
+             * It reports only what it owns, and it deliberately does not own `api`, `identity` or
+             * `fleet` — the node registers those directly so that no assignment can switch off the
+             * service that receives assignments. Reporting only the Supervisor's view therefore made
+             * a connected, working node display *"assigned but not running: fleet"* about the very
+             * service answering the question.
+             *
+             * If this node answered, its core services are up by definition.
+             */
+            runningServices = [
+                ...CORE_SERVICES,
+                ...services.filter((s) => s.status === 'running').map((s) => s.name),
+            ];
             provisionedServices = services.map((s) => s.name);
         } catch (err) {
             error = `Failed to query supervisor on node "${targetHostname}": ${err instanceof Error ? err.message : String(err)}`;
