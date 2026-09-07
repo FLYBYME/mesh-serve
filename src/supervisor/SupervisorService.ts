@@ -1,0 +1,102 @@
+import { z } from 'zod';
+import { ServiceModule, defineContract, defaultPrint } from '@flybyme/mesh';
+import type { Supervisor, SupervisorServiceStatus, SupervisorTestRunResult } from './Supervisor.js';
+
+export const supervisorStatusSchema = z.object({
+    name: z.string(),
+    domain: z.string().optional(),
+    status: z.enum(['stopped', 'running', 'error']),
+    dependsOn: z.array(z.string()),
+    error: z.string().optional(),
+});
+
+export const serviceStartContract = defineContract({
+    domain: 'supervisor',
+    action: 'service_start',
+    description: 'Starts one manifest-defined service by name, in this Supervisor process, if its dependencies are already running.',
+    inputSchema: z.object({ name: z.string() }),
+    outputSchema: supervisorStatusSchema,
+    rest: { method: 'POST', path: '/supervisor/service_start' },
+    destructive: true,
+    print: defaultPrint,
+});
+
+export const serviceStopContract = defineContract({
+    domain: 'supervisor',
+    action: 'service_stop',
+    description: 'Stops one running manifest-defined service by name. Fails if other running services still depend on it, unless cascade is set.',
+    inputSchema: z.object({ name: z.string(), cascade: z.boolean().optional() }),
+    outputSchema: supervisorStatusSchema,
+    rest: { method: 'POST', path: '/supervisor/service_stop' },
+    destructive: true,
+    print: defaultPrint,
+});
+
+export const serviceRestartContract = defineContract({
+    domain: 'supervisor',
+    action: 'service_restart',
+    description: 'Restarts one manifest-defined service by name: stops it, then starts a fresh instance.',
+    inputSchema: z.object({ name: z.string() }),
+    outputSchema: supervisorStatusSchema,
+    rest: { method: 'POST', path: '/supervisor/service_restart' },
+    destructive: true,
+    print: defaultPrint,
+});
+
+export const serviceStatusContract = defineContract({
+    domain: 'supervisor',
+    action: 'service_status',
+    description: 'Reports the current status of one (or, if name is omitted, every) manifest-defined service in this Supervisor process.',
+    inputSchema: z.object({ name: z.string().optional() }),
+    outputSchema: z.object({ services: z.array(supervisorStatusSchema) }),
+    rest: { method: 'GET', path: '/supervisor/service_status' },
+    destructive: false,
+    print: defaultPrint,
+});
+
+export const testOutcomeSchema = z.object({
+    name: z.string(),
+    ok: z.boolean(),
+    error: z.string().optional(),
+});
+
+export const runTestsContract = defineContract({
+    domain: 'supervisor',
+    action: 'run_tests',
+    description: "Runs one manifest-defined service's associated tests (its testsPath module) for real, against its currently-running instance. Pass testName to run just one test, omit it to run all.",
+    inputSchema: z.object({ name: z.string(), testName: z.string().optional() }),
+    outputSchema: z.object({ passed: z.number(), failed: z.number(), results: z.array(testOutcomeSchema) }),
+    rest: { method: 'POST', path: '/supervisor/run_tests' },
+    destructive: false,
+    print: defaultPrint,
+});
+
+/**
+ * SupervisorService — exposes the Supervisor's control surface as real mesh
+ * contracts, callable the same way anything else in the mesh is called.
+ * Mounted specially, before the dynamic services it manages (see
+ * docs/SUPERVISOR_AND_SERVICE_LIFECYCLE.md, Part 2 "Control surface").
+ */
+export class SupervisorService extends ServiceModule {
+    public readonly domain = 'supervisor';
+
+    constructor(supervisor: Supervisor) {
+        super();
+
+        this.mountTool(serviceStartContract, async (input) => supervisor.serviceStart(input.name));
+
+        this.mountTool(serviceStopContract, async (input) =>
+            supervisor.serviceStop(input.name, { cascade: input.cascade })
+        );
+
+        this.mountTool(serviceRestartContract, async (input) => supervisor.serviceRestart(input.name));
+
+        this.mountTool(serviceStatusContract, async (input) => ({
+            services: supervisor.serviceStatus(input.name),
+        }));
+
+        this.mountTool(runTestsContract, async (input) => supervisor.runTests(input.name, input.testName));
+    }
+}
+
+export default SupervisorService;

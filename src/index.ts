@@ -18,6 +18,17 @@ export { ApiService } from './api/api.service.js';
 export { BuilderService } from './builder/builder.service.js';
 export { CatalogService } from './catalog/catalog.service.js';
 export { CdnService } from './cdn/cdn.service.js';
+export { Supervisor, loadManifest, topologicalOrder } from './supervisor/Supervisor.js';
+export type {
+    SupervisorManifest,
+    SupervisorServiceEntry,
+    SupervisorServiceStatus,
+    SupervisorRunStatus,
+    SupervisorTestContext,
+    SupervisorTestOutcome,
+    SupervisorTestRunResult,
+} from './supervisor/Supervisor.js';
+export { SupervisorService } from './supervisor/SupervisorService.js';
 
 // ---------------------------------------------------------------------------- contracts
 
