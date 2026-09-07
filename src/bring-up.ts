@@ -387,9 +387,46 @@ export async function importRepository(
 export async function releaseRepository(
     ctx: BringUpContext,
     as: Caller,
-    options: { repository: string; bump?: 'patch' | 'minor' | 'major'; branch?: string },
+    options: {
+        repository: string;
+        bump?: 'patch' | 'minor' | 'major';
+        branch?: string;
+        /**
+         * Pin one part's label instead of minting it — in practice, the kernel's.
+         *
+         * **Minted labels and declared ranges can come apart, and for the kernel that is fatal.**
+         * Every other part declares `kernel: ^0.15`, meaning the kernel's *real* version. The
+         * catalog mints from its own sequence, which had reached `0.16.0` from an earlier
+         * deployment, so the same commit was published as `0.16.1` — correct by the catalog's
+         * rules, and unsatisfiable by every part that names it.
+         *
+         * A part nobody depends on can carry any label. The kernel cannot, so its label is pinned
+         * to what it actually is. Relabelling is cheap and lossless: `(partName, commit)` is the
+         * identity, so this moves the label on the existing row and touches neither the artifact
+         * nor any release already pinning its digest.
+         */
+        readonly pin?: Readonly<Record<string, string>>;
+    },
 ): Promise<{ released: readonly { part: string; version: string }[]; failed: number }> {
     console.log(`[builder] releasing ${options.repository}`);
+
+    /**
+     * A pinned part is released on its own, because `release_repo` mints for everything it does.
+     * Everything else in the repository still goes through the batch, which is what orders kernels
+     * first and collects failures.
+     */
+    for (const [part, version] of Object.entries(options.pin ?? {})) {
+        const pinned = await ctx.broker.call('builder.release_part', {
+            part, version, bump: 'patch',
+            ...(options.branch === undefined ? {} : { branch: options.branch }),
+        }, { ...as, timeout: BUILD_TIMEOUT_MS }).catch((error: unknown) => {
+            console.error(`[builder]   ${part} pinned release FAILED — ${String(error)}`);
+            return undefined;
+        });
+        if (pinned !== undefined) {
+            console.log(`[builder]   ${pinned.part}@${pinned.version} ${pinned.commit.slice(0, 12)} (pinned)`);
+        }
+    }
 
     const result = await ctx.broker.call('builder.release_repo', {
         repository: options.repository,
@@ -435,9 +472,22 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
     const USER = new Set([
         'identity.whoami', 'identity.sign_out', 'identity.ticket_revoke',
         'catalog.resolve', 'builder.get_artifact', 'builder.artifact_blob',
-        'node.status',
     ]);
     if (USER.has(key)) return 'user';
+
+    /**
+     * **The fleet answers operators, including its reads.**
+     *
+     * `node.status` was in the `user` set above and that was wrong in the way that is hardest to
+     * see: the site let the request through the gate, and then `requireOperator` inside the handler
+     * refused it — a 403 on a call the site had promised a signed-in user could make. The gate and
+     * the contract disagreed, and the gate is the half a person configures.
+     *
+     * A gate can be stricter than a handler safely; the reverse is a promise the platform will not
+     * keep. So everything the fleet owns matches what its handlers actually demand — what machines
+     * exist and what each is running is operator business either way.
+     */
+    if (/^(node|group)\./.test(key)) return 'operator';
 
     /**
      * Generated reads.
@@ -733,10 +783,25 @@ export async function main(): Promise<void> {
 
             if (has('import-only')) continue;
 
+            /**
+             * The kernel's label is pinned to its real version when one is given.
+             *
+             * `--kernel-version 0.15.11 --kernel-range ^0.15` is the shape: the kernel is the one
+             * part every other part names a range against, so its label has to mean what the parts
+             * think it means. Everything else is minted.
+             */
+            const pinnedKernel = optional('kernel-version');
+            const kernelPart = [...kinds].find(([, kind]) => kind === 'kernel')?.[0];
+            const pin = pinnedKernel !== undefined && kernelPart !== undefined
+                && declared.some((part) => part.name === kernelPart)
+                ? { [kernelPart]: pinnedKernel }
+                : undefined;
+
             const result = await releaseRepository(ctx, as, {
                 repository,
                 bump: 'patch',
                 ...(ref === undefined ? {} : { branch: ref }),
+                ...(pin === undefined ? {} : { pin }),
             });
             for (const part of result.released) versions.set(part.part, part.version);
             failures += result.failed;
@@ -790,13 +855,19 @@ export async function main(): Promise<void> {
             }))
             .sort((a, b) => (a.id < b.id ? -1 : 1));
 
+        // Resolved once and both used and printed, because these were two expressions and the log
+        // rendered the derived range while the call used the override — so it reported composing
+        // `^0.16` while composing `^0.15`, and the release that came back was a kernel the line on
+        // screen said had not been asked for.
+        const kernelRange = optional('kernel-range') ?? rangeFor(kernelVersion);
+
         console.log(
-            `[cdn] composing kernel ${rangeFor(kernelVersion)} with ` +
+            `[cdn] composing kernel ${kernelRange} with ` +
             `${String(parts.length)} part(s): ${parts.map((p) => `${p.id}@${p.version}`).join(', ')}`,
         );
 
         const composed = await composeRelease(ctx, as, {
-            kernel: optional('kernel-range') ?? rangeFor(kernelVersion),
+            kernel: kernelRange,
             parts,
             name: 'console',
             rolling: true,

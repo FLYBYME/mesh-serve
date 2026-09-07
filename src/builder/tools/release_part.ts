@@ -92,16 +92,26 @@ export async function builder_release_part(
     });
 
     /**
-     * A commit already published keeps the label it has.
+     * A commit already published keeps the label it has — **unless the caller asked for one.**
      *
-     * Releasing twice with nothing pushed in between is the ordinary case — somebody clicks the
-     * button again — and minting a second label for identical code would fill the catalog with
-     * numbers that mean nothing. The build still runs, because the *artifact* may be missing even
-     * when the version is not: that is what `gone` is.
+     * Releasing twice with nothing pushed in between is the ordinary case: somebody clicks the
+     * button again, and minting a second label for identical code would fill the catalog with
+     * numbers that mean nothing. So an existing row's label wins over a *minted* one. The build
+     * still runs, because the artifact may be missing when the version is not — that is `gone`.
+     *
+     * It must not win over an *explicit* one, and it did until 2026-09-07. `input.version` sat
+     * behind `already?.version` in the same `??` chain, so asking to relabel a published commit
+     * was silently ignored: the caller got a success naming the old label, which is the worst
+     * possible answer — it looks like the relabel happened.
+     *
+     * Found pinning the kernel. Its commit was published as `0.16.1` because the catalog's own
+     * sequence had reached there, while every part declares `kernel: ^0.15` and means the kernel's
+     * real version. Pinning `0.15.11` reported `0.16.1 (pinned)` and changed nothing, and the
+     * composition kept resolving an older kernel that happened to satisfy the range.
      */
     const already = published.find((row) => row.commit === source.ref);
-    const version = already?.version
-        ?? input.version
+    const version = input.version
+        ?? already?.version
         ?? nextVersion(published.map((row) => row.version), input.bump);
 
     if (input.dryRun === true) {
