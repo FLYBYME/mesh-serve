@@ -6,6 +6,7 @@
  */
 
 import { canonical, digestOf } from '../../builder/methods/content.js';
+import { parse, satisfies } from '../../catalog/methods/semver.js';
 import type { PinnedArtifact } from '../schema/release.js';
 
 export interface Composition {
@@ -52,14 +53,20 @@ export interface Requirement {
 }
 
 export interface CompositionProblem {
-    readonly kind: 'missing_part' | 'missing_optional' | 'unmet_contract' | 'unused_grant';
+    readonly kind: 'missing_part' | 'missing_optional' | 'unmet_contract' | 'unused_grant' | 'kernel_mismatch';
     readonly message: string;
+}
+
+export interface KernelCheck {
+    readonly version: string;
+    /** Declared kernel ranges by part name. Absent or undefined means no kernel requirement. */
+    readonly ranges?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
  * Does this set of parts actually hold together?
  *
- * Three checks, and the difference between them is the point:
+ * Four checks, and the difference between them is the point:
  *
  * **A required part that is absent → refuse.** An Application consuming `AUTH` on a page with no auth
  * Extension is a blank panel and a console error. Finding out at compose time is the difference
@@ -73,12 +80,18 @@ export interface CompositionProblem {
  *
  * A grant with nothing requiring it is reported, never refused: that is the route somebody left
  * behind when they deleted the screen that used it, and it is worth seeing without being fatal.
+ *
+ * **A kernel range that is not satisfied → refuse.** A part built against `^0.6` served on a kernel
+ * at `0.11` or `0.13` breaks in the browser. Stating the incompatibility at compose time is the
+ * whole reason `partVersion.kernel` is stored. An absent range is not a mismatch: a kernel artifact
+ * has no kernel requirement, and parts published before the field existed are accepted.
  */
 export function checkComposition(
     present: readonly string[],
     required: readonly Requirement[],
     requiredContracts: readonly string[],
     grantedContracts: readonly string[],
+    kernel?: KernelCheck,
 ): readonly CompositionProblem[] {
     const problems: CompositionProblem[] = [];
     const have = new Set(present);
@@ -115,9 +128,22 @@ export function checkComposition(
         });
     }
 
+    if (kernel !== undefined && kernel.version !== '' && kernel.ranges !== undefined) {
+        const kernelSemver = parse(kernel.version) !== undefined ? kernel.version : `${kernel.version}.0`;
+        for (const [part, range] of Object.entries(kernel.ranges)) {
+            if (range === undefined || range === '') continue;
+            if (!satisfies(kernelSemver, range)) {
+                problems.push({
+                    kind: 'kernel_mismatch',
+                    message: `${part} requires kernel ${range}, but this release serves ${kernel.version}.`,
+                });
+            }
+        }
+    }
+
     return problems;
 }
 
 /** Whether a set of problems should stop a compose. Reports are not failures. */
 export const isFatal = (problem: CompositionProblem): boolean =>
-    problem.kind === 'missing_part' || problem.kind === 'unmet_contract';
+    problem.kind === 'missing_part' || problem.kind === 'unmet_contract' || problem.kind === 'kernel_mismatch';

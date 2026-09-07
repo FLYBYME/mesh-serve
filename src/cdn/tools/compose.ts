@@ -48,6 +48,7 @@ export async function cdn_compose(
     const pinned: Record<string, PinnedArtifact> = {};
     const required: Requirement[] = [];
     const requires = new Set<string>();
+    const kernelRanges: Record<string, string | undefined> = {};
 
     for (const part of resolved.parts) {
         const version = await ctx.call('partVersion.find_one', {
@@ -66,6 +67,7 @@ export async function cdn_compose(
         }
 
         pinned[part.name] = { version: part.version, digest: version.artifactDigest };
+        kernelRanges[part.name] = version.kernel;
         for (const key of version.requires) requires.add(key);
         for (const need of version.requiredParts) {
             required.push({ by: part.name, id: need.id, version: need.version, optional: need.optional });
@@ -84,11 +86,17 @@ export async function cdn_compose(
         });
     }
 
-    // **Part requirements only.** A release cannot check contracts: what is exposed and at what gate
+    // **Part and kernel requirements only.** A release cannot check contracts: what is exposed and at what gate
     // is the *site's* record, and a release is deliberately site-independent — that is the whole
     // reason a hundred hostnames can share one. So the grant check happens at deploy, where both
     // halves are known, and `requires` is carried on the release for it to check against.
-    problems.push(...checkComposition(Object.keys(pinned), required, [], []));
+    problems.push(...checkComposition(
+        Object.keys(pinned),
+        required,
+        [],
+        [],
+        { version: resolved.kernel.version, ranges: kernelRanges },
+    ));
 
     if (problems.some(isFatal) || kernelDigest === undefined) {
         // Nothing is written. Every problem is reported at once, because somebody composing five
