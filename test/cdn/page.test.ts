@@ -32,7 +32,6 @@ const input = (over: Partial<PageInput> = {}): PageInput => ({
         },
         requires: [],
         policy: {},
-        exposure: 'sha256:exposure',
         composedAt: new Date(0),
         createdAt: new Date(0),
         updatedAt: new Date(0),

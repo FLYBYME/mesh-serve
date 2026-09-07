@@ -84,14 +84,23 @@ export const ReleaseSchema = z.object({
      */
     policy: z.record(z.string(), z.string()).default({}),
 
-    /**
-     * The exposure this release's parts were generated against.
-     *
-     * *A client generated from one exposure and pointed at an API serving another is a lie the
-     * compiler vouches for.* Recorded here so a mismatch is an error at compose time rather than a
-     * confusing 404 three calls later.
-     */
-    exposure: z.string().min(1).optional(),
+    // `exposure` was removed from ReleaseSchema (D4).
+    //
+    // A release is site-independent by design (C1): two organizations composing the same kernel
+    // and parts have composed the same thing. Exposure and gates are per-site (D2): one site may
+    // expose a contract as public while another requires user on the same release.
+    //
+    // An exposure hash computed over gates cannot live on the release — two sites sharing one
+    // release at different gates would need one field to hold two values. Furthermore, compose
+    // runs without a site, so a compose-time gate check is impossible.
+    //
+    // Instead, two distinct hashes exist:
+    // - The Gate Hash: per site, on RouteTable.exposure (and x-exposure header).
+    // - The Shape Hash: site-independent, on client descriptors and RouteTable.shapeHash,
+    //   answering whether the generated client's contract schemas are stale.
+    //
+    // On the release, contract requirements are tracked cleanly by `requires` (checked against
+    // site grants at deploy time).
 
     composedAt: z.date(),
 });

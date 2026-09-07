@@ -48,6 +48,7 @@ export async function api_describe(
         host,
         base: BASE_PATH,
         exposure: table.exposure,
+        shapeHash: table.shapeHash,
         calls: table.routes.map((route) => ({
             key: route.key,
             method: route.method,

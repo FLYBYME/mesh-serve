@@ -118,10 +118,13 @@ export function resolveContracts(
          * *shapes* into a type generator, and the gate is a field `describeExposure` requires — so
          * one value is used uniformly and it means nothing here.
          *
-         * The consequence, and it is worth knowing: **the exposure hash in this file is not the
-         * site's.** A site's hash is computed over real gates. So a part's hash cannot be compared
-         * against what an API reports, and the check has to happen at compose time, where the site's
-         * grants are actually known. See roadmap D4.
+         * The consequence, resolved by roadmap D4: **there are two distinct hashes.**
+         * - `descriptor.shapeHash`: Site-independent, gate-independent hash over contracts, methods,
+         *   paths, and schemas. Identical between the generated client and any API exposing those shapes.
+         *   Answers: *is this generated client stale?*
+         * - `descriptor.exposure`: The gate hash over what a site exposes and at what level.
+         *   Per-site, verified when a client has site context or against `api.describe` / `x-exposure`.
+         * Releases track required contracts via `release.requires`, verified against `site.mesh` at deploy time.
          */
         entries.push({ contract, auth: 'public' });
     }
