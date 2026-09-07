@@ -258,6 +258,20 @@ Nothing resolves until this exists. Every version a site names is a row here.
       Two parts defining the same selector resolve ties via CSS source order; tokens inherit across
       all parts without Shadow DOM. **M**
 
+- [ ] **C9 ★ A rolling release recomposes once per part, not once per repository.** Releasing
+      mesh-core emits `builder.part_released` seven times, and the rolling handler treats each as a
+      reason to re-resolve everything — so one `release_repo` produced **seven** compositions, six of
+      them superseded within seconds of being written, and six deploys that moved nothing
+      (`rolled … (0 site(s))`, 2026-09-07 23:22).
+      Harmless and wrong in three ways. It writes six releases nobody asked for, which is noise in
+      the one collection where every row is supposed to mean a deliberate decision. It deploys the
+      site to an intermediate composition that existed for two seconds. And it made a real failure
+      look routine: the first roll refused with *does not expose builder.import_repo …* — correct,
+      the site had not been granted the new contracts yet — and scrolled past under six more lines.
+      The fix is a debounce with the *repository* as the unit, not the part: `release_repo` already
+      knows it is releasing a set, so the event it fires at the end should describe the set. That
+      keeps `release_part` firing per part for the case where a part really is released alone. **S**
+
 ## Track D — The api
 
 - [x] **D1a ★ Server-sent events.** *(built 2026-09-06)* `methods/stream.ts` on `node:http`, an
