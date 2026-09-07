@@ -31,6 +31,8 @@ export type {
 } from './supervisor/Supervisor.js';
 export { SupervisorService } from './supervisor/SupervisorService.js';
 
+export { TelemService } from './telem/telem.service.js';
+
 // ---------------------------------------------------------------------------- contracts
 
 export * from './api/contracts/api.contract.js';
@@ -41,6 +43,7 @@ export * from './cdn/contracts/release.contract.js';
 export * from './cdn/contracts/site.contract.js';
 export * from './fleet/contracts/node.contract.js';
 export * from './identity/contracts/identity.contract.js';
+export * from './telem/contracts/telem.contract.js';
 
 // ---------------------------------------------------------------------------- records
 
@@ -51,6 +54,7 @@ export * from './catalog/schema/part.js';
 export * from './cdn/schema/edge.js';
 export * from './cdn/schema/site.js';
 export * from './fleet/schema/node.js';
+export * from './telem/schema/telem.js';
 
 // ---------------------------------------------------------------------------- the pure work
 //
@@ -64,3 +68,11 @@ export * from './catalog/methods/semver.js';
 export * from './cdn/methods/hostname.js';
 export * from './cdn/methods/page.js';
 export * from './cdn/methods/resolve.js';
+export * from './telem/methods/config.js';
+export * from './telem/methods/rate-limit.js';
+export * from './telem/sinks/sink.js';
+export * from './telem/sinks/file-sink.js';
+export * from './telem/sinks/collection-sink.js';
+export * from './telem/sinks/composite-sink.js';
+export * from './telem/sinks/default.js';
+

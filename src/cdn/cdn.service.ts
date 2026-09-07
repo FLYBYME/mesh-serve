@@ -46,6 +46,8 @@ import { cdn_compose } from './tools/compose.js';
 import { cdn_deploy } from './tools/deploy.js';
 import { cdn_resolve_site } from './tools/resolve_site.js';
 import { cdn_site_edit } from './tools/site_edit.js';
+import type { TelemSink } from '../telem/sinks/sink.js';
+import { getDefaultTelemSink } from '../telem/sinks/default.js';
 
 /** Only what `resolve_site` needs: one query, bounded. Deliberately not the whole repository. */
 export interface SiteRepo {
@@ -75,6 +77,8 @@ export interface CdnServiceOptions {
     readonly trustForwardedHost?: boolean;
     /** How long a cached site or release may be stale. The backstop, not the mechanism. */
     readonly cacheTtlMs?: number;
+    /** Telemetry sink for recording requests. Falls back to default process sink. */
+    readonly telem?: TelemSink;
 }
 
 export const DEFAULT_TTL_MS = 30_000;
@@ -242,8 +246,25 @@ export class CdnService extends ServiceModule {
     // ------------------------------------------------------------------ serving
 
     async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+        const start = performance.now();
         const host = hostOf(req.headers, this.options.trustForwardedHost ?? false);
         const path = pathOf(req.url ?? '/');
+        const sessionId = (req.headers['x-session-id'] as string) || undefined;
+
+        res.on('finish', () => {
+            const durationMs = Math.round(performance.now() - start);
+            const telem = this.options.telem ?? getDefaultTelemSink();
+            telem.recordRequest({
+                source: 'cdn',
+                host,
+                method: req.method ?? 'GET',
+                path,
+                status: res.statusCode,
+                durationMs,
+                sessionId,
+                tenantId: this.options.tenantId,
+            });
+        });
 
         try {
             if (req.method !== 'GET' && req.method !== 'HEAD') {
