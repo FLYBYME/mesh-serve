@@ -57,7 +57,23 @@ export async function catalog_resolve(
             return undefined;
         }
 
-        const row = published.find((r) => r.version === chosen)!;
+        /**
+         * **The newest row carrying that label wins**, and there can be more than one.
+         *
+         * A label stopped being an identity on 2026-09-07 — `(partName, commit)` is unique now, not
+         * `(partName, version)` — so `0.2.4` may name two commits, and a resolver picking whichever
+         * the database happened to return first would answer differently on two nodes for the same
+         * range. That is the failure mode the catalog exists to prevent, arriving by a different
+         * door, so the tie-break has to be total and it has to be here.
+         *
+         * Most recently published, because a re-publish under an existing label is somebody saying
+         * *this is what that label means now*. What it does not touch is any release already
+         * composed: a release pins digests, so it keeps serving the bytes it resolved to.
+         */
+        const row = published
+            .filter((r) => r.version === chosen)
+            .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime())[0]!;
+
         return { name, version: row.version, commit: row.commit };
     };
 

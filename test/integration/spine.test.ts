@@ -222,19 +222,59 @@ describe.skipIf(!reachable)('the spine, end to end', () => {
         }
     });
 
-    it('is idempotent from the same commit and refuses a different one', async () => {
-        // A CI job that runs twice is not an error. A version republished from different code is,
-        // because every site pinning that range would silently get different bytes.
+    it('is idempotent from the same commit, and a label may be moved to another one', async () => {
+        // A CI job that runs twice is not an error, and this is the case that has always worked.
         const again = await world.call<{ existed: boolean }>('catalog.publish', {
             name: 'fixture-app', kind: 'application', repository: world.repository, publisher: ORG,
             version: '1.0.0', commit: world.commit, entry: 'src/app.ts', kernel: '^0.3',
         });
         expect(again.existed).toBe(true);
 
+        /**
+         * **This was a 409 until 2026-09-07, and the refusal was in the wrong place.**
+         *
+         * The guarantee being protected is that a live site's bytes cannot change underneath it,
+         * and a release pins *digests* — so it holds by construction, without a label ever having
+         * to be immutable. What the 409 actually protected was the label, at the cost of making a
+         * version number a thing that could be spent: publish, discover the tree was dirty, burn
+         * the number, edit `mesh.json`, publish again. Its escape hatch (`MESH_ALLOW_REPUBLISH`)
+         * then mutated a published row in place, which *is* the failure the rule existed to
+         * prevent — an invariant nobody can live with grows a switch that turns it off.
+         *
+         * So a second commit under one label is an ordinary write now, and both rows exist.
+         *
+         * Under its own part name, because moving `fixture-app`'s label would change what every
+         * test after this one builds — and nothing would move it back, since re-publishing an
+         * unchanged commit is idempotent and does not touch the ordering.
+         */
+        const first = await world.call<{ existed: boolean; versionId: string }>('catalog.publish', {
+            name: 'fixture-relabel', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: 'a'.repeat(40), entry: 'src/app.ts', kernel: '^0.3',
+        });
+        const moved = await world.call<{ existed: boolean; versionId: string }>('catalog.publish', {
+            name: 'fixture-relabel', kind: 'application', repository: world.repository, publisher: ORG,
+            version: '1.0.0', commit: 'b'.repeat(40), entry: 'src/app.ts', kernel: '^0.3',
+        });
+        expect(moved.existed).toBe(false);
+        expect(moved.versionId).not.toBe(first.versionId);
+
+        // And `^1.0` resolves to the newer of the two, because a re-publish under an existing label
+        // is somebody saying what that label means from here on.
+        const resolved = await world.call<{ parts: { name: string; commit: string }[] }>(
+            'catalog.resolve',
+            { kernel: '^0.3', parts: [{ name: 'fixture-relabel', version: '^1.0' }] },
+        );
+        expect(resolved.parts[0]?.commit).toBe('b'.repeat(40));
+    });
+
+    it('refuses a second entry from one commit, because that is a second part', async () => {
+        // One commit builds one artifact per part. A repository with two entries publishes two
+        // parts — mesh-core publishes seven from a single commit — and each gets its own name.
+        // Allowing this would leave `artifactDigest` describing bytes the row no longer claims.
         await expect(world.call('catalog.publish', {
             name: 'fixture-app', kind: 'application', repository: world.repository, publisher: ORG,
-            version: '1.0.0', commit: 'b'.repeat(40), entry: 'src/app.ts', kernel: '^0.3',
-        })).rejects.toThrow(/immutable|already published/i);
+            version: '1.0.0', commit: world.commit, entry: 'src/other.ts', kernel: '^0.3',
+        })).rejects.toThrow(/second entry is a second part|entry/i);
     });
 
     it('follows a part that moved repositories, because that is not its identity', async () => {

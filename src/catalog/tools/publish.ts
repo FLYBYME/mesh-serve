@@ -46,74 +46,84 @@ export async function catalog_publish(
     }
 
     const part = await upsertPart.call(this, input, ctx, caller);
+
+    /**
+     * **Found by commit, because the commit is what a row is.**
+     *
+     * It was found by `(partName, version)` until 2026-09-07, and everything that made publishing
+     * painful followed from that one line: a label was an identity, so re-publishing one was a 409,
+     * so the label had to be bumped before every publish, so a repository had to hold its own
+     * version numbers, so `mesh.json` had to be edited to ship a one-line change — and the escape
+     * hatch that made it survivable (`MESH_ALLOW_REPUBLISH`) mutated a published version in place,
+     * which is the one thing the invariant existed to prevent. Both are gone.
+     */
     const existing = await ctx.call('partVersion.find_one', {
-        query: { partName: input.name, version: input.version },
+        query: { partName: input.name, commit: input.commit },
     });
 
     if (existing !== null && existing !== undefined) {
-        // Idempotent when it is the same commit: a CI job that runs twice is not an error.
-        if (existing.commit === input.commit) {
-            return { partId: part.id, versionId: existing.id, existed: true };
+        /**
+         * **One commit builds one artifact per part**, so the entry cannot move under it.
+         *
+         * A repository that builds two entries at one commit is publishing two parts — which is
+         * ordinary and is how mesh-core publishes seven from a single commit — and each of them
+         * gets its own name and its own row. Changing `entry` on an existing row would instead mean
+         * this row's `artifactDigest` describes bytes the row no longer claims to be, which is
+         * exactly the silent-mismatch the digest exists to make impossible.
+         */
+        if (existing.entry !== input.entry || existing.subdirectory !== input.subdirectory) {
+            throw new ClientError(
+                `${input.name} is already published at commit ${input.commit.slice(0, 12)} from ` +
+                `entry ${existing.entry}, and this publishes ${input.entry} from the same commit. ` +
+                `One commit builds one artifact per part — a second entry is a second part, so ` +
+                `publish it under its own name.`,
+                'entry_changed', 409,
+            );
         }
 
         /**
-         * The development escape hatch — **server-side, off by default, and loud.**
+         * A relabel, and nothing else can have changed that matters to the bytes.
          *
-         * Ten versions a day while a thing is being built is not ten releases; it is one release
-         * being edited, and bumping a patch for each round trip buries the real history under noise
-         * and costs a `mesh.json` edit every time. So `MESH_ALLOW_REPUBLISH` lets a version be
-         * overwritten in place.
-         *
-         * **Read from the server's environment, never from the request.** An input flag would let
-         * any publisher decide the catalog's central invariant did not apply to them, which is not
-         * an escape hatch but a hole. The node operator opts in for a whole node, which is a
-         * decision made once, in a place someone can look.
-         *
-         * The row is moved back to `declared` and the artifact is not touched. A version that gets
-         * new bytes has not been built yet by definition, and an artifact is addressed by the hash
-         * of its own content — so a release already pinning the old digest keeps resolving to the
-         * old digest, which is exactly right. Republishing changes what `^0.15` *will* resolve to,
-         * not what an existing release *did*.
+         * `version` is a label now, so moving one is an ordinary write: `0.15.10` may come to mean a
+         * commit that shipped as `0.15.9-rc1` this morning. What a *release* serves does not move
+         * with it — a release pins digests — so this changes what a range will resolve to next time
+         * somebody composes, which is the thing an operator is asking for when they do it.
          */
-        if (process.env['MESH_ALLOW_REPUBLISH'] === '1') {
-            const updated = await ctx.call('partVersion.update', {
-                id: existing.id,
-                commit: input.commit,
-                repository: input.repository,
-                ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
-                entry: input.entry,
-                ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
-                ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
-                requires: input.requires ?? [],
-                capabilities: input.capabilities ?? { needs: [], provides: [] },
-                state: 'declared',
-                publishedAt: new Date(),
-            });
+        const relabelled = existing.version !== input.version;
 
-            // Every republish says so. The one thing worse than a mutable version is a mutable
-            // version nobody can tell happened.
-            ctx.logger.warn(
-                `${input.name}@${input.version} republished from ${existing.commit} to ` +
-                `${input.commit} under MESH_ALLOW_REPUBLISH. A version is normally immutable; ` +
-                `this node has the development hatch on.`,
+        await ctx.call('partVersion.update', {
+            id: existing.id,
+            ...(relabelled ? { version: input.version } : {}),
+            /**
+             * **Provenance, and it does not follow the part.**
+             *
+             * `part.repository` means *where new versions come from* and may move; this means
+             * *where this commit came from* and cannot, because a rebuild is `git fetch
+             * <repository> <commit>` and the new repository has never contained it. Written only
+             * when the row has none — those rows predate the field and have always effectively
+             * used the part's.
+             */
+            ...(existing.repository === undefined ? { repository: input.repository } : {}),
+            ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
+            ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
+            requires: input.requires ?? [],
+            capabilities: input.capabilities ?? { needs: [], provides: [] },
+            // `state` and `artifactDigest` are deliberately untouched. The bytes are a property of
+            // the commit and the entry, both of which are the same — so a re-publish must never
+            // send a built version back to `declared` and make every composition refuse it.
+        });
+
+        if (relabelled) {
+            ctx.logger.info(
+                `[catalog] ${input.name} ${existing.version} → ${input.version} ` +
+                `(commit ${input.commit.slice(0, 12)})`,
             );
-
             ctx.emit('catalog.version_published', {
                 partName: input.name, version: input.version, kind: input.kind, commit: input.commit,
             });
-
-            return { partId: part.id, versionId: updated?.id ?? existing.id, existed: true };
         }
 
-        // **The invariant.** Without it, `^1.0` resolves to bytes that changed underneath it and
-        // every site pinning that range silently gets different code. Both commits are named,
-        // because the useful question is which one is the impostor.
-        throw new ClientError(
-            `${input.name}@${input.version} is already published from commit ${existing.commit}, ` +
-            `and cannot be republished from ${input.commit}. A version is immutable: publish a new ` +
-            `version instead. (A development node may set MESH_ALLOW_REPUBLISH=1 to overwrite.)`,
-            'version_immutable', 409,
-        );
+        return { partId: part.id, versionId: existing.id, existed: true };
     }
 
     const created = await ctx.call('partVersion.create', {

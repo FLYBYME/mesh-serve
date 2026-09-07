@@ -101,7 +101,16 @@ export const buildStartContract = defineContract({
      */
     inputSchema: z.object({
         part: z.string().min(1).describe('→ part.name'),
-        version: z.string().min(1).describe('An exact published version, never a range'),
+        version: z.string().min(1).describe('An exact published label, never a range'),
+        /**
+         * Which commit, when the label names more than one.
+         *
+         * A label stopped being unique on 2026-09-07 — `(partName, commit)` is the identity — so
+         * `version` alone resolves to *the most recently published row carrying it*, which is what
+         * a person means by "build 0.2.4" and is still ambiguous to a machine. A caller that already
+         * knows the commit says so and gets exactly those bytes.
+         */
+        commit: z.string().regex(/^[0-9a-f]{40}$/).optional(),
         preferLocal: z.boolean().optional().describe('Prefer local execution for work that is cheap locally and expensive remotely'),
     }),
     outputSchema: z.object({

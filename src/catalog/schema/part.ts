@@ -137,21 +137,38 @@ export const PartVersionSchema = z.object({
     partName: z.string().min(1),
 
     /**
-     * An exact semver. Never a range — a range is what a *site* writes.
+     * A semver **label**, and deliberately not an identity.
      *
-     * **Immutable once published.** `(partName, version)` is unique, and a second publish either
-     * matches the recorded commit — idempotent, fine — or is refused naming both commits. Without
-     * that, `^1.4` resolves to bytes that can change underneath it, which is worse than having no
-     * ranges at all.
+     * It was one until 2026-09-07: `(partName, version)` was unique and a second publish of `1.0.0`
+     * from a different commit was refused with a 409. The invariant was right and the *shape* of it
+     * was wrong, because it made a version number a thing that could be spent. Publishing became a
+     * negotiation with the catalog — bump `mesh.json`, publish, discover the tree was dirty, bump
+     * again — and the escape hatch it needed (`MESH_ALLOW_REPUBLISH`, a server-wide environment
+     * variable that let a version be overwritten in place) was the tell: an invariant nobody can
+     * live with grows a switch that turns it off.
+     *
+     * So the label moved off the identity and onto the description. `^1.4` still resolves through
+     * it — that is its whole job — and it no longer decides whether a publish is allowed.
+     *
+     * @see commit, which is the identity now.
      */
     version: z.string().min(1),
 
     /**
-     * The commit this version is, and **the only identity that means anything**.
+     * The commit this version is, and **the identity of the row**.
      *
-     * A declared semver makes ranges resolvable; the commit makes them honest. It is also what a
-     * rebuild needs: an edge's disk is a cache, so this plus a deterministic build is the entire
-     * durability story.
+     * `(partName, commit)` is unique. Publishing the same commit twice is idempotent no matter what
+     * label comes with it; publishing a new commit always writes a new row, even under a label that
+     * already exists.
+     *
+     * The guarantee that mattered survives intact and is now enforced by construction rather than by
+     * a check: **an artifact is addressed by the hash of its own content and a release pins digests**,
+     * so a release that resolved `^1.4` to some bytes keeps serving exactly those bytes forever.
+     * What republishing changes is what `^1.4` will resolve to *next time somebody composes* — which
+     * is a thing an operator asks for on purpose, not something that happens underneath a live site.
+     *
+     * It is also what a rebuild needs: an edge's disk is a cache, so this plus a deterministic build
+     * is the entire durability story.
      */
     commit: z.string().regex(/^[0-9a-f]{40}$/),
 

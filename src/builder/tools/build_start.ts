@@ -60,13 +60,30 @@ export async function builder_build_start(
         throw new ClientError(`No part named "${input.part}" is published.`, 'part_not_found', 404);
     }
 
-    const version = await ctx.call('partVersion.find_one', {
-        query: { partName: input.part, version: input.version },
-    });
-    if (version === null || version === undefined) {
+    /**
+     * A commit if the caller has one, otherwise the newest row carrying that label.
+     *
+     * `version` is a label rather than an identity since 2026-09-07, so two rows may carry `0.2.4`
+     * and a build has to choose. Newest is what a person means when they type one — and a caller
+     * that cares which bytes it gets names the commit, which is exact.
+     */
+    const candidates = input.commit === undefined
+        ? await ctx.call('partVersion.find', {
+            query: { partName: input.part, version: input.version }, limit: 50,
+        })
+        : await ctx.call('partVersion.find', {
+            query: { partName: input.part, commit: input.commit }, limit: 1,
+        });
+
+    const version = [...candidates]
+        .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime())[0];
+
+    if (version === undefined) {
         throw new ClientError(
-            `${input.part} has no published version ${input.version}. A build takes an exact ` +
-            `version, never a range — resolve it first.`,
+            input.commit === undefined
+                ? `${input.part} has no published version ${input.version}. A build takes an exact ` +
+                  `version, never a range — resolve it first.`
+                : `${input.part} has no version published from commit ${input.commit.slice(0, 12)}.`,
             'version_not_found', 404,
         );
     }
@@ -137,7 +154,9 @@ export async function builder_build_start(
             });
         }
 
-        return { part: input.part, version: input.version, ...built };
+        // The row's own label, not the caller's: a build named by commit may carry a different one,
+        // and the answer should say what was actually built.
+        return { part: input.part, version: version.version, ...built };
     } finally {
         await rm(workspace, { recursive: true, force: true });
     }

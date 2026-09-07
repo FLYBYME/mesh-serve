@@ -58,22 +58,22 @@ export const partVersionCrud = defineCrud('partVersion', PartVersionSchema, {
     pluralPath: 'part-versions',
 
     /**
-     * **This is what makes *a published version is immutable* true rather than likely.**
+     * **A part's source commit is what a row *is*, and this is what makes that true.**
      *
-     * `catalog.publish` checks for an existing version and refuses a different commit, and that
-     * check is correct and cannot be made safe on its own: two publishes of the same version can
-     * interleave between the read and the write, and both succeed. Every version range in the system
-     * rests on that not happening — `^1.4` resolving to bytes that changed underneath it is the
-     * failure the whole catalog exists to prevent.
+     * It was `['partName', 'version']` until 2026-09-07, which made a version number an identity and
+     * therefore a thing that could be spent — see `PartVersionSchema.version` for why that had to
+     * go. Keyed on the commit, the same database guarantee does more useful work: two publishes of
+     * one commit racing each other still cannot produce two rows, and a re-publish under a label
+     * that already exists is an ordinary write rather than a 409.
      *
-     * An application-level check cannot close a race with itself. Only the database refusing the
-     * second write can, which is why this is *making an existing guarantee true* rather than adding
-     * a constraint.
+     * Global, because a commit is global: a repository at `abc123…` is the same code for everybody,
+     * which is the point of publishing it.
      *
-     * Global, because a version is global: `auth@0.1.0` means one commit for everybody, and that is
-     * the point of publishing it.
+     * **Live databases carry the old index.** A cluster that ran the previous version has a unique
+     * index on `(partName, version)` that this declaration does not replace, and it will keep
+     * refusing the second commit under one label until it is dropped. See `scripts/`.
      */
-    unique: [{ fields: ['partName', 'version'], scope: 'global' }],
+    unique: [{ fields: ['partName', 'commit'], scope: 'global' }],
 
     /** Reads only, for the same reason as `part` above. Versions are what a range resolves against. */
     visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },

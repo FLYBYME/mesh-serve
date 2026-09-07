@@ -51,8 +51,17 @@ export async function cdn_compose(
     const kernelRanges: Record<string, string | undefined> = {};
 
     for (const part of resolved.parts) {
+        /**
+         * **By commit, not by label.**
+         *
+         * `catalog.resolve` already did the resolving and its answer names a commit, which is the
+         * identity of a row. Looking the same part back up by its label would re-resolve it here,
+         * badly: a label may name two commits since 2026-09-07, so this could pin a *different*
+         * artifact than the one the resolver chose, and the release would name a version whose
+         * digest belongs to other bytes.
+         */
         const version = await ctx.call('partVersion.find_one', {
-            query: { partName: part.name, version: part.version },
+            query: { partName: part.name, commit: part.commit },
         });
         if (version === null || version === undefined) continue;
 
@@ -75,7 +84,7 @@ export async function cdn_compose(
     }
 
     const kernelVersion = await ctx.call('partVersion.find_one', {
-        query: { partName: resolved.kernel.name, version: resolved.kernel.version },
+        query: { partName: resolved.kernel.name, commit: resolved.kernel.commit },
     });
     const kernelDigest = kernelVersion?.artifactDigest;
 
