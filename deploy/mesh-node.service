@@ -1,0 +1,40 @@
+[Unit]
+Description=mesh-serve node
+Documentation=https://github.com/FLYBYME/mesh-serve
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/mesh-serve
+
+# Secrets and per-machine values live here, not in this unit and not in the
+# command line: an argument is visible in `ps` to every user on the box.
+#   MESH_KEY       the shared key a peer presents at the WebSocket handshake
+#   MONGODB_URI    Atlas, so cluster state lives on no single node
+#   CDN_PORT/URL   what this node advertises to peers for blob fetches
+EnvironmentFile=/etc/mesh/node.env
+
+# --ws-host 0.0.0.0 only on the head. Every other node binds 127.0.0.1 and dials
+# out to it, so exactly one machine has a port on the internet.
+ExecStart=/usr/bin/node bin/node.mjs --ws 4001 --ws-host 0.0.0.0 --cdn 8080 --api 5005 --db mesh-serve-live
+
+# systemd owns the process; the Supervisor owns services inside it. Two
+# supervisors, one boundary: `node.assign` starts and stops services live and
+# must never need a restart, or systemd's restart policy and the fleet's desired
+# state become two authorities over one thing.
+Restart=always
+RestartSec=5
+
+# surf has 981MB of RAM and is the tightest box in the fleet. A node that dies of
+# OOM and is restarted by systemd is recoverable; one that takes the box down
+# with it is a drive to a datacentre.
+MemoryMax=600M
+OOMPolicy=stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mesh-node
+
+[Install]
+WantedBy=multi-user.target

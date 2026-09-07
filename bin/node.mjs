@@ -177,12 +177,30 @@ await app.registerModule(new ApiService({ port: apiPort, authorize }));
 const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
+/**
+ * **The password is not printed, and it was.**
+ *
+ * This banner wrote `mongo` verbatim. Against `mongodb://localhost:27017` that is harmless and it
+ * is what every local run shows, so it survived. The first time this node was pointed at Atlas it
+ * printed a live `mongodb+srv://user:password@…` into the systemd journal — on every boot, readable
+ * by anything that can read journals, and shipped wherever logs get shipped.
+ *
+ * A banner exists to say *where am I pointed*, which the host and database name answer completely.
+ * The credential was never part of the question.
+ */
+const safeMongo = mongo.replace(/^(\w+(?:\+\w+)?:\/\/)([^@/]*)@/, (_all, scheme, userinfo) => {
+    const user = String(userinfo).split(':')[0];
+    return `${scheme}${user}:***@`;
+});
+
 process.stdout.write(
     `\nmesh-serve is up\n` +
-    `  mesh      ws://127.0.0.1:${String(wsPort)}\n` +
+    // The host it actually binds, not a hardcoded loopback: on the head this is 0.0.0.0 and
+    // printing 127.0.0.1 made a node reachable from the internet look like one that was not.
+    `  mesh      ws://${wsHost}:${String(wsPort)}\n` +
     `  cdn       ${cdnUrl}\n` +
     `  api       http://127.0.0.1:${String(apiPort)}\n` +
-    `  mongo     ${mongo}/${dbName}\n` +
+    `  mongo     ${safeMongo}/${dbName}\n` +
     `  artifacts ${blobRoot}\n\n` +
     `Ctrl-C to stop.\n`,
 );
