@@ -10,6 +10,9 @@
  */
 
 import { readScope, type DescribedEvent } from '../schema/events.js';
+import { isOperator, OPERATOR_ROLE } from './gate.js';
+
+export { isOperator, OPERATOR_ROLE };
 
 export interface Subscriber {
     readonly userId: string;
@@ -18,8 +21,8 @@ export interface Subscriber {
     /**
      * A platform operator, who sees across organizations.
      *
-     * Narrow and explicit. It is not "admin" by accident: it is granted by the coarse gate having
-     * admitted them to an `auth: 'admin'` stream, which is itself a decision in the exposure list.
+     * Narrow and explicit. It is not "admin" by accident: an organization admin is not a platform
+     * operator. Established by holding the platform operator role (OPERATOR_ROLE) via isOperator.
      */
     readonly operator: boolean;
 }

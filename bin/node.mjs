@@ -19,10 +19,13 @@ import {
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
+import os from 'node:os';
+
 import { ApiService } from '../dist/api/api.service.js';
 import { BuilderService } from '../dist/builder/builder.service.js';
 import { CatalogService } from '../dist/catalog/catalog.service.js';
 import { CdnService } from '../dist/cdn/cdn.service.js';
+import { FleetService } from '../dist/fleet/fleet.service.js';
 import { createIdentityModule, mongoStore } from '../dist/identity/index.js';
 
 const argv = process.argv.slice(2);
@@ -32,6 +35,7 @@ const flag = (name, fallback) => {
 };
 
 const wsPort = Number(flag('ws', '4001'));
+const wsHost = flag('ws-host', '127.0.0.1');
 const cdnPort = Number(flag('cdn', '8080'));
 const cdnUrl = flag('cdn-url', process.env.CDN_URL ?? `http://127.0.0.1:${String(cdnPort)}`);
 const apiPort = Number(flag('api', '5005'));
@@ -41,13 +45,13 @@ const blobRoot = flag('artifacts', process.env.MESH_BLOB_ROOT ?? './.artifacts')
 const bootstrap = (flag('bootstrap', process.env.MESH_BOOTSTRAP ?? '') || '')
     .split(',').map((n) => n.trim()).filter((n) => n !== '');
 
-const app = new MeshApp({ nodeID: flag('id', `serve-${Math.random().toString(36).slice(2, 7)}`) });
+const app = new MeshApp({ nodeID: flag('id', os.hostname()) });
 
 app.use(new RegistryModule());
 app.use(new DatabaseModule({ uri: mongo, dbName }));
 app.use(new NetworkModule({
     port: wsPort,
-    transports: [new WSTransport(new JSONSerializer(), wsPort)],
+    transports: [new WSTransport(new JSONSerializer(), wsPort, wsHost)],
     bootstrapNodes: bootstrap,
 }));
 app.use(new BrokerModule());
@@ -56,6 +60,7 @@ await app.start();
 
 // After start, always: registerModule queues into pendingModules before it and that flush is
 // unawaited, so a module registered earlier may never be mounted.
+await app.registerModule(new FleetService());
 await app.registerModule(new CatalogService());
 await app.registerModule(new BuilderService({ blobRoot }));
 await app.registerModule(new CdnService({ port: cdnPort, url: cdnUrl, blobRoot }));

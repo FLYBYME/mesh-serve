@@ -18,6 +18,18 @@ export { ApiService } from './api/api.service.js';
 export { BuilderService } from './builder/builder.service.js';
 export { CatalogService } from './catalog/catalog.service.js';
 export { CdnService } from './cdn/cdn.service.js';
+export { FleetService } from './fleet/fleet.service.js';
+export { Supervisor, loadManifest, topologicalOrder } from './supervisor/Supervisor.js';
+export type {
+    SupervisorManifest,
+    SupervisorServiceEntry,
+    SupervisorServiceStatus,
+    SupervisorRunStatus,
+    SupervisorTestContext,
+    SupervisorTestOutcome,
+    SupervisorTestRunResult,
+} from './supervisor/Supervisor.js';
+export { SupervisorService } from './supervisor/SupervisorService.js';
 
 // ---------------------------------------------------------------------------- contracts
 
@@ -27,6 +39,7 @@ export * from './catalog/contracts/part.contract.js';
 export * from './cdn/contracts/edge.contract.js';
 export * from './cdn/contracts/release.contract.js';
 export * from './cdn/contracts/site.contract.js';
+export * from './fleet/contracts/node.contract.js';
 export * from './identity/contracts/identity.contract.js';
 
 // ---------------------------------------------------------------------------- records
@@ -37,6 +50,7 @@ export * from './builder/schema/descriptor.js';
 export * from './catalog/schema/part.js';
 export * from './cdn/schema/edge.js';
 export * from './cdn/schema/site.js';
+export * from './fleet/schema/node.js';
 
 // ---------------------------------------------------------------------------- the pure work
 //

@@ -97,6 +97,18 @@ export interface GateRequest {
 /** The platform role that satisfies `auth: 'admin'`. Organization roles are a different question. */
 export const ADMIN_ROLE = 'admin';
 
+/** The platform role that satisfies `auth: 'operator'`. Organization roles are a different question. */
+export const OPERATOR_ROLE = 'operator';
+
+/**
+ * Does this caller hold platform operator standing?
+ *
+ * One definition across the platform. An organization admin is not a platform operator.
+ */
+export function isOperator(caller: Caller | undefined): boolean {
+    return caller !== undefined && caller.roles.includes(OPERATOR_ROLE);
+}
+
 /**
  * Run the gate.
  *
@@ -179,6 +191,18 @@ function checkCoarse(request: GateRequest): GateOutcome {
                     status: 403,
                     code: 'FORBIDDEN',
                     message: `${key(request.contract)} requires the ${ADMIN_ROLE} role.`,
+                };
+            }
+            return { ok: true };
+
+        case 'operator':
+            if (caller === undefined) return unauthenticated(request);
+            if (!isOperator(caller)) {
+                return {
+                    ok: false,
+                    status: 403,
+                    code: 'FORBIDDEN',
+                    message: `${key(request.contract)} requires the ${OPERATOR_ROLE} role.`,
                 };
             }
             return { ok: true };

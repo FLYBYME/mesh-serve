@@ -21,7 +21,7 @@ import type { ToolContract, z } from '@flybyme/mesh';
  * credential" — belongs inside the handler, because only the handler has the record. A gate that
  * tried to express it would be a second, weaker copy of the same logic.
  */
-export type AuthLevel = 'public' | 'user' | 'admin';
+export type AuthLevel = 'public' | 'user' | 'admin' | 'operator';
 
 /**
  * Failures this call names, beyond the transport ones every call has.
@@ -82,7 +82,7 @@ export function gateOf(entry: ExposeEntry): Gate {
 
     throw new Error(
         `${keyOf(entry)} is exposed with no gate. ` +
-        `Declare auth ('public' | 'user' | 'admin') or a permission — an omitted gate must never ` +
+        `Declare auth ('public' | 'user' | 'admin' | 'operator') or a permission — an omitted gate must never ` +
         `mean open.`,
     );
 }
