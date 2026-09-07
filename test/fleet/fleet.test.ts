@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
     BrokerModule,
@@ -190,8 +192,9 @@ describe('Track E: Fleet layer', () => {
             peers: { nodeID: string }[];
             desiredServices: string[];
             runningServices: string[];
+            provisionedServices: string[];
             services?: { name: string; status: string }[];
-            nodes?: { hostname: string; connected: boolean }[];
+            nodes?: { hostname: string; connected: boolean; provisionedServices?: string[] }[];
         };
 
         expect(status.hostname).toBe(testHostname);
@@ -199,6 +202,7 @@ describe('Track E: Fleet layer', () => {
         expect(status.nodeID).toBe('fleet-test-node');
         expect(status.desiredServices).toEqual(['alpha']);
         expect(status.runningServices).toEqual(['alpha']);
+        expect(status.provisionedServices).toEqual(['alpha', 'beta']);
         expect(status.services?.find((s) => s.name === 'alpha')?.status).toBe('running');
         expect(Array.isArray(status.peers)).toBe(true);
         expect(Array.isArray(status.nodes)).toBe(true);
@@ -426,6 +430,325 @@ describe('Track E: Fleet layer', () => {
                 };
 
             expect(out.reconciled[0]?.services).toEqual([]);
+        });
+    });
+
+    describe('node.provision', () => {
+        let fixtureRepoDir: string;
+        let commitSha: string;
+        let commitSha2: string;
+        let tagRef: string;
+        let servicesRootDir: string;
+
+        beforeAll(() => {
+            fixtureRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-provision-repo-'));
+            servicesRootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-provision-services-'));
+            process.env['MESH_SERVICES_DIR'] = servicesRootDir;
+
+            // Set up a local git repository fixture
+            execSync('git init --quiet', { cwd: fixtureRepoDir });
+            execSync('git config user.name "Test Runner"', { cwd: fixtureRepoDir });
+            execSync('git config user.email "test@example.com"', { cwd: fixtureRepoDir });
+
+            // Copy widget service as entry
+            const widgetCode = fs.readFileSync(path.join(FIXTURES_DIR, 'widget.service.ts'), 'utf-8');
+            fs.writeFileSync(path.join(fixtureRepoDir, 'widget.service.ts'), widgetCode);
+            fs.writeFileSync(path.join(fixtureRepoDir, 'package.json'), JSON.stringify({
+                name: 'provisioned-widget',
+                version: '1.0.0',
+                main: 'widget.service.ts',
+            }));
+
+            execSync('git add .', { cwd: fixtureRepoDir });
+            execSync('git commit -m "feat: initial widget service"', { cwd: fixtureRepoDir });
+            commitSha = execSync('git rev-parse HEAD', { cwd: fixtureRepoDir }).toString().trim();
+
+            tagRef = 'v1.0.0';
+            execSync(`git tag ${tagRef}`, { cwd: fixtureRepoDir });
+
+            // Second commit for update testing
+            fs.writeFileSync(path.join(fixtureRepoDir, 'note.txt'), 'v2 update');
+            execSync('git add .', { cwd: fixtureRepoDir });
+            execSync('git commit -m "feat: update note"', { cwd: fixtureRepoDir });
+            commitSha2 = execSync('git rev-parse HEAD', { cwd: fixtureRepoDir }).toString().trim();
+        });
+
+        afterAll(() => {
+            delete process.env['MESH_SERVICES_DIR'];
+            delete process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'];
+            try {
+                fs.rmSync(fixtureRepoDir, { recursive: true, force: true });
+                fs.rmSync(servicesRootDir, { recursive: true, force: true });
+            } catch {}
+        });
+
+        it('operator gate: refuses caller without operator role or with no caller', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            // No caller at all
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: commitSha,
+                } as never),
+            ).rejects.toThrow(/no caller/i);
+
+            // Non-operator caller
+            const nonOperatorMeta = {
+                meta: { user: { id: 'admin', tenant_id: 'org', roles: ['admin'] } },
+            };
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: commitSha,
+                } as never, nonOperatorMeta),
+            ).rejects.toThrow(/operator/i);
+        });
+
+        it('allowlist: refuses when allowlist is unset, empty, or repo not included', async () => {
+            delete process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'];
+
+            // Unset allowlist fails closed
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: commitSha,
+                } as never, asOperator),
+            ).rejects.toThrow(/allowlist/i);
+
+            // Other repo only
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = 'https://github.com/FLYBYME/other.git';
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: commitSha,
+                } as never, asOperator),
+            ).rejects.toThrow(/allowlist/i);
+        });
+
+        it('ref enforcement: refuses mutable branches (main, master)', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: 'main',
+                } as never, asOperator),
+            ).rejects.toThrow(/not a branch/i);
+
+            await expect(
+                broker.call('node.provision' as never, {
+                    hostname: testHostname,
+                    name: 'widget-prov',
+                    repository: fixtureRepoDir,
+                    ref: 'master',
+                } as never, asOperator),
+            ).rejects.toThrow(/not a branch/i);
+        });
+
+        it('provisions a service, registers it in Supervisor, and makes switch exist for node.assign', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const res = await broker.call('node.provision' as never, {
+                hostname: testHostname,
+                name: 'widget-prov',
+                repository: fixtureRepoDir,
+                ref: commitSha,
+            } as never, asOperator) as {
+                hostname: string;
+                name: string;
+                repository: string;
+                ref: string;
+                applied: boolean;
+                noop: boolean;
+                message: string;
+                path?: string;
+            };
+
+            expect(res.applied).toBe(true);
+            expect(res.noop).toBe(false);
+            expect(res.name).toBe('widget-prov');
+            expect(res.path).toBeTruthy();
+
+            // node.status now lists widget-prov in provisionedServices, but NOT in desired or running
+            const statusBefore = await broker.call('node.status' as never, {
+                hostname: testHostname,
+            } as never, asOperator) as {
+                provisionedServices: string[];
+                desiredServices: string[];
+                runningServices: string[];
+            };
+
+            expect(statusBefore.provisionedServices).toContain('widget-prov');
+            expect(statusBefore.desiredServices).not.toContain('widget-prov');
+            expect(statusBefore.runningServices).not.toContain('widget-prov');
+
+            // Now turn on the switch via node.assign
+            const assignRes = await broker.call('node.assign' as never, {
+                hostname: testHostname,
+                services: ['widget-prov'],
+            } as never, asOperator) as {
+                applied: boolean;
+                started?: string[];
+            };
+
+            expect(assignRes.applied).toBe(true);
+            expect(assignRes.started).toEqual(['widget-prov']);
+
+            // Now runningServices includes widget-prov
+            const statusAfter = await broker.call('node.status' as never, {
+                hostname: testHostname,
+            } as never, asOperator) as {
+                runningServices: string[];
+            };
+            expect(statusAfter.runningServices).toContain('widget-prov');
+
+            // Stop it cleanly
+            await broker.call('node.assign' as never, {
+                hostname: testHostname,
+                services: [],
+            } as never, asOperator);
+        });
+
+        it('no-op: provisioning already-cloned repo to the same ref does not reinstall', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const res = await broker.call('node.provision' as never, {
+                hostname: testHostname,
+                name: 'widget-prov',
+                repository: fixtureRepoDir,
+                ref: commitSha,
+            } as never, asOperator) as {
+                applied: boolean;
+                noop: boolean;
+                message: string;
+            };
+
+            expect(res.applied).toBe(true);
+            expect(res.noop).toBe(true);
+            expect(res.message).toMatch(/already provisioned.*no-op/i);
+        });
+
+        it('updates service when provisioned with a newer pinned ref', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const res = await broker.call('node.provision' as never, {
+                hostname: testHostname,
+                name: 'widget-prov',
+                repository: fixtureRepoDir,
+                ref: commitSha2,
+            } as never, asOperator) as {
+                applied: boolean;
+                noop: boolean;
+            };
+
+            expect(res.applied).toBe(true);
+            expect(res.noop).toBe(false);
+        });
+
+        it('supports provisioning a pinned tag', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const res = await broker.call('node.provision' as never, {
+                hostname: testHostname,
+                name: 'widget-tagged',
+                repository: fixtureRepoDir,
+                ref: tagRef,
+            } as never, asOperator) as {
+                applied: boolean;
+                noop: boolean;
+            };
+
+            expect(res.applied).toBe(true);
+            expect(res.noop).toBe(false);
+        });
+
+        it('reports offline node gracefully', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const res = await broker.call('node.provision' as never, {
+                hostname: 'offline-node-1',
+                name: 'widget-offline',
+                repository: fixtureRepoDir,
+                ref: commitSha,
+            } as never, asOperator) as {
+                applied: boolean;
+                error?: string;
+            };
+
+            expect(res.applied).toBe(false);
+            expect(res.error).toMatch(/not connected/i);
+        });
+
+        it('forwards provisioning call over broker when target hostname is on a remote peer', async () => {
+            process.env['MESH_PROVISION_ALLOWED_REPOSITORIES'] = fixtureRepoDir;
+
+            const remoteNodeID = 'remote-peer-node-1';
+            const remoteHostname = 'remote-peer-host';
+            app.registry.registerNode({
+                nodeID: remoteNodeID,
+                hostname: remoteHostname,
+                available: true,
+                addresses: [],
+                services: [],
+                capabilities: { transports: [], features: [] },
+                metadata: {},
+                nodeSeq: 1,
+                pid: 1,
+                timestamp: Date.now(),
+                bootedAt: Date.now(),
+                cpu: 0,
+                activeRequests: 0,
+                healthScore: 1,
+                trustLevel: 'internal',
+                namespace: 'fleet-test',
+            } as never);
+
+            const origCall = broker.call.bind(broker);
+            let routedNodeID: string | undefined;
+            (broker as unknown as { call: typeof origCall }).call = (async (action: string, params: unknown, opts?: { nodeID?: string }) => {
+                if (opts?.nodeID === remoteNodeID) {
+                    routedNodeID = opts.nodeID;
+                    return {
+                        hostname: remoteHostname,
+                        name: 'widget-remote',
+                        repository: fixtureRepoDir,
+                        ref: commitSha,
+                        applied: true,
+                        noop: false,
+                        message: 'Provisioned on remote node',
+                    };
+                }
+                return origCall(action as never, params as never, opts as never);
+            }) as typeof origCall;
+
+            try {
+                const res = await broker.call('node.provision' as never, {
+                    hostname: remoteHostname,
+                    name: 'widget-remote',
+                    repository: fixtureRepoDir,
+                    ref: commitSha,
+                } as never, asOperator) as {
+                    hostname: string;
+                    applied: boolean;
+                };
+
+                expect(routedNodeID).toBe(remoteNodeID);
+                expect(res.applied).toBe(true);
+                expect(res.hostname).toBe(remoteHostname);
+            } finally {
+                (broker as unknown as { call: typeof origCall }).call = origCall;
+            }
         });
     });
 });
