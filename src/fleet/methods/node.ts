@@ -1,24 +1,28 @@
-import os from 'node:os';
-import type { IServiceContext, IServiceRegistry } from '@flybyme/mesh';
-import type {
-    GroupRecord, NodeRecord, NodeStatusReport, NodeSummary, ServiceRunStatus,
-} from '../schema/node.js';
-import { nodesInGroup, reconcileNode, type ReconcileOutcome } from './reconcile.js';
-
 /**
- * A declaration rather than a `const` arrow, and that is load-bearing rather than style.
+ * The fleet's tools: which machines exist, what each should run, and what each actually runs.
  *
- * TypeScript only narrows past a never-returning call when it can see the signature that way, so as
- * an arrow assigned to a `const` the code after `refuse(...)` still believed `user` might be
- * undefined — and the tempting fix is a non-null assertion, which would turn a real check into a
- * silenced one.
+ * Every input and output type here comes from the contract by `z.infer`, the way `cdn/tools/*` do.
+ * They were hand-written object literals repeating the schema, which is the drift the contracts
+ * exist to prevent — the schema would change and the signature would go on claiming the old shape.
  */
-function refuse(message: string, status: number, code: string): never {
-    const error = new Error(message);
-    (error as unknown as { status: number; code: string }).status = status;
-    (error as unknown as { status: number; code: string }).code = code;
-    throw error;
-}
+
+import os from 'node:os';
+import { ClientError, z, type IServiceContext, type IServiceRegistry } from '@flybyme/mesh';
+
+import type {
+    nodeAssignContract, nodeHelloContract, nodeReconcileContract, nodeStatusContract,
+} from '../contracts/node.contract.js';
+import type { GroupRecord, NodeRecord, NodeSummary, ServiceRunStatus } from '../schema/node.js';
+import { nodesInGroup, reconcileNode } from './reconcile.js';
+
+type HelloInput = z.infer<typeof nodeHelloContract['inputSchema']>;
+type HelloOutput = z.infer<typeof nodeHelloContract['outputSchema']>;
+type AssignInput = z.infer<typeof nodeAssignContract['inputSchema']>;
+type AssignOutput = z.infer<typeof nodeAssignContract['outputSchema']>;
+type ReconcileInput = z.infer<typeof nodeReconcileContract['inputSchema']>;
+type ReconcileOutput = z.infer<typeof nodeReconcileContract['outputSchema']>;
+type StatusInput = z.infer<typeof nodeStatusContract['inputSchema']>;
+type StatusOutput = z.infer<typeof nodeStatusContract['outputSchema']>;
 
 /**
  * An operator, and **an absent caller is not one**.
@@ -36,16 +40,18 @@ function requireOperator(ctx: IServiceContext, action: string): void {
     const user = ctx.meta?.user as { roles?: readonly string[] } | undefined;
 
     if (user === undefined || user === null) {
-        refuse(
+        throw new ClientError(
             `node.${action} requires an operator, and this call carries no caller at all. `
             + `Reaching a tool over the mesh is not an identity.`,
-            401, 'UNAUTHENTICATED',
+            'unauthenticated', 401,
         );
     }
 
     const roles = Array.isArray(user.roles) ? user.roles : [];
     if (!roles.includes('operator')) {
-        refuse(`node.${action} requires the operator role.`, 403, 'FORBIDDEN');
+        throw new ClientError(
+            `node.${action} requires the operator role.`, 'forbidden', 403,
+        );
     }
 }
 
@@ -73,9 +79,9 @@ function getRegistryNodes(broker: unknown): MeshRegistryNode[] {
  * Refuses if another live node in the mesh already claims the same hostname (E3).
  */
 export async function node_hello(
-    input: { hostname: string },
+    input: HelloInput,
     ctx: IServiceContext,
-): Promise<{ hostname: string; services: string[] }> {
+): Promise<HelloOutput> {
     /**
      * **No operator check here, and it is the one deliberate exception in this file.**
      *
@@ -105,8 +111,14 @@ export async function node_hello(
         (n) => (n.available ?? true) && n.hostname === input.hostname && n.nodeID !== ctx.nodeID,
     );
     if (liveConflict) {
-        throw new Error(
-            `[fleet] Hostname "${input.hostname}" is already claimed by live node "${liveConflict.nodeID}".`,
+        // A named failure, not a bare Error: a caller deciding what to do about a hostname clash
+        // needs to tell it apart from the node being down, and a message string is not something
+        // anything can branch on.
+        throw new ClientError(
+            `Hostname "${input.hostname}" is already claimed by live node `
+            + `"${liveConflict.nodeID}". Two machines announcing one hostname means one of them `
+            + `takes the other's assignment.`,
+            'hostname_claimed', 409,
         );
     }
 
@@ -145,9 +157,9 @@ export async function node_hello(
  * mistake the obvious implementation makes and which is invisible until a builder stops.
  */
 export async function node_assign(
-    input: { hostname: string; services?: string[]; groups?: string[] },
+    input: AssignInput,
     ctx: IServiceContext,
-): Promise<ReconcileOutcome> {
+): Promise<AssignOutput> {
     requireOperator(ctx, 'assign');
 
     const existing = await ctx.call('node.find_one', {
@@ -179,9 +191,9 @@ export async function node_assign(
  * which one it was.
  */
 export async function node_reconcile(
-    input: { hostname?: string; group?: string },
+    input: ReconcileInput,
     ctx: IServiceContext,
-): Promise<{ reconciled: ReconcileOutcome[] }> {
+): Promise<ReconcileOutput> {
     requireOperator(ctx, 'reconcile');
 
     const groups = (await ctx.call('group.find', { query: {} }) as GroupRecord[]) ?? [];
@@ -198,7 +210,7 @@ export async function node_reconcile(
         nodes = (await ctx.call('node.find', { query: {} }) as NodeRecord[]) ?? [];
     }
 
-    const reconciled: ReconcileOutcome[] = [];
+    const reconciled: ReconcileOutput['reconciled'][number][] = [];
     for (const node of nodes) reconciled.push(await reconcileNode(ctx, node, groups));
     return { reconciled };
 }
@@ -210,9 +222,9 @@ export async function node_reconcile(
  * and reports both desired state from DB and observed state from Registry/Supervisor.
  */
 export async function node_status(
-    input: { hostname?: string },
+    input: StatusInput,
     ctx: IServiceContext,
-): Promise<NodeStatusReport> {
+): Promise<StatusOutput> {
     requireOperator(ctx, 'status');
 
     const broker = ctx.broker;
