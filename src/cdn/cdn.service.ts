@@ -36,13 +36,14 @@ import { edgeCrud, type Edge } from './contracts/edge.contract.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
-import { resolveSiteContract, siteCrud, type Site } from './contracts/site.contract.js';
+import { resolveSiteContract, siteCrud, siteEditContract, type Site } from './contracts/site.contract.js';
 import { assertTenant, hostOf, TenantMismatch } from './methods/hostname.js';
 import { generatePage } from './methods/page.js';
 import { headersFor, pathOf, resolveFile, resolveRequest } from './methods/resolve.js';
 import { cdn_compose } from './tools/compose.js';
 import { cdn_deploy } from './tools/deploy.js';
 import { cdn_resolve_site } from './tools/resolve_site.js';
+import { cdn_site_edit } from './tools/site_edit.js';
 
 /** Only what `resolve_site` needs: one query, bounded. Deliberately not the whole repository. */
 export interface SiteRepo {
@@ -116,6 +117,7 @@ export class CdnService extends ServiceModule {
         this.mountTool(composeContract, cdn_compose);
         this.mountTool(deployContract, cdn_deploy);
         this.mountTool(resolveSiteContract, cdn_resolve_site);
+        this.mountTool(siteEditContract, cdn_site_edit);
 
         // Every node drops the hostname it was told about, including the one that published it —
         // which costs a single lookup and means there is no "was it me?" branch to get wrong.

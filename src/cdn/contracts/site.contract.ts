@@ -30,7 +30,7 @@
  * would be a deploy with none of `cdn.deploy`'s checks.
  */
 
-import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
+import { defaultPrint, defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { SiteSchema } from '../schema/site.js';
 
@@ -92,8 +92,28 @@ export const siteCrud = defineCrud('site', SiteSchema, {
      * hostname serves is `cdn.deploy`'s decision**: it checks that the release belongs to the same
      * tenant, and that every contract the release calls is one the site exposes. A generated
      * `site.update` reaching `releaseHash` would be a deploy with neither check. Roadmap F2.
+     *
+     * ## Creating a site is exposable; editing one is a contract of its own
+     *
+     * That reasoning is exactly right about `releaseHash` and says nothing about `theme`, `policy`,
+     * `title`, `description` or `indexable` — ordinary fields a person edits, which had no path to
+     * being edited at all. A console could list sites and never create or change one.
+     *
+     * `create` is exposed: a new site has no release yet, so there is no deploy to bypass.
+     *
+     * **`update` stays internal, and `cdn.site_edit` exists instead.** `defineCrud` has no way to
+     * omit a field from the generated update input, so an exposed `update` would carry
+     * `releaseHash` — a deploy with neither of `cdn.deploy`'s checks, reachable by anybody allowed
+     * to change a title. A separate contract that simply does not have the field cannot be talked
+     * into writing it.
+     *
+     * `delete` stays internal. A hostname is what customers reach; removing one is not something to
+     * have one button away from a list.
      */
-    visibility: { find: 'public', findOne: 'public', get: 'public', count: 'public' },
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public',
+        create: 'public',
+    },
 
     /**
      * **`global`, and this is the case that shows the choice cannot be defaulted.**
@@ -195,4 +215,41 @@ export type SiteDeployed = z.infer<typeof SiteDeployedSchema>;
  */
 export const siteDeployedEvent = defineEvent('cdn.site_deployed', SiteDeployedSchema, {
     scopedBy: 'tenantId',
+});
+
+// ---------------------------------------------------------------------------- editing a site
+
+/**
+ * `cdn.site_edit` — change what a site *is*, never what it *serves*.
+ *
+ * **It exists because `defineCrud` cannot omit a field from a generated update.** An exposed
+ * `site.update` would carry `releaseHash`, and writing that field is a deploy: `cdn.deploy` checks
+ * the release belongs to this tenant and that every contract it calls is one the site exposes, and
+ * a generated update would do neither. A contract that simply does not have the field cannot be
+ * talked into writing it, which is a stronger guarantee than a rule somebody has to keep.
+ *
+ * **Every field is optional and absent means unchanged**, not cleared. A form that sends only what
+ * a person touched must not blank the rest, and that is the shape a schema-driven editor will send.
+ */
+export const siteEditContract = defineContract({
+    domain: 'cdn',
+    action: 'site_edit',
+    description: 'Change a site\'s theme, policy, title, description or indexability. Never its release.',
+    inputSchema: z.object({
+        host: z.string().min(1),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        indexable: z.boolean().optional(),
+        theme: z.record(z.string(), z.string()).optional(),
+        policy: z.record(z.string(), z.string()).optional(),
+    }),
+    outputSchema: SiteSchema.extend({
+        id: z.string(),
+        createdAt: z.date(),
+        updatedAt: z.date(),
+    }),
+    visibility: 'public',
+    rest: { method: 'PATCH', path: '/sites/:host' },
+    destructive: true,
+    print: defaultPrint,
 });

@@ -556,6 +556,16 @@ export function registerGeneratedCommands(program: Command) {
         }
     });
     ZodToCliMapper.applyOptions(cmd_cdn_resolveSiteContract_resolve_site, Contract_4.resolveSiteContract.inputSchema);
+    const cmd_cdn_siteEditContract_site_edit = cdn.command('site_edit').description(`Change a site's theme, policy, title, description or indexability. Never its release.`);
+    cmd_cdn_siteEditContract_site_edit.action(async (o: Record<string, unknown>, cmd: Command) => {
+        try {
+            await executeCommand('cdn.site_edit', o, Contract_4.siteEditContract, cmd.optsWithGlobals());
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(C.red + 'Error:' + C.reset, message);
+        }
+    });
+    ZodToCliMapper.applyOptions(cmd_cdn_siteEditContract_site_edit, Contract_4.siteEditContract.inputSchema);
     const release = program.command('release').description('release tools');
     const cmd_release_releaseCrud_create_create = release.command('create').description(`CRUD create for release (releaseCrud)`);
     cmd_release_releaseCrud_create_create.action(async (o: Record<string, unknown>, cmd: Command) => {
