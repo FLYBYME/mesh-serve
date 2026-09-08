@@ -787,3 +787,32 @@ falls back to marking `gone` and deterministically rebuilding from git when all 
 
 Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
 node. None of it matters until one node works.
+
+---
+
+## Findings from outside this repository
+
+**`flowboard` (2026-09-07), the first package to run its own connected mesh node instead of living
+in `mesh-serve/src/*`, hit two real gaps rather than just B10:**
+
+- **`ApiService` cannot be reused standalone.** It resolves `Host → site → release` and validates
+  tickets through `identity.*` — the platform's shared multi-tenant gateway, not a server a package
+  can point a port at for its own six collections. A package that wants "mesh-serve for the server"
+  without joining the shared fleet has to write its own small HTTP router calling `broker.call`
+  directly (see `flowboard/src/server/api.ts`). Worth deciding on purpose whether `ApiService` should
+  eventually support a "single-tenant, no site record" mode, rather than every standalone package
+  reinventing this router.
+- **`mesh-serve client` cannot generate a client for a package's own self-hosted contracts.**
+  `resolveContracts()` (`src/api/client-cli.ts`) populates `globalContractRegistry` via
+  `await import(pkg)` where `pkg` is the string named in `mesh.json`'s `mesh[].package` — which only
+  works when the contracts live in an *installed dependency* (mesh-auth importing
+  `@flybyme/mesh-serve` is the real case this was built for). A package defining and consuming its
+  own contracts in one repo cannot name itself there: Node's package self-reference only resolves
+  when the *importing* file is inside that package's own tree, and `client-cli.js` lives inside
+  `@flybyme/mesh-serve`'s own install. The descriptor/emit internals (`describeExposure`,
+  `emitClient`, `ExposeEntry`) also aren't part of this package's public `exports`, so a workaround
+  script outside this repo can't reuse them either. flowboard's frontend client
+  (`src/app/generated/api.ts`) is hand-written and clearly labeled as a stand-in because of this —
+  not a shortcut taken lightly. Fixing this for real means either exporting the descriptor/emit
+  functions publicly so a local script can build its own descriptor from locally-imported contracts,
+  or teaching `client-cli.ts` to accept a relative/local path alongside a package name.
