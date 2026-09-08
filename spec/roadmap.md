@@ -12,18 +12,25 @@ Sizes are **S** (an afternoon), **M** (a day or two), **L** (longer, or unknown 
 
 ## Where it actually stands
 
+*Last reconciled against `src/` and a full test run on **2026-09-08**. A row here that disagrees with
+the code is the bug this section exists to prevent — see [the note on drift](#keeping-this-honest).*
+
 | | state |
 | --- | --- |
-| `identity` | **built, and written the wrong way.** Zero `defineCrud`, 8 hand-written contracts, a 160-line hand-rolled store. Moved in from mesh-identity verbatim. |
+| `identity` | **built, and rewritten onto CRUD.** Seven `defineCrud` collections, `scopedBy` throughout, five contracts public as of #65. The hand-rolled store is gone. |
 | `builder` | **works.** Fetches a commit, bundles with esbuild, publishes one artifact per part, caches by input hash, and refuses a part it does not own. Bytes on disk. |
-| `cdn` | **serves.** Binds a port, resolves Host → site → release → artifact, generates the page per request, composes and deploys. |
+| `cdn` | **serves.** Binds a port, resolves Host → site → release → artifact, generates the page per request, composes and deploys. Rolling releases re-deploy on their own. |
 | `catalog` | **works.** `part` and `partVersion`, a pure resolver, immutability enforced in `publish`. |
-| `api` | **the generator only** — `mesh-serve client`, salvaged from mesh-api. No server. |
-| `fleet` | **empty.** Three `.gitkeep` files. |
+| `api` | **serves.** `api.service.ts` gates and scopes calls from the site record; the generator (`mesh-serve client`) is one command inside it, not the whole of it. |
+| `fleet` | **works.** `node.hello`/`assign`/`status`/`reconcile`/`provision`, groups, an operator gate, and a repo allowlist. All of Track E. |
+| `telem` | **collects.** Browser-side reports over an injectable sender. |
+| `supervisor` | **runs.** Registers and switches service entries on a node; what `node.provision` writes into. |
 
-216 tests, and 13 of them are the spine running for real: a `MeshApp` with mongo, a git repository at
-a commit, esbuild, a bound port. **M1 is done.** What is unproven now is everything about surviving
-something — a second node, a lost disk, a caller who should be refused.
+**503 tests across 41 files**, and the spine, durability and fleet layers each run against a real
+`MeshApp` with a real mongo, a real git repository, real esbuild and a bound port.
+
+**M1, M2, M3 and M5 are done.** What is unproven now is **M4** — a third party publishing a part
+through checks that actually run — and **M6**, where every capability listed above meets a screen.
 
 ---
 
@@ -573,10 +580,14 @@ task** — each is a decision about the platform's own surface that blocks any U
       unsubscribable*.
       Two tests: that all four declare a scope, and that the two scoped ones **carry the field they
       name** — a `scopedBy` over an absent field is `unscopable` at run time with a green suite.
-- [ ] **F2 Nothing is exposable.** Every CRUD action on every collection is `internal`, correctly by
-      default — so catalog has **no** public contract, cdn has only `resolve_site`, builder only
-      `get_artifact`. A console cannot list parts, builds or sites: not refused, no route at all.
-      Decide the smallest exposable set per service. **M** · ⛔ D1
+- [x] **F2 Things are exposable now.** *(done 2026-09-07)* Was: every CRUD action on every collection
+      `internal`, so a console could not list parts, builds or sites — not refused, no route at all.
+      **23 public contracts across eight domains today**: catalog `part`, cdn `site` and `release`,
+      builder `artifact`, fleet `node`, identity (five, via #65), api, telem.
+      The exposable set was decided per service rather than in one sweep, and `visibility: 'public'`
+      means *may be exposed* — never *unauthenticated*. What remains is not this item but the
+      specific holes it uncovered: **#69** nothing exposes `delete`, **#70** `artifact` and `build`
+      are still entirely internal, **#71** `user`/`grant`/`role` writes are.
 - [x] **F3 ★ `Role.scope` is enforced.** *(done 2026-09-06)* `schema/roles.ts` makes
       `scope: 'cluster' | 'organization'` **required**, and says why: #26 exists because `admin` meant
       organization-scoped in one place and cluster-scoped in another, so nobody could be a platform
@@ -639,22 +650,60 @@ task** — each is a decision about the platform's own surface that blocks any U
       Belongs in mesh's `GenerateCommand`. **S**
 - [ ] **F4 Nothing reads a failed build's log.** `BuildSchema` carries `log` and `error` precisely
       because *a failed build with no log is a bug report nobody can act on* — and no reader exists.
-      The single most valuable screen, and it needs F2 and nothing else. **S** · ⛔ F2
+      The single most valuable screen. **F2 is done and this is now only blocked on `build` itself
+      being internal — #70.** **S** · ⛔ #70
+- [ ] **F10 `defineCrud` cannot shape a create input, and this is the third time.** *(found
+      2026-09-07)* `organization.create` needs `ownerId` set from the session and absent from the
+      input. `defineCrud` derives its create input from the base schema, so a field required on the
+      stored record is required in the input, and there is no override.
+
+      The workaround now in `identity/module.ts` is a `beforeCrud` hook that **overwrites** whatever
+      `ownerId` arrives with the caller's id. It is correct — a caller must not be able to create an
+      organization owned by somebody else — but the API asks for a value it ignores, which is a thing
+      somebody has to be told rather than read.
+
+      This is the same constraint that produced `cdn.site_edit`, whose contract comment says it
+      plainly: *it exists because `defineCrud` cannot omit a field from a generated update.* Twice is
+      a pattern; three times is a missing feature. Two candidate answers, the first cheap:
+
+      1. A per-action input override — `createInput: (base) => base.omit({ ownerId: true })`.
+         Everything else stays generated. Belongs in mesh, not here.
+      2. Accept that any collection whose create needs the session gets a hand-written tool, and say
+         so in the spec so nobody keeps rediscovering it.
+
+      **Whatever is chosen must not reach for the third answer.** The first attempt weakened
+      `OrganizationSchema.ownerId` from `min(1)` to `default('')`, which silently un-answered
+      surfdns#29 — an organization with no owner became constructible again.
+      `test/identity/principals.test.ts` caught it. **S**
 
 ## Track E — Fleet
 
-Shape decided, nothing built. See [fleet.md](./fleet.md).
+**All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
+asserted under its own id so the track cannot quietly come undone.
 
-- [ ] **E1 `node` and `assignment`.** A node joins, says *my name is x, what should I run?*, and the
-      fleet only ever answers. It never starts a process — something else always does — which is why
-      one mechanism covers a laptop and a cluster. **M**
-- [ ] **E2 The observed half.** A node reports what it actually mounted, **including mount
-      failures**. A desired-state system whose observed side is optimistic is worthless. **M** · ⛔ E1
-- [ ] **E3 Two nodes may not claim one name.** With a singleton assigned to it, both mount it and you
-      have split-brain with no error anywhere. **S** · ⛔ E1
-- [ ] **E4 Nothing in `src/fleet/` imports another service here.** It is the recovery path: if fleet
-      needed the cdn, a broken cdn would mean you cannot fix the cdn. Enforced by a check, not a
-      convention. **S**
+- [x] **E1 `node` and `assignment`.** *(done)* A node joins, says *my name is x, what should I run?*,
+      and the fleet only ever answers. It never starts a process — something else always does — which
+      is why one mechanism covers a laptop and a cluster.
+      **A node's identity is its hostname, not a transient node id**, which is what makes a reboot a
+      reconnection rather than a new machine. Groups landed with it: a node's services are the union
+      of its own and its groups', and a group edit converges its members *by event*, without anybody
+      calling `node.reconcile`.
+- [x] **E2 The observed half.** *(done)* `node.status` answers what a node is running and what it is
+      connected to, for peers as well as itself, and **captures supervisor errors distinctly** — a
+      mount that failed reads as failed, not as absent. A desired-state system whose observed side is
+      optimistic is worthless.
+- [x] **E3 Two nodes may not claim one name.** *(done)* A second live node claiming an already-live
+      hostname is refused. Without it, a singleton assigned to both is split-brain with no error
+      anywhere.
+- [x] **E4 Nothing in `src/fleet/` imports another service here.** *(done)* Enforced by a test that
+      reads the source, not by a convention. It is the recovery path: if fleet needed the cdn, a
+      broken cdn would mean you cannot fix the cdn.
+
+**Arrived with the track and not in it:** `node.provision` — clone a repo at a **pinned ref** onto a
+node and register it with the supervisor. Refuses a mutable branch (`main`, `master`), refuses a repo
+absent from the allowlist, refuses a caller without the operator role, is a no-op at the same ref,
+and forwards over the broker when the target is a peer. It is how a node gets code at all, so E1's
+*"it never starts a process — something else always does"* now names something real.
 
 ---
 
@@ -663,9 +712,12 @@ Shape decided, nothing built. See [fleet.md](./fleet.md).
 Tracks say what is left. These say **when it becomes usable**, and each is defined by something that
 becomes demonstrably true rather than by a count of items closed.
 
-Every one of them is gated on the same thing at the moment: **nothing here has ever run.** A6, B3a
-and C2a are one gap wearing three names — no CRUD call executed, no repository bundled, no HTTP
-request answered.
+**Four of six are done: M1, M2, M3, M5.** Written when none of them were, and when every one was
+gated on the same thing — *nothing here has ever run.* That sentence stood for one day.
+
+The two left divide cleanly. **M4** is whether a stranger can publish *into* this safely; **M6** is
+whether a stranger can *operate* it at all. Neither blocks the other. M6 is the one with a person on
+the end of it, and it is the one that is next.
 
 ### M1 — A hostname serves a site composed from published parts ✅ *2026-09-06*
 
@@ -682,14 +734,20 @@ cached; a build for another organization is refused; composing the same set twic
 hash; the page carries its title and description in the **document**; the kernel it names is
 fetchable and `immutable`; an artifact the release does not contain is a 404.
 
-**A1 · A6 · B3a · C2a · C3** all closed by it. **mesh-web A9.1c** is *not* — the generated boot module
-still calls a `start()` the kernel does not have, so the page loads and the parts fetch, and nothing
-boots. That is A0 of M1's follow-through, not a gap in the spine.
+**A1 · A6 · B3a · C2a · C3** all closed by it.
+
+~~**mesh-web A9.1c** is *not* — the generated boot module still calls a `start()` the kernel does not
+have, so the page loads and the parts fetch, and nothing boots.~~ **Closed on both sides**, and it
+had been for a day when this paragraph still said otherwise: `mesh-web/src/kernel/start.ts:157`
+exports `start(composition)` with 16 tests, and `src/cdn/methods/page.ts:265` emits the import and
+the call against it. *A cross-repo item is done when both repositories say so, and neither of them
+finds out by itself* — see [architecture/roadmaps.md](https://github.com/FLYBYME/surfdns) in the
+surfdns repository.
 
 **Why it was first**: everything after it is about surviving something, and until one node serves one
 page there is nothing to survive.
 
-### M2 — It survives losing a disk
+### M2 — It survives losing a disk ✅ *2026-09-06*
 
 *An edge is a cache and git is the archive.* Kill an edge's storage, restart it, and the site still
 serves — either because another edge had the bytes, or because the artifact went `gone` and was
@@ -701,7 +759,7 @@ This is the one that makes it a platform rather than a demo, and it is already *
 cheap: builds are deterministic, so several edges rebuilding at once converge on the same digest and
 the duplicate work is harmless. All four durability scenarios proven in `test/integration/durability.test.ts`.
 
-### M3 — Calls are gated and scoped
+### M3 — Calls are gated and scoped ✅ *2026-09-06*
 
 *A site exposes contracts and the API refuses what it should.* Host → site → release → routes, with a
 caller's organization resolved and applied.
@@ -723,12 +781,21 @@ protects the site from it actually runs.
 Also the point at which **part names being a flat global namespace** stops being a note and becomes a
 migration.
 
-### M5 — A node joins and is told what to run
+### M5 — A node joins and is told what to run ✅ *2026-09-07*
 
-*The standard way to run a service anywhere.* Fleet. ⛔ **E1–E4**
+*The standard way to run a service anywhere.* ~~**E1 · E2 · E3 · E4**~~ — all four, with
+`test/fleet/fleet.test.ts` asserting each under its own id.
+
+A node says *my name is x, what should I run?* and is answered; it reports back what it actually
+mounted, **including what failed to mount**; a second node cannot claim a live hostname; and the
+recovery path is enforced by a test that reads the source rather than by a convention.
+`node.provision` arrived with it, so a node can be handed code at a pinned ref and never a branch.
 
 Independent of M1–M4 by design — `src/fleet/` may not import another service here, because it is the
 recovery path and a fleet that needed the cdn would mean a broken cdn cannot be fixed.
+
+**It landed without being noticed**, which is the reason [Keeping this honest](#keeping-this-honest)
+was written: the track that closed it still read *"shape decided, nothing built"* a day later.
 
 ---
 
@@ -745,19 +812,26 @@ versions minted by the platform, and a release marked `rolling` re-running the l
 A part released now reaches a hostname with nobody typing anything. That was six manual steps in the
 morning.
 
-**What it needs, and each of these is a screen that does not exist:**
+**What it needed. Two of four closed on 2026-09-07:**
 
-- **Create a site.** `site.create` is exposed and nothing calls it. The platform cannot add a
-  hostname to itself, which makes every other screen a tour of one site somebody made with a script.
+- ~~**Create a site.**~~ **Done.** `site.create`, `group.create` and `group.update` were exposed for
+  weeks with no control anywhere; the folded operator app calls all three. The platform can now add a
+  hostname to itself instead of every screen being a tour of one site somebody made with a script.
+- ~~**Manage people.**~~ **Partly.** #65 exposed the identity reads and `membership.delete`, and
+  mesh-operator has a people app. It still **cannot list people** — `user` reads are internal, which
+  is #71 — so the app named after them shows organizations and memberships and not accounts.
 - **Edit what a site exposes**, from `_describe` rather than a JSON textarea — including the two
   things only the platform knows: which grants nothing uses, and which contracts the release calls
   that the site has not granted. The second is a refused deploy shown *before* the deploy.
-- **Manage people.** Accounts, memberships, and `identity.grant_role` — which exists as of tonight
-  and has no caller. Until then the first operator is an environment variable and the second one
-  cannot exist.
 - **See it working.** A slow call that says so, a boot with stages, a failure that surfaces without
   the console open. Forty seconds of silence after a click is the single most common experience of
-  this platform today.
+  this platform today. The vocabulary cannot express it yet — mesh-core **U2** and **U3**, tracked as
+  #74.
+
+**And one wall that is new, because exposing things found it:** **nothing can be deleted.** Until
+#65, no collection exposed `delete` at all; `membership.delete` is the first and only one. A site
+with a typo'd host is permanent from a browser, and `host` is globally unique. That is #69, and it
+is now the largest single gap between here and this milestone.
 
 **The test:** hand somebody the URL and nothing else. They sign in, add a site, expose what it needs,
 release a part into it, and watch it go live — without a terminal, without ssh, and without asking
@@ -783,10 +857,19 @@ falls back to marking `gone` and deterministically rebuilding from git when all 
 
 ~~D1 → D2 → D3 → D4 → A4~~ — **all of M3, done 2026-09-06.** Calls are gated, scoped, and exposure-verified.
 
-**Next**: M4 — Somebody who is not us can publish a part.
+~~E1 → E2 → E3 → E4~~ — **all of M5, done 2026-09-07.** A node joins, is told what to run, reports
+what it actually mounted, and can be handed code at a pinned ref.
 
-Everything else — sync, gone-and-rebuild, the api, fleet — is what makes it survive more than one
-node. None of it matters until one node works.
+**Two left, and they are not in sequence.** M4 is *can a stranger publish into this*; M6 is *can a
+stranger operate it*. Neither blocks the other, and M6 is the one with a person on the end of it.
+
+**Next**: **M6** — the surface exists and almost none of it has a screen. The three named holes are
+**#69** nothing can be deleted, **#70** builds are invisible, **#71** the people app cannot list
+people; **#74** is the vocabulary those screens would be built out of.
+
+Then M4, whose remaining blockers are all about trusting a stranger's code: **B4** contract
+verification at build time, **B5** policy on the version, **D5a/D5d** the client generated by the
+cdn, **A5** unique indexes on natural keys.
 
 ---
 
@@ -819,29 +902,21 @@ in `mesh-serve/src/*`, hit two real gaps rather than just B10:**
 
 ---
 
-## F9 — `defineCrud` cannot shape a create input, and this is the third time
+## Keeping this honest
 
-`organization.create` needs `ownerId` set from the session and absent from the input. `defineCrud`
-derives its create input from the base schema, so a field that is required on the stored record is
-required in the input, and there is no override.
+**A decision made in the document where the work is happening does not propagate back to the list of
+open questions by itself.** mesh-web's roadmap wrote that down about two of its own gating decisions;
+on 2026-09-08 the same thing had happened here at four times the scale — a completed Track E still
+reading *"shape decided, nothing built"*, F2 open with 23 public contracts shipped, a stands table
+naming a `fleet` of three `.gitkeep` files, and **two different items both called F9**, because the
+second was appended to the end of the file rather than into the track it belonged to.
 
-The workaround now in `identity/module.ts` is a `beforeCrud` hook that **overwrites** whatever
-`ownerId` arrives with the caller's id. It is correct — a caller must not be able to create an
-organization owned by somebody else — but the API asks for a value it ignores, which is a thing
-somebody will have to be told rather than read.
+So, three habits, none of them optional:
 
-This is the same constraint that produced `cdn.site_edit`, whose contract comment says it plainly:
-*it exists because `defineCrud` cannot omit a field from a generated update.* Twice is a pattern;
-three times is a missing feature.
-
-Two candidate answers, and the first is cheap:
-
-1. A per-action input override on `defineCrud` — `createInput: (base) => base.omit({ ownerId: true })`.
-   Everything else stays generated.
-2. Accept that any collection whose create needs the session gets a hand-written tool, and say so in
-   the spec so nobody keeps rediscovering it.
-
-Related: the first attempt at this weakened `OrganizationSchema.ownerId` from `min(1)` to
-`default('')`, which silently un-answered surfdns#29 — an organization with no owner became
-constructible again. `test/identity/principals.test.ts` caught it. Whatever answer is taken here must
-not reach for that one.
+1. **An item is closed in the roadmap by the change that closes it**, in the same commit. Not in a
+   log, not in a conversation.
+2. **A new item is inserted into its track and takes the next free id in that track.** Appending to
+   the end of the file is how F9 got used twice, and ids here are quoted from three other
+   repositories.
+3. **The stands table carries the date it was last reconciled**, so a reader can tell stale from
+   wrong.
