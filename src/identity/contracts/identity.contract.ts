@@ -52,8 +52,8 @@ export const organizationCrud = defineCrud('organization', OrganizationSchema, {
     pluralPath: 'organizations',
     unique: [{ fields: 'slug', scope: 'global' }],
     visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
+        count: 'public', create: 'public', createMany: 'internal', update: 'internal',
         replace: 'internal', delete: 'internal',
     },
     dependencies: [],
@@ -72,9 +72,9 @@ export const membershipCrud = defineCrud('membership', MembershipSchema, {
     scopedBy: 'organizationId',
     unique: [{ fields: 'userId', scope: 'scoped' }],
     visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
+        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
+        count: 'public', create: 'public', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'public',
     },
     dependencies: [],
 });
@@ -85,13 +85,14 @@ export type StoredMembership = z.infer<typeof membershipCrud.outputSchema>;
  * Global collection of roles.
  *
  * Scoping: Global. Roles are platform definitions (such as builtin roles `public` and `authenticated`).
+ * The role catalogue contains no tenant data and is safe to be read globally by authenticated operators.
  */
 export const roleCrud = defineCrud('role', RoleSchema, {
     pluralPath: 'roles',
     unique: [{ fields: 'key', scope: 'global' }],
     visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
+        count: 'public', create: 'internal', createMany: 'internal', update: 'internal',
         replace: 'internal', delete: 'internal',
     },
     dependencies: [],

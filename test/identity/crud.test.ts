@@ -265,4 +265,200 @@ describe('identity on defineCrud', () => {
             expect(roles.map((r) => r.key)).toContain('authenticated');
         });
     });
+
+    describe('organization tenant scoping (Option b)', () => {
+        let org1: { id: string; name: string; slug: string };
+        let org2: { id: string; name: string; slug: string };
+        let userOrg1Id: string;
+        let userOrg2Id: string;
+        let userNoOrgId: string;
+
+        const user1Meta = () => ({ meta: { user: { id: userOrg1Id, tenant_id: org1.id } } });
+        const user2Meta = () => ({ meta: { user: { id: userOrg2Id, tenant_id: org2.id } } });
+        const noOrgMeta = () => ({ meta: { user: { id: userNoOrgId, tenant_id: '' } } });
+
+        beforeAll(async () => {
+            if (!reachable) return;
+
+            // Register 3 users
+            const u1 = await broker.call('identity.register', {
+                email: 'tenant1-user@example.com',
+                password: 'password-1234',
+                displayName: 'Tenant 1 User',
+            });
+            userOrg1Id = u1.userId;
+
+            const u2 = await broker.call('identity.register', {
+                email: 'tenant2-user@example.com',
+                password: 'password-1234',
+                displayName: 'Tenant 2 User',
+            });
+            userOrg2Id = u2.userId;
+
+            const u3 = await broker.call('identity.register', {
+                email: 'no-org-user@example.com',
+                password: 'password-1234',
+                displayName: 'No Org User',
+            });
+            userNoOrgId = u3.userId;
+
+            // Create two distinct organizations (internal calls)
+            org1 = await broker.call('organization.create', {
+                name: 'Tenant Alpha Org',
+                slug: `alpha-org-${String(Date.now())}`,
+                ownerId: userOrg1Id,
+            });
+
+            org2 = await broker.call('organization.create', {
+                name: 'Tenant Beta Org',
+                slug: `beta-org-${String(Date.now())}`,
+                ownerId: userOrg2Id,
+            });
+
+            // Create memberships connecting user1 -> org1, user2 -> org2
+            await broker.call('membership.create', {
+                userId: userOrg1Id,
+                organizationId: org1.id,
+                roleKey: 'member',
+                joinedAt: Date.now(),
+            }, { meta: { organizationId: org1.id } });
+
+            await broker.call('membership.create', {
+                userId: userOrg2Id,
+                organizationId: org2.id,
+                roleKey: 'member',
+                joinedAt: Date.now(),
+            }, { meta: { organizationId: org2.id } });
+        });
+
+        it('confines organization.find to caller memberships', async () => {
+            if (!reachable) return;
+
+            // Caller in Org 1 only sees Org 1
+            const orgsUser1 = await broker.call('organization.find', {}, user1Meta());
+            expect(orgsUser1.length).toBe(1);
+            expect(orgsUser1[0]?.id).toBe(org1.id);
+            expect(orgsUser1[0]?.name).toBe('Tenant Alpha Org');
+
+            // Caller in Org 2 only sees Org 2
+            const orgsUser2 = await broker.call('organization.find', {}, user2Meta());
+            expect(orgsUser2.length).toBe(1);
+            expect(orgsUser2[0]?.id).toBe(org2.id);
+            expect(orgsUser2[0]?.name).toBe('Tenant Beta Org');
+
+            // Caller with no memberships sees 0 rows
+            const orgsNoUser = await broker.call('organization.find', {}, noOrgMeta());
+            expect(orgsNoUser.length).toBe(0);
+        });
+
+        it('returns 0 rows when caller in Org 1 queries for Org 2 ID via query filter', async () => {
+            if (!reachable) return;
+
+            // Specific query for Org 2 by Org 1 user returns empty array
+            const forbiddenQuery = await broker.call('organization.find', {
+                query: { id: org2.id },
+            }, user1Meta());
+            expect(forbiddenQuery.length).toBe(0);
+
+            // Allowed query returns the document
+            const allowedQuery = await broker.call('organization.find', {
+                query: { id: org1.id },
+            }, user1Meta());
+            expect(allowedQuery.length).toBe(1);
+            expect(allowedQuery[0]?.id).toBe(org1.id);
+        });
+
+        it('returns 404 on organization.get across tenant boundaries', async () => {
+            if (!reachable) return;
+
+            // User 1 fetching Org 1 succeeds
+            const fetched = await broker.call('organization.get', { id: org1.id }, user1Meta());
+            expect(fetched.id).toBe(org1.id);
+
+            // User 1 fetching Org 2 receives 404 NOT_FOUND
+            let statusCode: number | undefined;
+            try {
+                await broker.call('organization.get', { id: org2.id }, user1Meta());
+            } catch (err: unknown) {
+                if (typeof err === 'object' && err !== null && 'status' in err && typeof err.status === 'number') {
+                    statusCode = err.status;
+                }
+            }
+            expect(statusCode).toBe(404);
+        });
+
+        it('returns undefined on organization.find_one across tenant boundaries', async () => {
+            if (!reachable) return;
+
+            // User 1 querying for Org 2 returns undefined
+            const found = await broker.call('organization.find_one', {
+                query: { id: org2.id },
+            }, user1Meta());
+            expect(found).toBeUndefined();
+
+            // User 1 querying for Org 1 returns Org 1
+            const foundOwn = await broker.call('organization.find_one', {
+                query: { id: org1.id },
+            }, user1Meta());
+            expect(foundOwn?.id).toBe(org1.id);
+        });
+
+        it('confines organization.count to caller memberships', async () => {
+            if (!reachable) return;
+
+            const count1 = await broker.call('organization.count', {}, user1Meta());
+            expect(count1).toBe(1);
+
+            const countNone = await broker.call('organization.count', {}, noOrgMeta());
+            expect(countNone).toBe(0);
+        });
+
+        it('stamps ownerId and adds owner membership on organization.create by authenticated caller', async () => {
+            if (!reachable) return;
+
+            const newSlug = `new-org-${String(Date.now())}`;
+            // `ownerId` is required by OrganizationSchema and names somebody else here on purpose:
+            // the caller must not be able to create an organization owned by another user, so the
+            // hook overwrites whatever arrives rather than only filling in a missing value.
+            const created = await broker.call('organization.create', {
+                name: 'Brand New Org',
+                slug: newSlug,
+                ownerId: 'somebody-else',
+            }, user1Meta());
+
+            expect(created.ownerId).toBe(userOrg1Id);
+
+            // User 1 now sees 2 organizations
+            const user1Orgs = await broker.call('organization.find', {}, user1Meta());
+            expect(user1Orgs.map((o) => o.id)).toContain(created.id);
+
+            // User 2 still only sees Org 2
+            const user2Orgs = await broker.call('organization.find', {}, user2Meta());
+            expect(user2Orgs.map((o) => o.id)).not.toContain(created.id);
+        });
+
+        it('refuses unauthenticated organization calls with 401 UNAUTHORIZED', async () => {
+            if (!reachable) return;
+
+            let findStatus: number | undefined;
+            try {
+                await broker.call('organization.find', {}, { meta: { user: undefined } });
+            } catch (err: unknown) {
+                if (typeof err === 'object' && err !== null && 'status' in err && typeof err.status === 'number') {
+                    findStatus = err.status;
+                }
+            }
+            expect(findStatus).toBe(401);
+
+            let getStatus: number | undefined;
+            try {
+                await broker.call('organization.get', { id: org1.id }, { meta: { user: undefined } });
+            } catch (err: unknown) {
+                if (typeof err === 'object' && err !== null && 'status' in err && typeof err.status === 'number') {
+                    getStatus = err.status;
+                }
+            }
+            expect(getStatus).toBe(401);
+        });
+    });
 });

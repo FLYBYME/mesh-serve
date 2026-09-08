@@ -74,12 +74,14 @@ export type EventLookup = (name: string) => { readonly scopedBy?: string } | und
  *   artifact; there is no owner to narrow to.
  * - `node`, `group` — the fleet belongs to the deployment, not to an organization. A machine is not
  *   owned by a tenant, which is why scoping it would be a lie rather than a restriction.
+ * - `role` — platform definitions (such as builtin roles `public` and `authenticated`). The role catalogue
+ *   contains no tenant data and is safe to be read globally by authenticated operators.
  *
  * Anything not listed here keeps the framework's answer, so a new collection that forgets to say
  * what it is still fails loudly instead of quietly streaming to everybody.
  */
 export const GLOBALLY_DELIVERED = new Set([
-    'part', 'partVersion', 'artifact', 'node', 'group',
+    'part', 'partVersion', 'artifact', 'node', 'group', 'role',
 ]);
 
 export const registryLookup: EventLookup = (name) => {

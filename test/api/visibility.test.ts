@@ -31,6 +31,7 @@ import { releaseCrud } from '../../src/cdn/contracts/release.contract.js';
 import { siteCrud } from '../../src/cdn/contracts/site.contract.js';
 import { partCrud, partVersionCrud } from '../../src/catalog/contracts/part.contract.js';
 import { artifactCrud, buildCrud } from '../../src/builder/contracts/artifact.contract.js';
+import { membershipCrud, roleCrud } from '../../src/identity/contracts/identity.contract.js';
 import { describeExposure } from '../../src/api/schema/descriptor.js';
 
 // ---------------------------------------------------------------------------- the boundary that works
@@ -95,7 +96,7 @@ describe('visibility at the mesh boundary', () => {
  * an artifact is content-addressed so two organizations building identical source produced the same
  * artifact; a part name is one flat public namespace because a catalog is a marketplace.
  */
-const DELIBERATELY_GLOBAL = new Set(['artifact', 'part', 'partVersion']);
+const DELIBERATELY_GLOBAL = new Set(['artifact', 'part', 'partVersion', 'role']);
 
 const readsPublicly = (crud: { visibility?: Record<string, string> }): boolean =>
     crud.visibility?.['find'] === 'public';
@@ -105,8 +106,12 @@ describe('a publicly readable collection is scoped or deliberately global', () =
         expect(siteCrud.scopedBy).toBe('tenantId');
     });
 
+    it('membership is scoped', () => {
+        expect(membershipCrud.scopedBy).toBe('organizationId');
+    });
+
     it('the global ones say so on purpose', () => {
-        for (const crud of [artifactCrud, partCrud, partVersionCrud]) {
+        for (const crud of [artifactCrud, partCrud, partVersionCrud, roleCrud]) {
             expect(DELIBERATELY_GLOBAL.has(crud.domain)).toBe(true);
         }
     });
