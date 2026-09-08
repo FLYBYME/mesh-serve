@@ -19,7 +19,7 @@
  * artifact, nothing is content-addressed, and none of it is what a deployment serves.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 
@@ -70,6 +70,11 @@ export async function writeDevPage(root: string, descriptor: Descriptor): Promis
 
     /** Stylesheets the parts emitted, in part order, so the page can link them. */
     const styles: string[] = [];
+
+    if (existsSync(join(out, 'kernel.css'))) {
+        styles.push('kernel.css');
+        files.push(`${DEV_DIR}/kernel.css`);
+    }
 
     for (const part of descriptor.parts) {
         const built = await esbuild({

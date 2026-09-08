@@ -45,6 +45,46 @@ export * from './fleet/contracts/node.contract.js';
 export * from './identity/contracts/identity.contract.js';
 export * from './telem/contracts/telem.contract.js';
 
+// ---------------------------------------------------------------------------- mountable by a package
+
+/**
+ * **Identity, as a module a package can mount for itself.**
+ *
+ * Only the *contracts* were exported before, which is the half that lets you name `identity.whoami`
+ * and the half that does not let you serve it. So a package wanting real accounts had two options,
+ * and both were bad: join the platform's shared multi-tenant fleet — standing up `site`, `release`
+ * and organization records to serve six collections nobody else uses — or have no authentication at
+ * all. flowboard has none for exactly this reason, and says so in `api.ts`.
+ *
+ * `createIdentityModule` with `memoryStore()` or `mongoStore(db)` is the third option that should
+ * always have existed: one process, its own users, tickets and roles, the same contracts the
+ * platform serves. A tool for one operator gets real sign-in without becoming a tenant of anything.
+ *
+ * Recorded under *Findings from outside this repository* in `spec/roadmap.md` the first time
+ * flowboard hit it.
+ */
+export * from './identity/module.js';
+export * from './identity/store.js';
+export * from './identity/methods/password.js';
+
+/**
+ * **The exposure descriptor, so something other than the api can be built from it.**
+ *
+ * `describeExposure` is how a site's public surface is computed: it reads `visibility`, applies the
+ * site's grants, and answers what may be called and at what gate. `ApiService` uses it to build HTTP
+ * routes, and the client generator uses it to emit a typed client — *the same source*, which is the
+ * property that keeps a generated client honest.
+ *
+ * It was not exported, so anything else wanting to derive a surface from the same rules had to
+ * reimplement them. flowboard's MCP server does exactly that today with a hardcoded array crossed
+ * with four hardcoded actions, and its contracts' `visibility` is consequently decorative — marking
+ * something `internal` there changes nothing.
+ *
+ * Two copies of a rule is how the first one becomes wrong, and an exposure rule is not the one to
+ * find that out on.
+ */
+export * from './api/schema/descriptor.js';
+
 // ---------------------------------------------------------------------------- records
 
 export * from './builder/schema/artifact.js';
