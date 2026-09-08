@@ -353,9 +353,25 @@ export class ApiService extends ServiceModule {
              */
             const result = await this.call(found.route.key, parsed.data, {
                 meta: {
-                    ...(caller === undefined ? {} : {
-                        user: { id: caller.userId, tenant_id: outcome.scope ?? '', roles: [...caller.roles] },
-                    }),
+                    ...(caller === undefined
+                        /**
+                         * **An anonymous request says so, rather than saying nothing.**
+                         *
+                         * Absence is ambiguous here and the ambiguity is a tenant leak. An internal
+                         * broker call also arrives with no `user` — `organization.find` from inside
+                         * the cluster is expected to answer with every row — so a handler that reads
+                         * only "is there a user" cannot tell *nobody asked* from *the platform
+                         * asked*, and the safe default for one is the wrong default for the other.
+                         *
+                         * `identity`'s `beforeCrud` was written against this flag from the start and
+                         * nothing had ever set it, so an unauthenticated caller to a `public` route
+                         * fell through its `if (!userId) return input` and received every
+                         * organization on the platform. Proven in `test/identity/crud.test.ts`.
+                         */
+                        ? { unauthenticated: true }
+                        : {
+                            user: { id: caller.userId, tenant_id: outcome.scope ?? '', roles: [...caller.roles] },
+                        }),
                     ...(outcome.scope === undefined ? {} : { tenant_id: outcome.scope }),
                 },
             });

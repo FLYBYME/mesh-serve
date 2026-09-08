@@ -413,6 +413,56 @@ describe('identity on defineCrud', () => {
             expect(countNone).toBe(0);
         });
 
+        /**
+         * **The meta an anonymous HTTP caller actually produces.**
+         *
+         * Not a hypothetical. `api.service.ts` marks a request with no resolved caller
+         * `unauthenticated: true`, and `organization` declares `find`, `find_one`, `get` and `count`
+         * as `visibility: 'public'` — so a site may grant them at `auth: 'public'` and the gate will
+         * let this through to the handler.
+         *
+         * Until 2026-09-08 the api set no marker at all and this arrived as `meta: {}`, which fell
+         * through `identity`'s `if (!userId) return input` and returned **every organization on the
+         * platform**. Every other test in this block passes a `user`, which is why it survived: the
+         * filter was only ever exercised by callers who had already identified themselves.
+         *
+         * The marker exists because absence is ambiguous — an internal broker call has no `user`
+         * either, and is expected to see everything. See `internal CRUD on global identity
+         * collections` above, which must keep passing.
+         */
+        const anonymousMeta = () => ({ meta: { unauthenticated: true } });
+
+        /**
+         * Refused rather than answered-with-nothing, which is the guard's existing choice for a
+         * caller it cannot identify — the same branch a `user` key with no usable id takes.
+         *
+         * The alternative reading is that an anonymous caller is simply a caller who is a member of
+         * nothing and should get zero rows, the way `noOrgMeta` does above. That would keep
+         * `visibility: 'public'` meaning reachable-without-a-session. Worth settling; not settled
+         * here, because refusing is the safe half and this test exists to close a leak.
+         */
+        it('refuses to list organizations to a caller who never identified themselves', async () => {
+            if (!reachable) return;
+
+            await expect(broker.call('organization.find', {}, anonymousMeta())).rejects.toThrow();
+            await expect(broker.call('organization.count', {}, anonymousMeta())).rejects.toThrow();
+            await expect(broker.call('organization.find_one', {
+                query: { id: org1.id },
+            }, anonymousMeta())).rejects.toThrow();
+        });
+
+        it('answers 404 rather than a record when an anonymous caller names an organization', async () => {
+            if (!reachable) return;
+
+            let threw = false;
+            try {
+                await broker.call('organization.get', { id: org1.id }, anonymousMeta());
+            } catch {
+                threw = true;
+            }
+            expect(threw).toBe(true);
+        });
+
         it('stamps ownerId and adds owner membership on organization.create by authenticated caller', async () => {
             if (!reachable) return;
 
