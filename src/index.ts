@@ -85,6 +85,8 @@ export * from './identity/methods/password.js';
  * find that out on.
  */
 export * from './api/schema/descriptor.js';
+export * from './api/schema/expose.js';
+export * from './api/methods/gate.js';
 
 // ---------------------------------------------------------------------------- records
 
