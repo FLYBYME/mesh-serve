@@ -844,9 +844,28 @@ export async function main(): Promise<void> {
          * too: mesh-core's parts declare a kernel range, and composing against a kernel with no
          * artifact yet is a refusal that reads as a missing part.
          */
+        /**
+         * **Two repositories are this platform's own; `--app-repo` is anybody else's.**
+         *
+         * The kernel and core were hardcoded because bring-up was written to seed *this* platform
+         * from *its* repositories, and a third-party site was never a path through it. That is the
+         * wall the first outside user hit: flowboard exists, the platform can serve it, and there
+         * was no way to tell the seed it existed.
+         *
+         * Order matters and is not alphabetical. The kernel is imported first because everything
+         * else declares a range against it, and an app comes last because it may declare
+         * `requiredParts` against core's extensions.
+         *
+         * A repository is a **reference**, never a path — `src/builder/methods/source.ts` enforces
+         * that, and it is the rule that stops a build ever happening "wherever the code already is".
+         * A local *bare* repository satisfies it: the builder still clones one commit into a
+         * workspace it chose. So `--app-repo ~/code/.git-remotes/flowboard.git` is a legitimate
+         * development answer and does not weaken anything; a working directory is not.
+         */
         const repositories = [
             flag('kernel-repo', 'https://github.com/FLYBYME/mesh-web.git'),
             flag('core-repo', 'https://github.com/FLYBYME/mesh-core.git'),
+            ...(optional('app-repo') === undefined ? [] : [optional('app-repo') as string]),
         ];
         const ref = optional('ref');
 
@@ -942,8 +961,23 @@ export async function main(): Promise<void> {
             return;
         }
 
+        /**
+         * **`--parts` composes a subset; absent, everything imported goes in.**
+         *
+         * A release is *"a kernel and N parts at exact digests"*, and which N is a decision about
+         * the site — not a consequence of what happens to be in the catalog. Composing everything
+         * is right for seeding this platform's own console, and wrong for every other site: the
+         * first outside application landed on a page titled `Console` that booted nine parts, eight
+         * of which were somebody else's consoles.
+         *
+         * `--parts flowboard` is the site that is only flowboard. The kernel is never listed —
+         * every release has exactly one and it is named separately.
+         */
+        const only = optional('parts')?.split(',').map((p) => p.trim()).filter((p) => p !== '');
+
         const parts = [...versions]
             .filter(([name]) => name !== kernelName)
+            .filter(([name]) => only === undefined || only.includes(name))
             .map(([name, version]) => ({
                 // A part is an application or an extension; the catalog said which at import.
                 kind: (kinds.get(name) === 'application' ? 'application' : 'extension') as
@@ -967,7 +1001,11 @@ export async function main(): Promise<void> {
         const composed = await composeRelease(ctx, as, {
             kernel: kernelRange,
             parts,
-            name: 'console',
+            // The release is named after what it is. `console` was hardcoded, which is why a site
+            // holding one application called flowboard served a page titled Console.
+            // `--release-name`, not `--name`: that one is already the operator's display name, and
+            // two meanings for one flag is a bug waiting for somebody in a hurry.
+            name: flag('release-name', only?.length === 1 ? (only[0] ?? 'console') : 'console'),
             rolling: true,
         });
 
@@ -977,13 +1015,27 @@ export async function main(): Promise<void> {
             return;
         }
 
+        /**
+         * The site is named after what it serves.
+         *
+         * `application` and `title` were both hardcoded `console`, so a site holding one application
+         * called flowboard served a page whose `<title>` said Console — which is what a person sees
+         * in a tab, and it was wrong for every site except this platform's own.
+         *
+         * A single `--parts` names it; anything else keeps the old default, because a release of
+         * nine consoles genuinely is one.
+         */
+        const application = flag('application', only?.length === 1 ? (only[0] ?? 'console') : 'console');
+
         await ensureSite(ctx, as, {
             host,
             api,
-            application: 'console',
+            application,
             tenantId: orgId,
             requires: composed.requires,
-            title: 'Console',
+            title: flag('title', application === 'console'
+                ? 'Console'
+                : application.charAt(0).toUpperCase() + application.slice(1)),
         });
 
         await deploySite(ctx, as, { host, release: composed.hash });
