@@ -166,13 +166,21 @@ export class ApiService extends ServiceModule {
             validate: async (ticket) => {
                 const answer = await this.call<{
                     valid: boolean; userId?: string; roles?: string[]; expiresAt?: number;
+                    provisional?: boolean;
                 }>('identity.ticket_validate', { ticket });
 
                 if (!answer.valid || answer.userId === undefined) return { valid: false };
 
                 return {
                     valid: true,
-                    caller: { userId: answer.userId, roles: answer.roles ?? [] },
+                    caller: {
+                        userId: answer.userId,
+                        roles: answer.roles ?? [],
+                        // Carried through, or the gate's provisional check can never fire — the
+                        // shape of the bug this adapter already had once, where a flat answer was
+                        // handed through and every ticket resolved to no caller at all.
+                        ...(answer.provisional === true ? { provisional: true } : {}),
+                    },
                     ...(answer.expiresAt === undefined ? {} : { expiresAt: answer.expiresAt }),
                 };
             },

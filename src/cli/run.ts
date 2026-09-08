@@ -19,7 +19,7 @@
 
 import { describeInput, flagFor, missingRequired, parseArgs, type Schema } from './args.js';
 import { callContract, fetchDescriptor, originOf, CliError, type Call, type Descriptor } from './descriptor.js';
-import { credentialsPath, emailFor, forgetTicket, saveTicket, ticketFor } from './credentials.js';
+import { credentialsPath, currentHost, emailFor, forgetTicket, saveTicket, ticketFor } from './credentials.js';
 
 export interface Io {
     out(line: string): void;
@@ -33,7 +33,8 @@ export interface Io {
  * testable without a subprocess.
  */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
-    const host = valueOf(argv, '--host') ?? process.env['MESH_HOST'];
+    // `--host` wins, then the host `login` remembered. Explicit beats remembered, always.
+    const host = valueOf(argv, '--host') ?? currentHost();
     const rest = withoutFlag(argv, '--host');
     const asJson = rest.includes('--json');
     const words = rest.filter((a) => !a.startsWith('--'));
@@ -187,7 +188,8 @@ async function help(host: string | undefined, io: Io): Promise<number> {
     }
 
     const descriptor = await fetchDescriptor(host, ticketFor(host));
-    io.out(`${descriptor.application} at ${originOf(host)} offers ${String(descriptor.calls.length)} call(s):\n`);
+    const remembered = currentHost() === host ? ' (remembered)' : '';
+    io.out(`${descriptor.application} at ${originOf(host)}${remembered} offers ${String(descriptor.calls.length)} call(s):\n`);
 
     if (descriptor.calls.length === 0) {
         io.out('  (none — this site grants nothing to this caller)\n');
@@ -271,6 +273,9 @@ function whoami(host: string, io: Io): number {
         return 1;
     }
     io.out(`${email ?? '(unknown account)'} at ${host}`);
+    // Said out loud, because this is the value that makes somebody deploy to production believing
+    // they are on staging. A remembered host that is never printed is the dangerous version.
+    if (currentHost() === host) io.out('(the remembered host — pass --host to use another)');
     return 0;
 }
 

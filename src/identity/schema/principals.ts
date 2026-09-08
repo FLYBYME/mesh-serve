@@ -37,6 +37,23 @@ export const UserSchema = z.object({
     /** A suspended principal fails validation regardless of any live ticket. */
     suspendedAt: z.number().optional(),
     suspendedReason: z.string().optional(),
+    /**
+     * **The account the platform made for itself on first boot, and it may do almost nothing.**
+     *
+     * A cluster with no accounts cannot be signed into, and every contract above `public` needs a
+     * session — so something has to create the first person. The alternatives were both worse than
+     * this: a well-known default password ships a platform pre-compromised, and a tool that can
+     * write a user without being one (which is what `bring-up` does today) is then the weakest thing
+     * in the system.
+     *
+     * So identity creates one account on first boot, prints its password to the node's own stdout
+     * exactly once, and marks it `provisional`. **A provisional caller is refused by the gate at
+     * every level above `public`** — not warned, refused. `identity.set_password` is the one thing
+     * it may do, and doing it clears the flag.
+     *
+     * "You should change this" does not survive a busy week. "Nothing works until you do" does.
+     */
+    provisional: z.boolean().optional(),
 });
 
 export type User = z.infer<typeof UserSchema>;

@@ -89,6 +89,15 @@ export const ValidationSchema = z.object({
     /** So the API's cache entry cannot outlive the ticket, whatever its own TTL says. */
     expiresAt: z.number().optional(),
     /**
+     * This account was created by the platform on first boot and has not been claimed.
+     *
+     * Travels with the validation rather than being looked up by the gate, for the same reason
+     * `roles` does: the gate holds a cached caller and must not need a second round trip to identity
+     * to know what it may do. Read from the **user**, not the ticket — clearing the flag has to take
+     * effect on the next call, not the next sign-in.
+     */
+    provisional: z.boolean().optional(),
+    /**
      * The epoch this answer was correct at.
      *
      * A validating instance that has never polled gets a cursor for free, so its first

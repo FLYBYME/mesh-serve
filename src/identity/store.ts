@@ -32,6 +32,14 @@ export interface Stored<T> { readonly id: string; readonly value: T }
 export interface IdentityStore {
     createUser(user: User): Promise<Stored<User>>;
     findUserByEmail(email: string): Promise<Stored<User> | undefined>;
+    /**
+     * Is there anybody at all?
+     *
+     * Asked once, at boot, to decide whether this is a cluster's first start. A boolean rather than
+     * a count: the only question is *nobody or somebody*, and a count invites a caller to reason
+     * about how many, which is not a thing identity should encourage anyone to do.
+     */
+    anyUser(): Promise<boolean>;
     getUser(id: string): Promise<Stored<User> | undefined>;
     updateUser(id: string, patch: Partial<User>): Promise<void>;
 
@@ -124,6 +132,9 @@ export function memoryStore(): IdentityStore {
                 if (value.email === email) return { id: key, value };
             }
             return undefined;
+        },
+        async anyUser() {
+            return users.size > 0;
         },
         async getUser(key) {
             const value = users.get(key);
@@ -535,6 +546,12 @@ export function mongoStore(database: Database | Db): IdentityStore {
             const doc = await cols.users.findOne({ email });
             if (doc === null) return undefined;
             return { id: toId(doc._id), value: UserSchema.parse(doc) };
+        },
+        async anyUser() {
+            await ensureReady();
+            // `findOne` with a projection, not `countDocuments`: the question is whether one exists,
+            // and on a large collection counting them all to learn that is work nobody asked for.
+            return await getCollections().users.findOne({}, { projection: { _id: 1 } }) !== null;
         },
 
         async getUser(key) {

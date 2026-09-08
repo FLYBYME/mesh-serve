@@ -12,7 +12,7 @@
  */
 
 import { MeshError, type IServiceBroker, type IServiceContext, type IServiceModule, type ToolContract, type z } from '@flybyme/mesh';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import {
     allIdentityContracts,
@@ -115,6 +115,9 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
             // and roles removed since should stop applying. A ticket is identity, not authority.
             roles: [PUBLIC_ROLE, 'authenticated', ...user.value.roles],
             expiresAt: ticket.expiresAt,
+            // From the user, like the roles above: clearing the flag takes effect on the next call
+            // rather than the next sign-in.
+            ...(user.value.provisional === true ? { provisional: true } : {}),
             epoch: newest,
         };
     };
@@ -342,6 +345,8 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
             };
 
             await started.registerModule(organizationModule);
+
+            await ensureFirstOperator(store, started);
 
             started.logger.info(`[identity] ready — ${String((await store.listRoles()).length)} roles`);
         },
@@ -677,3 +682,77 @@ export const hashApiToken = (token: string): string =>
 function isRecord(obj: unknown): obj is Record<string, unknown> {
     return typeof obj === 'object' && obj !== null && !Array.isArray(obj);
 }
+
+/**
+ * **The first account, made once, printed once.**
+ *
+ * A cluster with no users cannot be signed into, and every contract above `public` needs a session.
+ * Something has to create the first person, and the two easy answers are both worse:
+ *
+ * - **A well-known default account** ships a platform pre-compromised. Everybody who has read the
+ *   documentation has the password, including everybody who never intended to run one.
+ * - **A tool that writes a user without being one** — which is what `src/bring-up.ts` does today —
+ *   becomes the weakest thing in the system the moment it exists, and it authenticates differently
+ *   from every other caller (the shape roadmap **F6** removed from `publish-cli`).
+ *
+ * So: identity makes one account, generates a real password, and prints it to **this process's own
+ * stdout**. Whoever can read that log is already on the machine. It appears once and is never stored
+ * anywhere it can be read back, because a credential a platform can recover is a credential a
+ * platform can leak.
+ *
+ * The account is marked `provisional`, which the gate refuses above `public`. That is the difference
+ * between a warning and a wall, and only the wall survives a busy week.
+ */
+async function ensureFirstOperator(store: IdentityStore, broker: IServiceBroker): Promise<void> {
+    if (await store.anyUser()) return;
+
+    /**
+     * 24 bytes from the system CSPRNG, base64url.
+     *
+     * Not a memorable phrase: this is typed once, immediately, into `mesh-serve login`, and its only
+     * job is to be unguessable for the minutes it exists.
+     */
+    const password = randomBytes(24).toString('base64url');
+    /**
+     * `.invalid` is reserved by RFC 2606 and can never resolve, which is the point: this address
+     * must not be able to receive mail. `operator@localhost` was the first choice and it is not a
+     * valid address at all — `UserSchema` refused it, and every `user.find` on a fresh cluster
+     * failed validation rather than the account failing to be created, which is a worse way to find
+     * out.
+     */
+    const email = process.env['MESH_FIRST_OPERATOR'] ?? 'operator@node.invalid';
+
+    const created = await store.createUser({
+        email,
+        displayName: 'First operator',
+        passwordHash: await hashPassword(password),
+        // The role it will need, held from the start: an operator who has to grant themselves
+        // operator is a chicken-and-egg with extra steps. The `provisional` flag is what stops it
+        // being usable, not the absence of a role.
+        roles: [FIRST_OPERATOR_ROLE],
+        provisional: true,
+    });
+
+    /**
+     * `process.stdout`, not the logger.
+     *
+     * A logger may be shipping to a file, a collection or another machine, and this is the one
+     * string in the system that must not travel. It goes to the terminal of the person who started
+     * the process and nowhere else.
+     */
+    process.stdout.write(
+        `\n${'─'.repeat(72)}\n`
+        + `  FIRST BOOT — no accounts existed, so one was created.\n\n`
+        + `    email     ${email}\n`
+        + `    password  ${password}\n\n`
+        + `  This is shown once and is not recoverable. It can do nothing except set its own\n`
+        + `  password — every other call is refused until it does.\n\n`
+        + `    mesh-serve --host <site> login\n`
+        + `${'─'.repeat(72)}\n\n`,
+    );
+
+    broker.logger.warn(`[identity] first boot: created provisional operator ${email} (${created.id})`);
+}
+
+/** The cluster-scoped role the first operator holds. Kept here so the two references cannot drift. */
+const FIRST_OPERATOR_ROLE = 'operator';

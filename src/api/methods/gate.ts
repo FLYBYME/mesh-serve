@@ -27,8 +27,20 @@ import type { ToolContract, z } from '@flybyme/mesh';
 import type { Gate } from '../schema/expose.js';
 
 /** Who is calling, as established by the ticket. Never taken from the request body. */
+/**
+ * The one action a provisional account may reach. Named here rather than in a list of exceptions,
+ * because a list is a thing that grows.
+ */
+export const PASSWORD_ACTION = 'set_password';
+
 export interface Caller {
     readonly userId: string;
+    /**
+     * Created by the platform on first boot and not yet claimed by a person.
+     *
+     * Refused everywhere except `identity.set_password` — see `checkCoarse`.
+     */
+    readonly provisional?: boolean;
     /** Platform-level roles. Organization roles are per-scope and resolved by the hook. */
     readonly roles: readonly string[];
 }
@@ -171,6 +183,28 @@ export async function executeGate(request: GateRequest): Promise<GateOutcome> {
  */
 function checkCoarse(request: GateRequest): GateOutcome {
     const { gate, caller } = request;
+
+    /**
+     * **A provisional account may do one thing: replace its own password.**
+     *
+     * identity creates one on a cluster's first boot, because a platform with no accounts cannot be
+     * signed into and something has to make the first person. The flag is what stops that account
+     * being a permanent back door — and it is checked *here*, ahead of every level including
+     * `public`, so there is one place it can be true and no contract that forgets to ask.
+     *
+     * A refusal rather than a warning. "You should change this" does not survive a busy week; a
+     * platform where nothing works until you do is one where it gets done in the first minute.
+     */
+    if (caller?.provisional === true && request.contract.action !== PASSWORD_ACTION) {
+        return {
+            ok: false,
+            status: 403,
+            code: 'PROVISIONAL_ACCOUNT',
+            message:
+                'This account was created on first boot and can do nothing until its password is set. '
+                + 'Set one, and it becomes an ordinary account.',
+        };
+    }
 
     if (gate.kind === 'permission') {
         return caller === undefined ? unauthenticated(request) : { ok: true };

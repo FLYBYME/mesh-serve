@@ -167,3 +167,87 @@ describe('isOperator reconciliation with delivery', () => {
         });
     });
 });
+
+/**
+ * **The account a cluster makes for itself, and the wall around it.**
+ *
+ * identity creates one provisional operator on first boot, because a platform with no accounts
+ * cannot be signed into and something has to make the first person. The flag is what stops it being
+ * a permanent back door.
+ *
+ * These assert the *refusal*, not the creation. A `provisional` field that nothing enforced would be
+ * worse than none — it would read, in the schema and in the log, as a protection that exists.
+ */
+describe('a provisional account is refused until it is claimed', () => {
+    const provisional: Caller = { userId: 'u1', roles: [OPERATOR_ROLE], provisional: true };
+    const claimed: Caller = { userId: 'u1', roles: [OPERATOR_ROLE] };
+
+    const setPassword = defineContract({
+        domain: 'identity',
+        action: 'set_password',
+        description: 'Set your own password.',
+        inputSchema: z.object({ password: z.string() }),
+        outputSchema: z.object({ ok: z.boolean() }),
+        rest: { method: 'POST', path: '/identity/password' },
+        print: () => '',
+    });
+
+    it('refuses it even holding the operator role', async () => {
+        // The role is real and the account still cannot act. The flag outranks what it holds, which
+        // is the point: it is created WITH the role it will need, so that claiming it is one step.
+        const outcome = await executeGate({
+            gate: { kind: 'auth', level: 'operator' },
+            contract: testContract,
+            caller: provisional,
+            requestedScope: undefined,
+            input: {},
+        });
+
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) {
+            expect(outcome.status).toBe(403);
+            expect(outcome.code).toBe('PROVISIONAL_ACCOUNT');
+        }
+    });
+
+    it('refuses it on a public contract too', async () => {
+        // Ahead of every level including `public`, so there is one place the flag is checked and no
+        // contract that forgets to ask. A provisional account is not a weaker account; it is an
+        // account that does one thing.
+        const outcome = await executeGate({
+            gate: { kind: 'auth', level: 'public' },
+            contract: testContract,
+            caller: provisional,
+            requestedScope: undefined,
+            input: {},
+        });
+
+        expect(outcome.ok).toBe(false);
+    });
+
+    it('lets it set its own password, which is the one way out', async () => {
+        const outcome = await executeGate({
+            gate: { kind: 'auth', level: 'user' },
+            contract: setPassword,
+            caller: provisional,
+            requestedScope: undefined,
+            input: { password: 'a new one' },
+        });
+
+        expect(outcome.ok).toBe(true);
+    });
+
+    it('leaves an ordinary account alone', async () => {
+        // The control. Without it every assertion above passes for a caller who is simply refused
+        // for some other reason entirely.
+        const outcome = await executeGate({
+            gate: { kind: 'auth', level: 'operator' },
+            contract: testContract,
+            caller: claimed,
+            requestedScope: undefined,
+            input: {},
+        });
+
+        expect(outcome.ok).toBe(true);
+    });
+});

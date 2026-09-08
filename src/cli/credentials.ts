@@ -24,8 +24,12 @@ import { dirname, join } from 'node:path';
  */
 const FILE = join(homedir(), '.mesh-serve', 'credentials.json');
 
+interface Entry { readonly ticket: string; readonly email?: string; readonly issuedAt: number }
+
 interface Stored {
-    readonly [host: string]: { readonly ticket: string; readonly email?: string; readonly issuedAt: number };
+    /** The host later commands use when none is given. Set by `login`. */
+    readonly current?: string;
+    readonly hosts?: Readonly<Record<string, Entry>>;
 }
 
 const read = (): Stored => {
@@ -48,23 +52,45 @@ const write = (stored: Stored): void => {
 };
 
 export const ticketFor = (host: string): string | undefined =>
-    process.env['MESH_TICKET'] ?? read()[host]?.ticket;
+    process.env['MESH_TICKET'] ?? read().hosts?.[host]?.ticket;
 
-export const emailFor = (host: string): string | undefined => read()[host]?.email;
+export const emailFor = (host: string): string | undefined => read().hosts?.[host]?.email;
+
+/**
+ * **The host `login` last signed into, used when a command names none.**
+ *
+ * You say it once and stop saying it, which is what a person expects and what every other tool of
+ * this shape does.
+ *
+ * It is also how somebody deploys to production believing they are on staging — so `whoami` and the
+ * help both print which host is current, and an explicit `--host` always wins. A remembered value
+ * that is never shown is the dangerous version of this feature.
+ */
+export const currentHost = (): string | undefined => process.env['MESH_HOST'] ?? read().current;
 
 export function saveTicket(host: string, ticket: string, email?: string): void {
+    const stored = read();
     write({
-        ...read(),
-        [host]: { ticket, issuedAt: Date.now(), ...(email === undefined ? {} : { email }) },
+        current: host,
+        hosts: {
+            ...stored.hosts,
+            [host]: { ticket, issuedAt: Date.now(), ...(email === undefined ? {} : { email }) },
+        },
     });
 }
 
 export function forgetTicket(host: string): void {
-    const stored = { ...read() };
+    const stored = read();
+    const hosts = { ...stored.hosts };
     // Deleted rather than blanked. A key holding an empty string reads as "signed in as nobody",
     // which is a state the rest of this has no meaning for.
-    delete (stored as Record<string, unknown>)[host];
-    write(stored);
+    delete hosts[host];
+    write({
+        // Signing out of the current host leaves none current: the alternative is a later command
+        // silently running against a different site than the one you just left.
+        ...(stored.current === host ? {} : { current: stored.current }),
+        hosts,
+    });
 }
 
 export const credentialsPath = FILE;
