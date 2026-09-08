@@ -816,3 +816,32 @@ in `mesh-serve/src/*`, hit two real gaps rather than just B10:**
   not a shortcut taken lightly. Fixing this for real means either exporting the descriptor/emit
   functions publicly so a local script can build its own descriptor from locally-imported contracts,
   or teaching `client-cli.ts` to accept a relative/local path alongside a package name.
+
+---
+
+## F9 — `defineCrud` cannot shape a create input, and this is the third time
+
+`organization.create` needs `ownerId` set from the session and absent from the input. `defineCrud`
+derives its create input from the base schema, so a field that is required on the stored record is
+required in the input, and there is no override.
+
+The workaround now in `identity/module.ts` is a `beforeCrud` hook that **overwrites** whatever
+`ownerId` arrives with the caller's id. It is correct — a caller must not be able to create an
+organization owned by somebody else — but the API asks for a value it ignores, which is a thing
+somebody will have to be told rather than read.
+
+This is the same constraint that produced `cdn.site_edit`, whose contract comment says it plainly:
+*it exists because `defineCrud` cannot omit a field from a generated update.* Twice is a pattern;
+three times is a missing feature.
+
+Two candidate answers, and the first is cheap:
+
+1. A per-action input override on `defineCrud` — `createInput: (base) => base.omit({ ownerId: true })`.
+   Everything else stays generated.
+2. Accept that any collection whose create needs the session gets a hand-written tool, and say so in
+   the spec so nobody keeps rediscovering it.
+
+Related: the first attempt at this weakened `OrganizationSchema.ownerId` from `min(1)` to
+`default('')`, which silently un-answered surfdns#29 — an organization with no owner became
+constructible again. `test/identity/principals.test.ts` caught it. Whatever answer is taken here must
+not reach for that one.
