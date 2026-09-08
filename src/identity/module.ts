@@ -11,7 +11,7 @@
  * calls keeps this a plain object with no inherited lifecycle to reason about.
  */
 
-import type { IServiceBroker, IServiceContext, IServiceModule, ToolContract, z } from '@flybyme/mesh';
+import { MeshError, type IServiceBroker, type IServiceContext, type IServiceModule, type ToolContract, type z } from '@flybyme/mesh';
 import { createHash } from 'node:crypto';
 
 import {
@@ -189,7 +189,156 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                 }
             }
 
+            const organizationModule: IServiceModule = {
+                domain: 'organization',
+                getContracts: () => [],
+                isCrud: (_d: string, _a: string) => true,
+                getEventHandlers: () => new Map(),
+                async execute(domain: string, action: string): Promise<unknown> {
+                    throw new Error(`Engine Error: CRUD action "${action}" for domain "${domain}" was not intercepted.`);
+                },
+                async beforeCrud(domain: string, action: string, input: unknown, serviceCtx: IServiceContext) {
+                    if (domain !== 'organization') return input;
+
+                    const meta = isRecord(serviceCtx.meta) ? serviceCtx.meta : undefined;
+                    let userId: string | undefined;
+                    if (meta) {
+                        const user = meta['user'];
+                        const directUserId = meta['userId'];
+                        if (isRecord(user) && typeof user['id'] === 'string' && user['id'].length > 0) {
+                            userId = user['id'];
+                        } else if (typeof directUserId === 'string' && directUserId.length > 0) {
+                            userId = directUserId;
+                        }
+                    }
+
+                    if (meta && ('user' in meta || meta['unauthenticated'] === true) && !userId) {
+                        throw new MeshError({
+                            code: 'UNAUTHORIZED',
+                            status: 401,
+                            message: 'Authentication required to access organizations.',
+                        });
+                    }
+
+                    if (!userId) {
+                        return input;
+                    }
+
+                    const memberships = await store.membershipsOf(userId);
+                    const allowedOrgIds = memberships.map((m) => m.organizationId);
+
+                    if (action === 'get') {
+                        const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
+                        const id = typeof params['id'] === 'string' ? params['id'] : '';
+                        if (!allowedOrgIds.includes(id)) {
+                            throw new MeshError({
+                                code: 'NOT_FOUND',
+                                status: 404,
+                                message: `organization not found: ${id}`,
+                            });
+                        }
+                        return params;
+                    }
+
+                    if (action === 'resolve') {
+                        const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
+                        const id = typeof params['id'] === 'string' ? params['id'] : '';
+                        if (!allowedOrgIds.includes(id)) {
+                            return { ...params, id: '000000000000000000000000' };
+                        }
+                        return params;
+                    }
+
+                    if (action === 'find' || action === 'find_one' || action === 'count') {
+                        const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
+                        const query: Record<string, unknown> = isRecord(params['query']) ? { ...params['query'] } : {};
+
+                        if ('id' in query && query['id'] !== undefined) {
+                            const requestedId = query['id'];
+                            if (typeof requestedId === 'string') {
+                                query['id'] = allowedOrgIds.includes(requestedId) ? requestedId : { $in: [] };
+                            } else if (isRecord(requestedId)) {
+                                const inVal = requestedId['$in'];
+                                const eqVal = requestedId['$eq'];
+                                if (Array.isArray(inVal)) {
+                                    query['id'] = {
+                                        $in: inVal.filter((id): id is string => typeof id === 'string' && allowedOrgIds.includes(id)),
+                                    };
+                                } else if (typeof eqVal === 'string') {
+                                    query['id'] = allowedOrgIds.includes(eqVal) ? requestedId : { $in: [] };
+                                } else {
+                                    query['id'] = { $in: allowedOrgIds };
+                                }
+                            } else {
+                                query['id'] = { $in: allowedOrgIds };
+                            }
+                        } else {
+                            query['id'] = { $in: allowedOrgIds };
+                        }
+
+                        return { ...params, query };
+                    }
+
+                    if (action === 'create') {
+                        const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
+                        if (!params['ownerId']) {
+                            return { ...params, ownerId: userId };
+                        }
+                        return params;
+                    }
+
+                    if (action === 'delete' || action === 'update' || action === 'replace') {
+                        const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
+                        const id = typeof params['id'] === 'string' ? params['id'] : '';
+                        if (!allowedOrgIds.includes(id)) {
+                            throw new MeshError({
+                                code: 'NOT_FOUND',
+                                status: 404,
+                                message: `organization not found: ${id}`,
+                            });
+                        }
+                        return params;
+                    }
+
+                    return input;
+                },
+                async afterCrud(domain: string, action: string, output: unknown, serviceCtx: IServiceContext) {
+                    if (domain !== 'organization') return output;
+                    const meta = isRecord(serviceCtx.meta) ? serviceCtx.meta : undefined;
+                    let userId: string | undefined;
+                    if (meta) {
+                        const user = meta['user'];
+                        const directUserId = meta['userId'];
+                        if (isRecord(user) && typeof user['id'] === 'string' && user['id'].length > 0) {
+                            userId = user['id'];
+                        } else if (typeof directUserId === 'string' && directUserId.length > 0) {
+                            userId = directUserId;
+                        }
+                    }
+
+                    if (action === 'create' && isRecord(output) && typeof output['id'] === 'string' && userId) {
+                        const orgId = output['id'];
+                        try {
+                            await store.reownOrganization(orgId, userId);
+                        } catch {
+                            // Ignore if reown fails or already member
+                        }
+                    }
+                    return output;
+                },
+            };
+
+            await started.registerModule(organizationModule);
+
             started.logger.info(`[identity] ready — ${String((await store.listRoles()).length)} roles`);
+        },
+
+        async onStop(stopped: IServiceBroker): Promise<void> {
+            try {
+                await stopped.unregisterModule('organization');
+            } catch {
+                // Ignore if not registered
+            }
         },
 
         async execute(domain: string, action: string, input: unknown, _ctx: IServiceContext): Promise<unknown> {
@@ -511,3 +660,7 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
 /** A stored API token is hashed: unlike a ticket, nothing ever needs to read it back. */
 export const hashApiToken = (token: string): string =>
     createHash('sha256').update(token).digest('hex');
+
+function isRecord(obj: unknown): obj is Record<string, unknown> {
+    return typeof obj === 'object' && obj !== null && !Array.isArray(obj);
+}

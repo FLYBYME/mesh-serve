@@ -57,7 +57,7 @@ export const OrganizationSchema = z.object({
      * 2. Transferring ownership (`transferOwnership`) is the *only* way `ownerId` changes, and
      *    only the current owner may initiate it.
      */
-    ownerId: z.string().min(1),
+    ownerId: z.string().default(''),
 });
 
 export type Organization = z.infer<typeof OrganizationSchema>;
