@@ -43,11 +43,43 @@ if (command === 'dev') {
         process.exit(0);
     }
 } else {
-    process.stderr.write(
-        'usage: mesh-serve client  [--descriptor mesh.json] [--out src/generated/api.ts]\n' +
-        '                          [--descriptor-out descriptor.json] [--check]\n' +
-        '       mesh-serve dev     [--descriptor mesh.json] [--port 8080] [--no-serve]\n' +
-        '       mesh-serve publish [--publisher <org>] [--repository <url>] [--dry-run]\n',
-    );
-    process.exit(command === undefined ? 1 : 2);
+    /**
+     * **Everything else is the site's, not this file's.**
+     *
+     * The three above are build-time tools — they work on a checkout and never call a cluster. The
+     * rest of the CLI is a *projection of a site's exposure*, so there is no list of commands here
+     * and there must not be one: a command a site exposes exists because it exposes it, and a second
+     * place to add it is the place that gets forgotten.
+     *
+     * See `spec/cli.md`.
+     */
+    const { run: runCli } = await import('../dist/cli/run.js');
+    const { createInterface } = await import('node:readline/promises');
+
+    process.exit(await runCli(process.argv.slice(2), {
+        out: (line) => process.stdout.write(`${line}\n`),
+        err: (line) => process.stderr.write(`${line}\n`),
+        prompt: async (question, hidden) => {
+            const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+            try {
+                if (!hidden) return (await rl.question(question)).trim();
+
+                /**
+                 * A password is never echoed, and never read from argv.
+                 *
+                 * A value typed as `--password …` is visible in `ps` to every user on the machine and
+                 * lands in a shell history file. `publish-cli` was fixed for the same reason (F6).
+                 */
+                const wasRaw = process.stdin.isRaw ?? false;
+                process.stdout.write(question);
+                rl.output.write = () => true;
+                const answer = await rl.question('');
+                process.stdout.write('\n');
+                if (process.stdin.isTTY === true && !wasRaw) process.stdin.setRawMode(false);
+                return answer.trim();
+            } finally {
+                rl.close();
+            }
+        },
+    }));
 }
