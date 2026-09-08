@@ -47,6 +47,8 @@ import { createTicketCache, type TicketCache } from './methods/tickets.js';
 import type { AuthorizeHook } from './methods/gate.js';
 import { describeExposure, type ExposureDescriptor } from './schema/descriptor.js';
 import type { ExposeEntry } from './schema/expose.js';
+import type { TelemSink } from '../telem/sinks/sink.js';
+import { getDefaultTelemSink } from '../telem/sinks/default.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
 export const SHAPE_HEADER = 'x-exposure-shape';
@@ -74,6 +76,8 @@ export interface ApiServiceOptions {
     readonly authorize?: AuthorizeHook;
     /** Which origins a browser may call from. Absent means none, which is the safe default. */
     readonly allowOrigins?: readonly string[];
+    /** Telemetry sink for recording requests. Falls back to default process sink. */
+    readonly telem?: TelemSink;
 }
 
 export const DEFAULT_TTL_MS = 30_000;
@@ -210,9 +214,25 @@ export class ApiService extends ServiceModule {
     // ------------------------------------------------------------------ the request
 
     async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+        const start = performance.now();
         const host = hostOf(req.headers, this.options.trustForwardedHost ?? false);
         const [path] = (req.url ?? '/').split('?');
         const origin = header(req, 'origin');
+        const sessionId = header(req, 'x-session-id');
+
+        res.on('finish', () => {
+            const durationMs = Math.round(performance.now() - start);
+            const telem = this.options.telem ?? getDefaultTelemSink();
+            telem.recordRequest({
+                source: 'api',
+                host,
+                method: req.method ?? 'GET',
+                path: path ?? '/',
+                status: res.statusCode,
+                durationMs,
+                sessionId,
+            });
+        });
 
         try {
             /**
