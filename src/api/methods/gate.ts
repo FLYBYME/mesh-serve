@@ -41,6 +41,22 @@ export interface Caller {
      * Refused everywhere except `identity.set_password` — see `checkCoarse`.
      */
     readonly provisional?: boolean;
+    /**
+     * **The API token this caller arrived on, by name — so an agent is not mistaken for a person.**
+     *
+     * A ticket is issued to somebody who typed a password. A token is issued *to a program*, and
+     * the two must not be the same kind of caller even when they resolve to the same account:
+     *
+     * - a `destructive` contract asks a person to confirm (`spec/ui/rules.md` §7), and there is
+     *   nobody to ask on a token
+     * - an audit that says "tim deleted the release" when tim's agent did is a lie that reads as
+     *   fact
+     * - a token is revocable on its own, so *which* agent matters
+     *
+     * Present only for a token. Its absence means a person, and that is the safe direction: a new
+     * credential kind that forgot to set it would be treated as more suspicious rather than less.
+     */
+    readonly agent?: string;
     /** Platform-level roles. Organization roles are per-scope and resolved by the hook. */
     readonly roles: readonly string[];
 }

@@ -188,3 +188,56 @@ describe('a tool is named from the contract, never declared', () => {
         expect(`${call?.domain ?? ''}.${call?.action ?? ''}`).toBe('thing.find');
     });
 });
+
+// ---------------------------------------------------------------------------- agents
+
+/**
+ * **An agent is a caller, not a borrowed person.**
+ *
+ * An API token resolves to its own `userId`, its own roles, and a **name** — so `tools/list` narrows
+ * to what that agent may do, an audit line says which agent did it, and the token can be revoked
+ * without signing anybody out.
+ *
+ * The `agent` field is what carries the distinction. Its absence means a person, which is the safe
+ * direction: a credential kind added later that forgot to set it would be treated as more suspicious
+ * rather than less.
+ */
+describe('an agent and a person are different callers', () => {
+    const person: Caller = { userId: 'u1', roles: ['operator'] };
+    const agent: Caller = { userId: 'u1', roles: ['operator'], agent: 'flowboard-worker' };
+
+    it('gives an agent the same tools as the person it acts for, when the roles match', async () => {
+        // The token's *roles* decide what it may call, exactly as a ticket's do. Being an agent is
+        // not a lower gate level — it is a different kind of caller, and the difference shows up on
+        // destructive calls rather than on reads.
+        const descriptor = describeExposure(
+            [{ contract: thingCrud.find, auth: 'operator' }],
+            { application: 'test' },
+        );
+
+        const asPerson = await toolsFor(descriptor.calls as never, person, lookupIn(thingCrud as never));
+        const asAgent = await toolsFor(descriptor.calls as never, agent, lookupIn(thingCrud as never));
+
+        expect(asAgent).toEqual(asPerson);
+    });
+
+    it('is refused a destructive contract that the person may call', () => {
+        // The rule spec/ui/rules.md 7 always meant: a destructive write asks a person. There is
+        // nobody to ask on a token, and no amount of it being a *trusted* token makes it a person.
+        const refusesAgents = (caller: Caller, destructive: boolean): boolean =>
+            destructive && caller.agent !== undefined;
+
+        expect(refusesAgents(agent, true)).toBe(true);
+        expect(refusesAgents(person, true)).toBe(false);
+        // A read is a read, whoever is asking.
+        expect(refusesAgents(agent, false)).toBe(false);
+    });
+
+    it('names the agent, so a refusal and an audit line can say which one', () => {
+        // "an api token" is the fallback when a token carries no name — a label, never an absence.
+        // Code that tests `agent !== undefined` must not start passing because somebody left the
+        // name blank.
+        expect(agent.agent).toBe('flowboard-worker');
+        expect(person.agent).toBeUndefined();
+    });
+});

@@ -185,10 +185,7 @@ export class McpService extends ServiceModule {
                 return sendJson(res, 404, rpcError(id, RpcCode.InvalidRequest, `No site serves ${host}.`));
             }
 
-            // The ticket, from the one place it is read. An invalid one makes the caller
-            // **anonymous**, not refused — the gate decides whether anonymous is good enough, and a
-            // public contract is reachable without one.
-            const caller = await this.options.tickets?.resolve(bearer(req));
+            const caller = await this.#resolve(bearer(req));
             const scope = header(req, SCOPE_HEADER);
 
             switch (request.method) {
@@ -222,6 +219,53 @@ export class McpService extends ServiceModule {
             const { status, body } = toHttpError(error);
             if (status >= 500) this.#broker?.logger.error(`[mcp] ${host}`, error);
             return sendJson(res, 200, rpcError(id, RpcCode.InternalError, body.message ?? 'Internal error.'));
+        }
+    }
+
+    /**
+     * **A ticket or an API token, and the difference is kept.**
+     *
+     * A ticket belongs to somebody who typed a password. A token is issued *to a program* — which is
+     * how an agent gets an identity of its own rather than borrowing a person's. That matters for
+     * three separate reasons and only the third is obvious:
+     *
+     * 1. A `destructive` contract asks a person to confirm, and there is nobody to ask on a token.
+     * 2. An audit saying *tim deleted the release* when tim's agent did is a lie that reads as fact.
+     * 3. A token is revocable by itself, so an agent can be switched off without signing anybody out.
+     *
+     * Tried in that order, and a miss on both is **anonymous rather than refused** — the gate decides
+     * whether anonymous is good enough, and a `public` contract is reachable without either.
+     *
+     * Two lookups on a miss is the cost. A prefixed token (`mst_…`) would let this route on sight
+     * rather than by trying; worth doing when tokens are next touched, and not worth a migration on
+     * its own.
+     */
+    async #resolve(credential: string | undefined): Promise<Caller | undefined> {
+        if (credential === undefined) return undefined;
+
+        const asTicket = await this.options.tickets?.resolve(credential);
+        if (asTicket !== undefined) return asTicket;
+
+        try {
+            const answer = await this.#call(
+                'identity.api_token_validate',
+                { token: credential },
+                { meta: { unauthenticated: true } },
+            ) as { valid?: boolean; userId?: string; roles?: string[]; name?: string };
+
+            if (answer.valid !== true || answer.userId === undefined) return undefined;
+
+            return {
+                userId: answer.userId,
+                roles: answer.roles ?? [],
+                // Named, so a refusal and an audit line can both say which agent. A token with no
+                // name is still an agent — the fallback is a label, never an absence.
+                agent: answer.name ?? 'an api token',
+            };
+        } catch {
+            // A token this cluster cannot validate is not a caller. Anonymous, not an error: an
+            // expired token should read the same as no token, which is what a client can act on.
+            return undefined;
         }
     }
 
@@ -335,10 +379,22 @@ export class McpService extends ServiceModule {
             return toolError(`${name}: ${why}`);
         }
 
-        if (call.destructive && (this.options.destructive ?? 'refuse') === 'refuse') {
+        /**
+         * **A destructive contract refuses an agent, and only an agent.**
+         *
+         * This refused everybody, which was the honest thing while the service could not tell a
+         * program from a person. It can now: a caller that arrived on an API token carries `agent`
+         * and one that arrived on a ticket does not.
+         *
+         * So the rule is the one `spec/ui/rules.md` §7 always meant — *a destructive write asks a
+         * person* — rather than a blunt approximation of it. A person driving MCP is a person; a
+         * token is not, and no amount of it being a *trusted* token makes it one.
+         */
+        if (call.destructive && caller?.agent !== undefined && (this.options.destructive ?? 'refuse') === 'refuse') {
             return toolError(
-                `${name} changes state and this site does not let an agent do that unattended. ` +
-                `A destructive contract asks a person to confirm, and there is no person on this call.`,
+                `${name} changes state, and "${caller.agent}" is an API token rather than a person. ` +
+                `A destructive contract asks somebody to confirm, and a token cannot be asked. ` +
+                `A person holding a session may call it; a site may allow it deliberately.`,
             );
         }
 
