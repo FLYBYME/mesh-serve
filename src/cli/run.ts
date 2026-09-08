@@ -239,22 +239,38 @@ async function unknown(descriptor: Descriptor, domain: string, action: string, i
 // ---------------------------------------------------------------------------- login
 
 async function login(host: string, argv: readonly string[], io: Io): Promise<number> {
+    /**
+     * The descriptor is fetched **before** the password is asked for.
+     *
+     * Two reasons, and the second is the one that was wrong. It finds the api the same way every
+     * other command does, so `login` cannot be the one place that insists on being told a port. And
+     * it fails *before* somebody types a password into a prompt that was never going to work —
+     * which is what "password: fetch failed" was.
+     */
+    const descriptor = await fetchDescriptor(host);
+    const issue = descriptor.calls.find((c) => c.key === 'identity.ticket_issue');
+    if (issue === undefined) {
+        throw new CliError(
+            `${descriptor.application} does not offer a way to sign in.`,
+            'A site grants what its parts declare they consume. This one does not expose '
+            + 'identity.ticket_issue, so there is no sign-in to reach.',
+        );
+    }
+
     const email = valueOf(argv, '--email') ?? await io.prompt('email: ', false);
     const password = await io.prompt('password: ', true);
 
-    const response = await fetch(`${originOf(host)}/api/identity/ticket`, {
-        method: 'POST',
-        headers: { host, 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-    });
+    const { status, body } = await callContract(host, descriptor.base, issue, { email, password });
 
-    if (!response.ok) {
-        io.err(response.status === 401 ? 'That email and password were not accepted.' : `Sign-in failed (${String(response.status)}).`);
+    if (status >= 400) {
+        io.err(status === 401
+            ? 'That email and password were not accepted.'
+            : `Sign-in failed (${String(status)}).`);
         return 1;
     }
 
-    const body = await response.json() as { token?: string; ticket?: string };
-    const token = body.token ?? body.ticket;
+    const answer = body as { token?: string; ticket?: string } | undefined;
+    const token = answer?.token ?? answer?.ticket;
     if (token === undefined) {
         io.err('Signed in, and the answer carried no ticket. That is a server bug, not yours.');
         return 1;

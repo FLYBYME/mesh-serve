@@ -60,35 +60,74 @@ export const originOf = (host: string): string => {
  * `spec/mcp.md` §3.
  */
 export async function fetchDescriptor(host: string, ticket?: string): Promise<Descriptor> {
-    const url = `${originOf(host)}/_describe`;
+    const headers = {
+        host,
+        ...(ticket === undefined ? {} : { authorization: `Bearer ${ticket}` }),
+    };
 
-    let response: Response;
+    /**
+     * **A person points this at the site, not at the api, and that has to work.**
+     *
+     * `flowboard.localhost` is where the *page* is. The api is somewhere else — a different port,
+     * possibly a different origin — and expecting somebody to know that before they have asked the
+     * platform anything is the CLI demanding to be told what it is for.
+     *
+     * A browser has the same problem and the page already solves it: the cdn writes
+     * `data-api="…"` into the document, which is how a bundle knows where to call. So this asks the
+     * same question a browser asks. Point it at what you would open, and it finds the rest.
+     */
+    for (const origin of await candidateOrigins(host, headers)) {
+        const url = `${origin}/_describe`;
+
+        let response: Response;
+        try {
+            response = await fetch(url, { headers });
+        } catch {
+            continue;
+        }
+
+        if (response.status === 404) continue;
+        if (!response.ok) throw new CliError(`${url} answered ${String(response.status)}.`);
+
+        const text = await response.text();
+        try {
+            return JSON.parse(text) as Descriptor;
+        } catch {
+            // HTML: this origin is the cdn, not the api. Keep looking rather than reporting a JSON
+            // parse error, which describes the symptom and not the situation.
+            continue;
+        }
+    }
+
+    throw new CliError(
+        `Could not find an api for ${host}.`,
+        'Point --host at the site as you would open it — the page names its own api and this follows '
+        + 'that. If nothing is serving, start a node (npm run node) and seed a site (npm run seed).',
+    );
+}
+
+/**
+ * Where the api might be, best guess first.
+ *
+ * The site's own origin, then whatever its page declares. Ordered so a host that *is* the api costs
+ * one request, and a host that is the cdn costs two.
+ */
+async function candidateOrigins(host: string, headers: Record<string, string>): Promise<readonly string[]> {
+    const direct = originOf(host);
+    const declared = await declaredApi(direct, headers);
+    return declared === undefined || declared === direct ? [direct] : [direct, declared];
+}
+
+/** `data-api="http://…"` from the served page — the same value the browser's bundle reads. */
+async function declaredApi(origin: string, headers: Record<string, string>): Promise<string | undefined> {
     try {
-        response = await fetch(url, {
-            headers: {
-                host,
-                ...(ticket === undefined ? {} : { authorization: `Bearer ${ticket}` }),
-            },
-        });
-    } catch (cause) {
-        throw new CliError(
-            `Could not reach ${url}.`,
-            'Is a node running, and is --host the hostname a site is served on? '
-            + 'The api resolves a site by the Host header, so an address that is not a site answers nothing.',
-        );
+        const response = await fetch(`${origin}/`, { headers });
+        if (!response.ok) return undefined;
+        const html = await response.text();
+        return /data-api="([^"]+)"/.exec(html)?.[1]?.replace(/\/$/, '');
+    } catch {
+        return undefined;
     }
-
-    if (response.status === 404) {
-        throw new CliError(
-            `No site serves ${host}.`,
-            'The api resolves Host → site. A site must exist for this hostname; `mesh-serve seed` creates one.',
-        );
-    }
-    if (!response.ok) {
-        throw new CliError(`${url} answered ${String(response.status)}.`);
-    }
-
-    return await response.json() as Descriptor;
 }
 
 /**
