@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------- services
 
 export { ApiService } from './api/api.service.js';
+export { McpService, type McpServiceOptions } from './api/mcp.service.js';
 export { BuilderService } from './builder/builder.service.js';
 export { CatalogService } from './catalog/catalog.service.js';
 export { CdnService } from './cdn/cdn.service.js';

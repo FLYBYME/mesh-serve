@@ -96,6 +96,27 @@ of the URL they happened to use. One endpoint, and what you get depends on who y
 The alternative — an endpoint per audience — has the same defect as a hardcoded tool array: it works
 until somebody adds a tool and updates two of the three lists.
 
+## 5a. Orchestration is contracts, not registered tools
+
+The corollary, and the thing that makes §5 pay for itself.
+
+flowboard's five gating tools — approve dispatch, reject, verify, approve merge, reject merge — are
+registered on the MCP server by hand and call `worktree.ts` directly. So they sit *outside* the
+descriptor: no `visibility`, no gate, no scope, invisible to `_describe`, and reachable by anyone who
+reaches the endpoint.
+
+**They should be ordinary contracts** on flowboard's own service, with `worktree.ts` as their
+implementation. Nothing else changes and everything follows:
+
+- they appear in `tools/list` because they are exposed calls, not because somebody listed them
+- `worktree.merge` declares an operator-level gate, so **a dispatched worker's ticket cannot reach
+  it** — the self-approval hole closes by construction rather than by a hook that has to remember
+- they get an input schema, a description, and a place in the generated client for free
+- the HTTP api serves them too, so the board's UI can drive a merge without a second mechanism
+
+This is the same finding as `visibility` being decorative, arriving from the other side: a tool that
+is not a contract is a surface nobody can review, gate, or generate a client for.
+
 ## 6. Conformance
 
 A test that reads a descriptor and asserts the tool list is exactly the public calls in it. It fails
