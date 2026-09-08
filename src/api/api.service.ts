@@ -739,6 +739,16 @@ export class ApiService extends ServiceModule {
         const held = this.tables.get(key);
         if (held !== undefined) return held;
 
+        for (const dependency of site.mesh) {
+            if (dependency.package) {
+                try {
+                    await import(dependency.package);
+                } catch {
+                    // ignore if package cannot be dynamically resolved
+                }
+            }
+        }
+
         const built = routeTable(
             site.mesh,
             this.lookup(),
@@ -782,6 +792,14 @@ export class ApiService extends ServiceModule {
         const lookup = this.lookup();
 
         for (const dependency of site.mesh) {
+            if (dependency.package) {
+                try {
+                    await import(dependency.package);
+                } catch {
+                    // ignore if package cannot be dynamically resolved
+                }
+            }
+
             for (const exposed of dependency.contracts) {
                 const contractKey = exposed.key;
                 if (seen.has(contractKey)) continue;
@@ -826,6 +844,23 @@ export class ApiService extends ServiceModule {
             }
             throw error;
         }
+    }
+
+    /**
+     * Look up the exposure descriptor for a given hostname.
+     * Used by McpService and external callers to project the same exposure.
+     */
+    public async descriptorForHost(host: string): Promise<ExposureDescriptor | undefined> {
+        const site = await this.siteFor(host);
+        if (site === undefined) return undefined;
+        return await this.descriptorFor(site);
+    }
+
+    /**
+     * Shared ticket cache for MCP and API surfaces in the same process.
+     */
+    public get ticketCache(): TicketCache | undefined {
+        return this.tickets;
     }
 
     /**

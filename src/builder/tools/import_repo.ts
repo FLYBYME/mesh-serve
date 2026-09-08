@@ -114,6 +114,10 @@ export async function builder_import_repo(
 
             parts.push({
                 name: part.id, kind: part.kind, entry: part.entry, existed: declared.existed,
+                // A kernel reports what it declares; nothing else does. See the contract's own note:
+                // the kernel is the one part every other part names a range against, so its label
+                // has to mean what those parts think it means.
+                ...(part.kind === 'kernel' && part.version !== undefined ? { version: part.version } : {}),
             });
         }
 

@@ -123,16 +123,37 @@ export class McpService extends ServiceModule {
         super();
     }
 
+    public port: number | undefined;
+
+    async onStart(broker: IServiceBroker): Promise<void> {
+        return this.started(broker);
+    }
+
+    async onStop(): Promise<void> {
+        return this.stopped();
+    }
+
     async started(broker: IServiceBroker): Promise<void> {
         this.#broker = broker;
         const port = this.options.port ?? 4000;
         this.#server = createServer((req, res) => { void this.#handle(req, res); });
-        await new Promise<void>((resolve) => { this.#server?.listen(port, () => { resolve(); }); });
+        await new Promise<void>((resolve) => {
+            this.#server?.listen(port, () => {
+                const addr = this.#server?.address();
+                if (typeof addr === 'object' && addr !== null) {
+                    this.port = addr.port;
+                } else {
+                    this.port = port;
+                }
+                resolve();
+            });
+        });
     }
 
     async stopped(): Promise<void> {
         const server = this.#server;
         this.#server = undefined;
+        this.port = undefined;
         if (server !== undefined) await new Promise<void>((resolve) => { server.close(() => { resolve(); }); });
     }
 

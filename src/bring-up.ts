@@ -382,7 +382,7 @@ export async function importRepository(
     ctx: BringUpContext,
     as: Caller,
     options: { repository: string; ref?: string },
-): Promise<readonly { name: string; kind: string }[]> {
+): Promise<readonly { name: string; kind: string; version?: string }[]> {
     console.log(
         `[builder] importing ${options.repository}` +
         `${options.ref === undefined ? '' : ` @ ${options.ref}`}`,
@@ -876,8 +876,20 @@ export async function main(): Promise<void> {
              * part every other part names a range against, so its label has to mean what the parts
              * think it means. Everything else is minted.
              */
-            const pinnedKernel = optional('kernel-version');
+            /**
+             * **Defaulted from what the kernel declares, rather than typed.**
+             *
+             * `--kernel-version` still wins, but needing it was the bug: a fresh cluster composed
+             * eight parts asking for `kernel: ^0.15` against a kernel the catalog had minted
+             * `0.1.0`, and refused — correctly, and unfixably unless you had read this file and
+             * knew the flag existed.
+             *
+             * `import_repo` now reports a kernel's declared version for exactly this, so the number
+             * comes from the repository that owns it instead of from somebody's memory.
+             */
             const kernelPart = [...kinds].find(([, kind]) => kind === 'kernel')?.[0];
+            const kernelDeclared = declared.find((part) => part.kind === 'kernel')?.version;
+            const pinnedKernel = optional('kernel-version') ?? kernelDeclared;
             const pin = pinnedKernel !== undefined && kernelPart !== undefined
                 && declared.some((part) => part.name === kernelPart)
                 ? { [kernelPart]: pinnedKernel }

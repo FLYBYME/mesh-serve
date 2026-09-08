@@ -186,6 +186,24 @@ export const importRepoContract = defineContract({
             entry: z.string(),
             /** False when this import created the part. */
             existed: z.boolean(),
+            /**
+             * **The declared version — for a kernel, and only for a kernel.**
+             *
+             * Every other part's version is *minted* by `release_part` from what was actually
+             * published, because a repository holding its own version number has to be edited to
+             * ship and the number it holds is a claim the catalog cannot check. That is deliberate
+             * and it is not being undone here.
+             *
+             * The kernel is the exception, and it is forced rather than chosen: every other part
+             * declares `kernel: ^0.15`, which names the kernel's **real** version. If the catalog
+             * mints the kernel a label from its own sequence, that range is unsatisfiable and the
+             * composition is refused — which is exactly what a fresh cluster hit, with eight parts
+             * asking for `^0.15` against a kernel minted `0.1.0`.
+             *
+             * So the one part everything else coordinates on reports what it declares, and a caller
+             * can pin it without being told a number it has no way to know.
+             */
+            version: z.string().optional(),
         })),
     }),
     rest: { method: 'POST', path: '/builder/imports' },

@@ -27,7 +27,9 @@
         "build": "npm run generate && tsc -p tsconfig.json",
         "typecheck": "npm run generate && tsc -p tsconfig.check.json --noEmit",
         "test": "npm run generate && vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "node": "node bin/node.mjs --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-dev",
+        "seed": "tsx src/bring-up.ts"
     },
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.4.1",
@@ -38,6 +40,7 @@
     "devDependencies": {
         "@types/node": "^22.0.0",
         "mongodb": "^6.0.0",
+        "tsx": "^4.23.13",
         "typescript": "^5.9.3",
         "vitest": "^2.1.9"
     },

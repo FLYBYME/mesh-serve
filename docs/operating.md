@@ -149,6 +149,45 @@ no `.env` — it falls back to `mongodb://localhost:27017`. Add
 `MESH_ALLOW_REPUBLISH=1` there to overwrite a version in place instead of bumping
 for every round trip. **Never on a live node.**
 
+### 4a. From nothing to a hostname that answers — two commands
+
+A fresh node holds an empty database: no operator, no organization, no site. It
+answers, and it answers *nothing*. `src/bring-up.ts` is the seed, and it is the
+only supported way to get from an empty database to something you can `curl`.
+
+```bash
+# terminal one — the cluster, holding the database
+npm run node
+
+# terminal two — seed it, through its own contracts
+npm run seed
+```
+
+`seed` prints the account, the organization, the site and a **ticket**, and then
+the `curl` that uses them. That ticket is how you make an authenticated request
+without a browser.
+
+**It joins the cluster; it does not write to the database.** An earlier version
+mounted `DatabaseModule` and wrote rows directly, which was a second path into
+the same collections that skipped every check the contracts exist to enforce —
+so what it seeded was not necessarily something the platform would have accepted
+from a real caller. Every step is now a contract call, and every step is
+idempotent: running it twice is how you find out that it is.
+
+What it takes, when the defaults are wrong:
+
+| flag | default | |
+| --- | --- | --- |
+| `--email` `--password` `--name` | `tim@example.com` … | the operator account |
+| `--org-slug` `--org-name` | — | **name it.** It once defaulted, and against a cluster that already had one it created a second and moved the account into it — so with none it now stops and asks |
+| `--host` | `localhost` | the hostname the site answers on |
+| `--api` | `http://127.0.0.1:5005` | where that site's api is |
+| `--bootstrap` | the node's own ws port | a cluster somewhere else |
+
+Secrets are never flags. `MESH_KEY` comes from `.env`, because a value typed as
+`MESH_KEY=… npx tsx …` is visible in `ps` to every user on the machine and lands
+in your shell history.
+
 ---
 
 ## 5. Publish and deploy
