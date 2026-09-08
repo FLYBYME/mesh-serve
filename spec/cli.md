@@ -118,6 +118,60 @@ So each step becomes a command, and **`seed` survives as a script over them** �
 and no longer the only way in. "It does too much" then stops being a problem, because doing less is
 a matter of calling fewer commands.
 
+## 5a. `init` writes files; it does not touch a cluster
+
+`mesh-serve init` scaffolds a project — a service and a UI part, a `mesh.json`, the two entry points
+wired to each other — and **stops there**. No node, no database, no site, no account.
+
+That is the opposite of `seed`, and deliberately: `init` is *"give me something to edit"* and `seed`
+is *"make a cluster that serves it"*. Merging them is what produced a command that did seven things
+and could not do one.
+
+**It assumes whoever ran it set it up, and it does not serve publicly.** A scaffold that binds a
+public port is a scaffold that ships an unfinished thing to the internet the first time somebody
+tries it on a box with a real IP. Bind loopback, say so in the generated README, and let the person
+who wants otherwise say otherwise.
+
+## 5b. `mesh.json` is a seed, and the catalog is authoritative
+
+This is already the design and it is worth stating in the place a person looks, because the file's
+continued existence reads as a contradiction.
+
+`import_repo`'s own header: *"`mesh.json` → `catalog.declare`, once per part → the catalog is
+authoritative. **This is the last thing that reads `mesh.json`.** The file is a genesis format… a
+repository editing its descriptor afterwards has changed nothing until somebody imports it again."*
+And `build_start`: *"`mesh.json` is not read here at all."*
+
+So the lifecycle is:
+
+```
+mesh.json  →  import, once   →  part rows      →  the catalog, from then on
+                                                  ↳ edited through contracts, not by editing a file
+release    →  reads the catalog                →  builds, mints a version, publishes an artifact
+```
+
+**`--config` follows from that rather than changing it.** A seed read once has no reason to live
+inside the repository being seeded:
+
+```bash
+mesh-serve catalog import <repo> -c ./flowboard.mesh.json
+```
+
+Said once. After that the part rows are the truth, managed through the api like everything else, and
+a release is a trigger rather than a re-read. Three things it buys:
+
+- **A repository does not have to carry platform metadata to be publishable.** Somebody else's
+  library becomes a part without a pull request.
+- **The declaration can be corrected without a commit.** Today a wrong `entry` means editing the
+  repository and re-importing; the catalog already holds the field and nothing else needs to change.
+- **It makes the one-read rule visible.** A file passed on the command line is obviously a seed. A
+  file sitting in the repository looks like configuration, which is why it keeps being mistaken for
+  it.
+
+The one thing to hold onto: **`(partName, commit)` stays the identity.** A config that could change
+what an already-published version means would undo the reason the catalog is authoritative in the
+first place.
+
 ## 6. What blocks it
 
 **F7, and it is on the critical path.** `mesh generate` already emits a CLI command tree from
