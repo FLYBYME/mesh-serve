@@ -280,11 +280,24 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     }
 
                     if (action === 'create') {
+                        /**
+                         * **The owner is the caller, whatever the input said.**
+                         *
+                         * Overwritten rather than filled in when absent: a caller who may create an
+                         * organization must not be able to create one owned by somebody else, and
+                         * "only when absent" makes that a matter of what the client chose to send.
+                         *
+                         * `ownerId` is required by `OrganizationSchema` and stays required —
+                         * surfdns#29 is answered by the field existing, so an organization with no
+                         * owner must be unconstructible. `defineCrud` derives its create input from
+                         * the same schema and has no way to make one field optional there, so a
+                         * caller sends a value and this replaces it. The tidier shape is a tool that
+                         * takes name and slug alone, the way `cdn.site_edit` exists because
+                         * `defineCrud` could not omit a field from an update. Recorded in
+                         * spec/roadmap.md.
+                         */
                         const params: Record<string, unknown> = isRecord(input) ? { ...input } : {};
-                        if (!params['ownerId']) {
-                            return { ...params, ownerId: userId };
-                        }
-                        return params;
+                        return { ...params, ownerId: userId };
                     }
 
                     if (action === 'delete' || action === 'update' || action === 'replace') {

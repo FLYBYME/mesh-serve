@@ -417,9 +417,13 @@ describe('identity on defineCrud', () => {
             if (!reachable) return;
 
             const newSlug = `new-org-${String(Date.now())}`;
+            // `ownerId` is required by OrganizationSchema and names somebody else here on purpose:
+            // the caller must not be able to create an organization owned by another user, so the
+            // hook overwrites whatever arrives rather than only filling in a missing value.
             const created = await broker.call('organization.create', {
                 name: 'Brand New Org',
                 slug: newSlug,
+                ownerId: 'somebody-else',
             }, user1Meta());
 
             expect(created.ownerId).toBe(userOrg1Id);
