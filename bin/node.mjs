@@ -16,6 +16,7 @@
 
 import {
     BrokerModule, DatabaseModule, JSONSerializer, MeshApp, NetworkModule, RegistryModule,
+    globalContractRegistry,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
@@ -334,9 +335,36 @@ const authorize = async ({ caller, requestedScope }) => {
     return { authorized: true };
 };
 
-await app.registerModule(new ApiService({ port: apiPort, authorize }));
+const api = new ApiService({ port: apiPort, authorize });
+await app.registerModule(api);
 const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
+
+/**
+ * **The agent surface, off unless a port is given.**
+ *
+ * `--mcp 5006` starts it; no flag starts nothing. Off by default because an MCP endpoint is a way
+ * for something that is not a person to drive a site, and a node should not acquire one because it
+ * was upgraded.
+ *
+ * It is handed the api's own `descriptorForHost` and `ticketCache` rather than resolving a site or
+ * validating a ticket itself. That is the whole design: one exposure, two projections. If the MCP
+ * computed its own view of what a site exposes, `visibility` would mean one thing over HTTP and
+ * another to an agent, and the second copy is the one that goes wrong.
+ */
+const mcpPort = flag('mcp', process.env.MESH_MCP_PORT ?? '');
+if (mcpPort !== '') {
+    const { McpService } = await import('../dist/api/mcp.service.js');
+    await app.registerModule(new McpService(
+        (host) => api.descriptorForHost(host),
+        (key) => globalContractRegistry.get(key),
+        {
+            port: Number(mcpPort),
+            ...(api.ticketCache === undefined ? {} : { tickets: api.ticketCache }),
+            ...(authorize === undefined ? {} : { authorize }),
+        },
+    ));
+}
 
 /**
  * **The password is not printed, and it was.**
@@ -358,6 +386,7 @@ process.stdout.write(
     `  mesh      ws://${wsHost}:${String(wsPort)}\n` +
     `  cdn       ${cdnUrl}\n` +
     `  api       http://127.0.0.1:${String(apiPort)}\n` +
+    `  mcp       ${mcpPort === '' ? '(off — pass --mcp <port>)' : `http://127.0.0.1:${String(mcpPort)}/mcp`}\n` +
     `  mongo     ${safeMongo}/${dbName}\n` +
     `  artifacts ${blobRoot}\n` +
     `  config    ${envFile ?? "(no .env found — using the environment only)"}\n\n` +
