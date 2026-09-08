@@ -732,6 +732,43 @@ recovery path and a fleet that needed the cdn would mean a broken cdn cannot be 
 
 ---
 
+### M6 — The platform is operated from a browser, by somebody who is not us
+
+*Everything a person does to this platform, they do on a page.* ⛔ **surfdns#59, #61, mesh-operator**
+
+The point M1–M5 were building toward, and the one that is now the only thing between here and
+somebody else running this. Every capability exists; almost none of it has a screen.
+
+**What already works, and is the reason this milestone is reachable rather than aspirational.** The
+loop closed on 2026-09-07: `import_repo → release_repo → compose → deploy`, every step an endpoint,
+versions minted by the platform, and a release marked `rolling` re-running the last two on its own.
+A part released now reaches a hostname with nobody typing anything. That was six manual steps in the
+morning.
+
+**What it needs, and each of these is a screen that does not exist:**
+
+- **Create a site.** `site.create` is exposed and nothing calls it. The platform cannot add a
+  hostname to itself, which makes every other screen a tour of one site somebody made with a script.
+- **Edit what a site exposes**, from `_describe` rather than a JSON textarea — including the two
+  things only the platform knows: which grants nothing uses, and which contracts the release calls
+  that the site has not granted. The second is a refused deploy shown *before* the deploy.
+- **Manage people.** Accounts, memberships, and `identity.grant_role` — which exists as of tonight
+  and has no caller. Until then the first operator is an environment variable and the second one
+  cannot exist.
+- **See it working.** A slow call that says so, a boot with stages, a failure that surfaces without
+  the console open. Forty seconds of silence after a click is the single most common experience of
+  this platform today.
+
+**The test:** hand somebody the URL and nothing else. They sign in, add a site, expose what it needs,
+release a part into it, and watch it go live — without a terminal, without ssh, and without asking
+which flags to pass. If any step needs a person who knows the internals, that step is the milestone.
+
+**Not in it:** a git server (B9), on-demand part loading (C11), drivers (B10). Each is real and each
+is a way of *not* finishing this one.
+
+
+---
+
 ## The shortest path to something real
 
 The first thing that could actually be looked at, in order:
