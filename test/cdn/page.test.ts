@@ -203,6 +203,18 @@ describe('what a crawler reads', () => {
         expect(html).toContain('og:description');
     });
 
+    it('writes og:image when the site names one', () => {
+        expect(head({ image: 'https://cdn.surfdns.net/_a/abc/logo.png' }))
+            .toContain('<meta property="og:image" content="https://cdn.surfdns.net/_a/abc/logo.png">');
+    });
+
+    it('omits og:image when the site names none', () => {
+        // Same reason as the description below: an empty `content=""` tells a crawler the page has
+        // an image and that the image is nothing. Both `undefined` and `''` mean absent here.
+        expect(head({ image: undefined })).not.toContain('og:image');
+        expect(head({ image: '' })).not.toContain('og:image');
+    });
+
     it('omits the description tags entirely when there is none', () => {
         // An empty `content=""` is worse than absent: it tells a crawler the page has been described
         // and that the description is nothing.

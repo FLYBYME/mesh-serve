@@ -632,9 +632,23 @@ task** — each is a decision about the platform's own surface that blocks any U
       `ownerId` is recorded on the organization document as the definitive authority, surviving the
       removal or departure of owner memberships, and backed by `transferOwnership` (requiring current
       owner) and `reownOrganization` (allowing the recorded owner to restore membership if all owners leave). **S**
-- [ ] **F9 `site.image` is stored and never rendered.** `page.ts` emits `og:title` and
-      `og:description` and no `og:image`. A site sets the field, the tag never appears, and nothing
-      says so. One line in the page generator. **S**
+- [~] **F9 `site.image` is stored and never rendered.** *(tag emitted 2026-09-08; the field is still
+      half-designed)* `page.ts` emitted `og:title` and `og:description` and no `og:image` — a site
+      set the field, the tag never appeared, and nothing said so. The tag is now written, with two
+      tests, and `image` joins the `Pick` in `PageInput` that had quietly excluded it.
+
+      ~~One line in the page generator.~~ **It was not.** The schema documents `image` as *"a path
+      within an artifact this release serves, so it is content-addressed like everything else"* — and
+      a path into an artifact needs a digest, which the field never carries. Every other file the
+      generator emits knows its artifact: the kernel's entry from `release.kernel.digest`, a part's
+      from `release.parts[id].digest`. **There is no third thing an image can belong to.**
+
+      So it is emitted as written: a site setting a URL, or a `/_a/<digest>/…` path it resolved
+      itself, is served correctly today; a site setting `logo.png` and expecting the platform to find
+      it is not, and there is nowhere for the platform to look. **The field needs to name a part**
+      before the schema's own comment is true. Until then the comment promises content-addressing the
+      generator cannot deliver, which is the more interesting half of this item and the reason it is
+      not closed. **S**
 - [ ] **F7 `--version` collides with commander's own flag, silently.** Any contract with a `version`
       input is uninvokable from the generated CLI: commander owns `--version` on the program and
       prints the CLI's version instead of running anything.

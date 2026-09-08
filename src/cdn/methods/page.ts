@@ -59,7 +59,7 @@ export interface GeneratedFile {
 export interface PageInput {
     readonly site: Pick<Site,
         'application' | 'api' | 'theme' | 'policy'
-        | 'title' | 'description' | 'canonical' | 'indexable'>;
+        | 'title' | 'description' | 'canonical' | 'image' | 'indexable'>;
     readonly release: Release;
     /**
      * What the kernel artifact contains, read from its own declaration and file list.
@@ -197,6 +197,27 @@ function metadata(site: PageInput['site']): string {
     }
     if (site.canonical !== undefined) {
         lines.push(`    <link rel="canonical" href="${attr(site.canonical)}">`);
+    }
+    /**
+     * Emitted **as written**, which is less than the schema promises.
+     *
+     * `site.image` is documented as *"a path within an artifact this release serves, so it is
+     * content-addressed like everything else"* — but a path into an artifact needs a digest, and the
+     * field never says **which** artifact. Every other file this generator emits knows: the kernel's
+     * entry comes from `release.kernel.digest`, a part's from `release.parts[id].digest`. There is no
+     * third thing for an image to belong to.
+     *
+     * So this writes the tag with whatever the site set. A site that writes a full URL, or a
+     * `/_a/<digest>/…` path it resolved itself, gets a working card; a site that writes `logo.png`
+     * expecting the platform to find it does not, and there is nowhere for the platform to look.
+     * Recorded as **F9** in `spec/roadmap.md` — the field needs to name a part before this can do
+     * what its own comment says.
+     *
+     * Emitting it anyway is still the right move: the tag being absent is what the roadmap item was
+     * about, and a site that already sets a URL is served correctly today.
+     */
+    if (site.image !== undefined && site.image !== '') {
+        lines.push(`    <meta property="og:image" content="${attr(site.image)}">`);
     }
     if (!site.indexable) {
         lines.push('    <meta name="robots" content="noindex, nofollow">');
