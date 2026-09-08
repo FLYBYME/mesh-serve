@@ -263,6 +263,16 @@ for (const [name, path] of [
     ['catalog', './dist/catalog/catalog.service.js'],
     ['builder', './dist/builder/builder.service.js'],
     ['cdn', './dist/cdn/cdn.service.js'],
+    /**
+     * Switchable like the rest, and that is the decision rather than an oversight.
+     *
+     * Telemetry is the one service whose absence must not break anything: a node that cannot record
+     * what happened still has to serve. Making it switchable says so — a deployment that does not
+     * want it assigns it nowhere and every other service carries on, because nothing calls into it
+     * synchronously. The cdn and api write through a sink that falls back to a process-local
+     * default when the service is not there.
+     */
+    ['telem', './dist/telem/telem.service.js'],
 ]) {
     supervisor.registerEntry({ name, path, dependsOn: [] });
 }

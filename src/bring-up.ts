@@ -71,7 +71,7 @@ try {
 const DEFAULT_BOOTSTRAP = 'ws://127.0.0.1:4001';
 
 /** What a node runs beyond the always-on core, and therefore what the fleet gets to decide. */
-const SWITCHABLE = ['catalog', 'builder', 'cdn'] as const;
+const SWITCHABLE = ['catalog', 'builder', 'cdn', 'telem'] as const;
 
 /**
  * How long to wait on a call that clones and bundles.
@@ -337,6 +337,7 @@ export async function assignServices(
         builder: 'builder.release_repo',
         catalog: 'catalog.resolve',
         cdn: 'cdn.site_edit',
+        telem: 'telem.query',
     };
 
     for (const service of services) {
@@ -492,7 +493,22 @@ export async function releaseRepository(
  * gate — a too-strict gate is a 403 somebody reports, a too-loose one is not noticed.
  */
 export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
-    const PUBLIC = new Set(['identity.register', 'identity.ticket_issue']);
+    const PUBLIC = new Set([
+        'identity.register',
+        'identity.ticket_issue',
+        /**
+         * **Public because the failures worth recording happen before anyone signs in.**
+         *
+         * A page that cannot boot, a part that throws on mount, a call refused for want of a
+         * session — every one of those happens to an anonymous browser, and gating telemetry at
+         * `user` would collect nothing from precisely the sessions somebody needs to see.
+         *
+         * `public` is not free here and the server is what makes it affordable: `telem.ingest`
+         * bounds a batch at 100 events, rate-limits per session and per host, and stores keys and
+         * outcomes rather than inputs. The gate is open; the door is narrow.
+         */
+        'telem.ingest',
+    ]);
     if (PUBLIC.has(key)) return 'public';
 
     const USER = new Set([
@@ -537,14 +553,26 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
  * time found by whoever opens the page — so a maintained-by-hand list goes stale exactly when a new
  * part is added, which is the moment somebody is least able to guess why the deploy was refused.
  *
- * `identity.register` and `identity.ticket_issue` are added whether or not a part declares them: a
- * page nobody can sign in to cannot use anything else it was granted.
+ * Three are added whether or not a part declares them. `identity.register` and
+ * `identity.ticket_issue`, because a page nobody can sign in to cannot use anything else it was
+ * granted — and `telem.ingest`, for a reason that is nearly the same and easy to miss.
+ *
+ * **A grant derived from `release.requires` can never bootstrap telemetry.** The parts worth
+ * hearing from are the ones failing to mount, and a part that fails to mount does not get to
+ * declare anything. Worse, the useful failures are on *first* deploy, before any part has declared
+ * a dependency on it. So it is granted up front, exactly like signing in: a capability the page
+ * needs in order for the rest of the page to be diagnosable at all.
  */
 export function grantsFor(requires: readonly string[]): {
     contracts: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
     events: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
 } {
-    const keys = new Set([...requires, 'identity.register', 'identity.ticket_issue']);
+    const keys = new Set([
+        ...requires,
+        'identity.register',
+        'identity.ticket_issue',
+        'telem.ingest',
+    ]);
     const contracts = [...keys].sort().map((key) => ({ key, auth: gateFor(key) }));
 
     /**
