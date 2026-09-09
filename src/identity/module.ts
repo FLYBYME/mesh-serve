@@ -438,6 +438,51 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     throw new Error('ticket_revoke needs a token or a userId.');
                 }
 
+                /**
+                 * **Set your own password, and claim a provisional account by doing it.**
+                 *
+                 * The one action the gate lets a provisional caller through, and until now it did
+                 * not exist — so first boot produced an account that could do nothing at all,
+                 * including stop being provisional. A wall with no door.
+                 *
+                 * **The subject is the caller.** There is no `userId` in the input, so this cannot
+                 * become "change somebody's password" through a missing check; that is a different
+                 * act, and it should have a different name and a different gate when it is wanted.
+                 */
+                case 'identity.set_password': {
+                    const { password } = input as { password: string };
+                    // The caller, from the meta the api resolved. Never from the input — see the contract.
+                    const userId = (_ctx.meta as { user?: { id?: string } } | undefined)?.user?.id;
+
+                    if (userId === undefined) {
+                        throw new MeshError({
+                            code: 'UNAUTHORIZED', status: 401,
+                            message: 'Setting a password requires a session. The password is your own.',
+                        });
+                    }
+
+                    const held = await store.getUser(userId);
+                    if (held === undefined) {
+                        throw new MeshError({ code: 'NOT_FOUND', status: 404, message: 'No such account.' });
+                    }
+
+                    const claimed = held.value.provisional === true;
+
+                    await store.updateUser(userId, {
+                        passwordHash: await hashPassword(password),
+                        // Cleared here and nowhere else: claiming the account IS setting a password,
+                        // so the two cannot come apart into a claimed account with the printed
+                        // password still on it.
+                        ...(claimed ? { provisional: false } : {}),
+                    });
+
+                    if (claimed) {
+                        broker?.logger.warn(`[identity] provisional account ${held.value.email} claimed`);
+                    }
+
+                    return { ok: true as const, claimed };
+                }
+
                 case 'identity.sign_out': {
                     const { token } = input as { token: string };
 

@@ -53,6 +53,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         const descriptor = await fetchDescriptor(site, ticket);
 
         if (first === 'whoami') return whoami(site, io);
+        if (first === 'set-password') return await setPassword(site, descriptor, ticket, io);
 
         if (second === undefined) return await domainHelp(descriptor, first, io);
 
@@ -194,6 +195,7 @@ async function help(host: string | undefined, io: Io): Promise<number> {
     io.out('    login     sign in and keep the ticket');
     io.out('    logout    forget it');
     io.out('    whoami    who this machine is signed in as');
+    io.out('    set-password  set your own — and claim a first-boot account');
     io.out('    --json    print the raw result rather than a table\n');
 
     if (host === undefined) {
@@ -293,6 +295,58 @@ async function login(host: string, argv: readonly string[], io: Io): Promise<num
     saveTicket(host, token, email);
     io.out(`Signed in to ${host} as ${email}.`);
     io.out(`Ticket stored in ${credentialsPath} (mode 0600).`);
+    return 0;
+}
+
+/**
+ * **Claim the account the platform made for itself.**
+ *
+ * A provisional account is refused everywhere except this, so without a command for it the first
+ * boot produces a credential that can do nothing at all — including stop being provisional. This is
+ * the door in that wall.
+ *
+ * It is a built-in rather than an ordinary derived command because a provisional caller's descriptor
+ * is nearly empty by design: the one thing it may do would be the one thing the command list could
+ * not show it.
+ */
+async function setPassword(
+    host: string,
+    descriptor: Descriptor,
+    ticket: string | undefined,
+    io: Io,
+): Promise<number> {
+    if (ticket === undefined) {
+        io.err(`Not signed in to ${host}. Sign in first, then set a password.`);
+        return 1;
+    }
+
+    const call = descriptor.calls.find((c) => c.key === 'identity.set_password');
+    if (call === undefined) {
+        io.err(`${descriptor.application} does not expose identity.set_password.`);
+        return 1;
+    }
+
+    const password = await io.prompt('new password: ', true);
+    const again = await io.prompt('again: ', true);
+    if (password !== again) {
+        io.err('Those did not match.');
+        return 1;
+    }
+
+    const { status, body } = await callContract(host, descriptor.base, call, { password }, ticket);
+    if (status >= 400) {
+        io.err(isRecord(body) && typeof body['message'] === 'string' ? body['message'] : `Failed (${String(status)}).`);
+        return 1;
+    }
+
+    const claimed = isRecord(body) && body['claimed'] === true;
+    io.out(claimed
+        ? 'Password set, and this account is claimed — it can do everything its roles allow now.'
+        : 'Password set.');
+    // The ticket was issued before the flag cleared, and the flag is read from the user on every
+    // call, so it keeps working. Said out loud because "do I need to sign in again" is the next
+    // thought.
+    if (claimed) io.out('Your existing session still works.');
     return 0;
 }
 

@@ -277,6 +277,44 @@ export const signOutContract = defineContract({
 });
 
 /**
+ * **Set your own password — and, if this account was made by the platform, claim it.**
+ *
+ * The one thing a `provisional` account may do. Identity creates one on a cluster's first boot,
+ * because a platform with no accounts cannot be signed into; the gate then refuses it everywhere
+ * *except this action*, and doing this clears the flag.
+ *
+ * Without it that account is a locked room with no door: the wall was built and the way out was
+ * not, so the first boot produced a credential that could do nothing at all — including stop being
+ * provisional. Found by the first person to actually run it.
+ *
+ * **Your own, always.** There is no `userId` in the input. Changing somebody else's password is a
+ * different act with a different name and a different gate, and a contract that took an id would be
+ * one missing check away from being that act.
+ */
+export const setPasswordContract = defineContract({
+    domain: 'identity',
+    action: 'set_password',
+    description: 'Set your own password. Claims a provisional account.',
+    inputSchema: z.object({
+        password: z.string().min(12).describe('At least twelve characters. Yours to choose.'),
+    }),
+    outputSchema: z.object({
+        ok: z.literal(true),
+        /** True when this call claimed a provisional account, so a client can say so. */
+        claimed: z.boolean(),
+    }),
+    rest: { method: 'POST', path: '/identity/password' },
+    /**
+     * `user`, not `public`: you must already hold a session, which for a provisional account means
+     * the password printed at first boot. Public would let anybody set anybody's — the input has no
+     * id precisely so the caller *is* the subject, and that only holds if there is a caller.
+     */
+    visibility: 'public',
+    destructive: true,
+    print: (o) => (o.claimed ? 'password set, account claimed' : 'password set'),
+});
+
+/**
  * What changed since an API instance last looked.
  *
  * **The contract that makes revocation correct** rather than likely. mesh-web spec/auth.md §3.1: the
@@ -513,6 +551,7 @@ export const identityContracts: readonly ToolContract[] = [
     ticketValidateContract,
     ticketRevokeContract,
     signOutContract,
+    setPasswordContract,
     revocationsSinceContract,
     whoamiContract,
     registerContract,
