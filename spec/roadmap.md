@@ -587,6 +587,50 @@ Nothing resolves until this exists. Every version a site names is a row here.
       exists, the agent path is designed and undeliverable, and every MCP client is a person. **S** ·
       [mcp.md §7](./mcp.md)
 
+- [x] **D10 ★★★ No collection outside this repository could ever stream an event.** *(fixed 2026-09-09)*
+      Found asking why flowboard's board did not notice rows created through its own API.
+
+      `registryLookup` will not deliver an event it cannot narrow: it wants an explicit definition,
+      then the collection's `scopedBy`, then membership of `GLOBALLY_DELIVERED`. That set is
+      `part, partVersion, artifact, node, group, role` — **every name in it is defined in `src/`**,
+      and joining it meant editing a file in this repository. So a published application's
+      collections were undeliverable permanently, whatever they were, and the only signal was
+      `/events` refusing the entire subscription: flowboard got `no module here defines it` twenty-one
+      times, once per derived event, and a board that never updated.
+
+      The refusal is right — streaming an unscoped collection means pushing every row to every
+      subscriber, and *"a new collection that forgets to say what it is still fails loudly instead of
+      quietly streaming to everybody"* is the correct default. What was wrong is that **the decision
+      lived in the wrong repository.** It belongs to the collection that owns the data, beside
+      `scopedBy`, which is where mesh 2.4.2's `defineCrud({ delivery: 'global' })` now puts it.
+      `registryLookup` reads that first; the set stays as what it always described, now one of two
+      routes rather than the only one. Declaring both is refused by `defineCrud`: they answer the
+      same question and disagree.
+
+      Global delivery is still not open delivery — a subscriber passes the site's gate on that event
+      either way. It is only the statement that there is no *tenant* to narrow to, which for a
+      single-team board is a fact. **S** · [mcp.md](./mcp.md), [managing.md](./managing.md)
+
+- [ ] **D11 ★★ `grantsFor` promises events the runtime then refuses, and nothing notices until
+      somebody subscribes.** Found alongside D10.
+
+      Seeding derives three events per exposed collection — *"every exposed collection streams its own
+      CRUD events, at the gate its `find` has"* — unconditionally. The site record for flowboard
+      therefore said **21 events** and `[site] … 21 event(s)` printed on every deploy, while
+      `buildEventTable` refused all 21 at subscribe time. Two numbers, both computed by this
+      repository, disagreeing by everything, and the disagreement invisible until a browser opened a
+      stream.
+
+      D10 removes the cause for collections that can now declare themselves, but not the *shape* of
+      it: a site can still be deployed advertising events nothing will deliver — a collection that
+      declares neither `scopedBy` nor `delivery` is still derived into the grant list and still
+      refused later.
+
+      Deploy already prints `[cdn] granted but unused: …` for the mirror-image case, so the precedent
+      and the place both exist. The check belongs beside it: run `buildEventTable` at deploy and name
+      what will be refused, so the failure lands on the person deploying rather than on the person
+      wondering why a list is stale. **S**
+
 ## Track F — Managing the platform
 
 Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
