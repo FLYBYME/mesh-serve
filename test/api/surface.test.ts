@@ -18,17 +18,24 @@ import { routeTable } from '../../src/api/methods/routes.js';
 import { eventTable } from '../../src/api/methods/events.js';
 import { describeExposure } from '../../src/api/schema/descriptor.js';
 import {
-    approvalCheckContract, approvalDecideContract, approvalListContract,
+    approvalCheckContract, approvalCrud, approvalDecideContract,
 } from '../../src/approval/contracts/approval.contract.js';
 
 /** Exactly what `surfaceContracts` returns, kept here so the test states the shape it asserts. */
 const surface = [{
     package: '@flybyme/mesh-serve',
     version: '0.0.0',
+    /**
+     * Two gates for two audiences. `check` and `decide` are `user` because their handlers do the
+     * real narrowing and an agent holding no role must be able to poll its own parked call;
+     * `find`/`get` are the **queue** and carry the frozen input of calls, so they match the event
+     * stream at `operator`.
+     */
     contracts: [
         { key: 'approval.check', auth: 'user' as const },
         { key: 'approval.decide', auth: 'user' as const },
-        { key: 'approval.list', auth: 'user' as const },
+        { key: 'approval.find', auth: 'operator' as const },
+        { key: 'approval.get', auth: 'operator' as const },
     ],
     events: [
         { key: 'approval.created', auth: 'operator' as const },
@@ -39,7 +46,8 @@ const surface = [{
 const contracts = new Map<string, unknown>([
     ['approval.check', approvalCheckContract],
     ['approval.decide', approvalDecideContract],
-    ['approval.list', approvalListContract],
+    ['approval.find', approvalCrud.find],
+    ['approval.get', approvalCrud.get],
 ]);
 const lookup = ((key: string) => contracts.get(key)) as never;
 
@@ -50,11 +58,11 @@ describe('the routes a site gets whether it granted them or not', () => {
      * A descriptor entry with no route is a call the site advertises and the router refuses. It
      * looked exactly like a missing grant from the outside, which is why it cost an hour.
      */
-    it('routes all three approval calls', () => {
+    it('routes every approval call', () => {
         const built = routeTable(surface, lookup, () => 'h');
         expect(built.unknown).toEqual([]);
         expect(built.routes.map((r) => `${r.contract.rest.method.toUpperCase()} ${r.contract.rest.path}`).sort())
-            .toEqual(['GET /approvals', 'POST /approval/check', 'POST /approval/decide']);
+            .toEqual(['GET /approvals', 'GET /approvals/:id', 'POST /approval/check', 'POST /approval/decide']);
     });
 
     /**
@@ -66,11 +74,15 @@ describe('the routes a site gets whether it granted them or not', () => {
         const partRequires = ['card.create'];
         expect(routeTable(surface, lookup, () => 'h', partRequires).routes).toHaveLength(0);
 
-        const withSurface = [...partRequires, 'approval.check', 'approval.decide', 'approval.list'];
-        expect(routeTable(surface, lookup, () => 'h', withSurface).routes).toHaveLength(3);
+        const withSurface = [...partRequires, ...surface[0]!.contracts.map((c) => c.key)];
+        expect(routeTable(surface, lookup, () => 'h', withSurface).routes).toHaveLength(4);
     });
 
-    it('describes them at user, matching what is routed', () => {
+    /**
+     * The descriptor and the route table must agree — this is the pair that disagreed once, and the
+     * symptom was a site advertising `POST /approval/decide` while the router answered `NO_ROUTE`.
+     */
+    it('describes them at the gates they are routed with', () => {
         const descriptor = describeExposure(
             surface[0]!.contracts.map((c) => ({
                 contract: contracts.get(c.key) as never, auth: c.auth,
@@ -78,8 +90,17 @@ describe('the routes a site gets whether it granted them or not', () => {
             { application: 'test', base: '/api' },
         );
         expect(descriptor.calls.map((c) => c.key).sort())
-            .toEqual(['approval.check', 'approval.decide', 'approval.list']);
-        expect(descriptor.calls.every((c) => c.gate.kind === 'auth' && c.gate.level === 'user')).toBe(true);
+            .toEqual(['approval.check', 'approval.decide', 'approval.find', 'approval.get']);
+
+        const gates = Object.fromEntries(descriptor.calls.map((c) => [
+            c.key, c.gate.kind === 'auth' ? c.gate.level : c.gate.permission,
+        ]));
+        // The queue is operator; the agent's own poll is not, or an agent holding no role could
+        // never redeem the id it was handed.
+        expect(gates).toEqual({
+            'approval.check': 'user', 'approval.decide': 'user',
+            'approval.find': 'operator', 'approval.get': 'operator',
+        });
     });
 });
 

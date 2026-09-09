@@ -13,9 +13,9 @@
 import { ClientError, type IServiceContext, type z } from '@flybyme/mesh';
 
 import type { ApprovalService } from '../approval.service.js';
-import { approvalDecideContract, approvalListContract } from '../contracts/approval.contract.js';
+import { approvalDecideContract } from '../contracts/approval.contract.js';
 import { satisfiesApprover, type Approval } from '../schema/approval.js';
-import { callBroker, callerOf, scopeOf } from '../methods/context.js';
+import { callBroker, callerOf } from '../methods/context.js';
 import { effectiveStatus } from '../methods/expiry.js';
 
 type Input = z.infer<typeof approvalDecideContract['inputSchema']>;
@@ -121,39 +121,3 @@ export async function approval_decide(
     }
 }
 
-/** `approval.list` — the queue a board renders. */
-export async function approval_list(
-    this: ApprovalService,
-    input: z.infer<typeof approvalListContract['inputSchema']>,
-    ctx: IServiceContext,
-): Promise<z.infer<typeof approvalListContract['outputSchema']>> {
-    const caller = callerOf(ctx);
-    if (caller === undefined) {
-        throw new ClientError('Listing approvals requires a caller.', 'caller_unknown', 401);
-    }
-    const tenantId = scopeOf(ctx);
-    if (tenantId === undefined) return { approvals: [] };
-
-    const rows = await callBroker(ctx, 'approval.find', {
-        query: input.status === undefined ? {} : { status: input.status },
-        limit: input.limit,
-        sort: '-requestedAt',
-    }) as (Approval & { id: string })[];
-
-    return {
-        approvals: rows
-            // Only what this caller may actually act on. A queue showing rows somebody cannot decide
-            // is a queue they learn to ignore.
-            .filter((row) => satisfiesApprover(row.approver, caller))
-            .map((row) => ({
-                approvalId: row.id,
-                call: row.call,
-                host: row.host,
-                status: effectiveStatus(row),
-                requestedBy: row.requestedBy,
-                requestedAt: new Date(row.requestedAt).toISOString(),
-                expiresAt: new Date(row.expiresAt).toISOString(),
-                input: row.input,
-            })),
-    };
-}

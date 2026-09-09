@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { approval_check } from '../../src/approval/tools/check.js';
-import { approval_decide, approval_list } from '../../src/approval/tools/decide.js';
+import { approval_decide } from '../../src/approval/tools/decide.js';
 import { approval_request } from '../../src/approval/tools/request.js';
 import { effectiveStatus, EXPIRED_REASON } from '../../src/approval/methods/expiry.js';
 import { satisfiesApprover } from '../../src/approval/schema/approval.js';
@@ -206,17 +206,14 @@ describe('deciding', () => {
     });
 });
 
-describe('the queue', () => {
-    it('shows only rows this caller may actually decide', async () => {
-        const rows = {
-            mine: pending({ id: 'mine', approver: 'role:operator' }),
-            theirs: pending({ id: 'theirs', approver: 'role:billing' }),
-        };
-        const { ctx } = context(rows, { id: 'u-tim', tenant_id: 'org-1', roles: ['operator'] });
-        const answer = await approval_list.call(service, { limit: 50 }, ctx);
-        expect(answer.approvals.map((a) => a.approvalId)).toEqual(['mine']);
-    });
-});
+/**
+ * The queue is `approval.find` — a collection, gated at `operator` — not a bespoke contract.
+ *
+ * There was an `approval.list` that filtered rows by `satisfiesApprover`. It went because a queue
+ * has to be live and only a collection streams: `createCollection` subscribes to
+ * `<domain>.created|updated|deleted` and `Models` offers an application nothing else to subscribe
+ * to, so a bespoke read meant a board that polls. `test/api/surface.test.ts` covers the gate.
+ */
 
 describe('parking', () => {
     /**

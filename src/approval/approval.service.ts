@@ -19,12 +19,11 @@ import {
     approvalCheckContract,
     approvalCrud,
     approvalDecideContract,
-    approvalListContract,
     approvalRequestContract,
 } from './contracts/approval.contract.js';
 import { approval_request } from './tools/request.js';
 import { approval_check } from './tools/check.js';
-import { approval_decide, approval_list } from './tools/decide.js';
+import { approval_decide } from './tools/decide.js';
 
 export class ApprovalService extends ServiceModule {
     public readonly domain = 'approval';
@@ -37,7 +36,6 @@ export class ApprovalService extends ServiceModule {
         this.mountTool(approvalRequestContract, approval_request);
         this.mountTool(approvalCheckContract, approval_check);
         this.mountTool(approvalDecideContract, approval_decide);
-        this.mountTool(approvalListContract, approval_list);
     }
 }
 

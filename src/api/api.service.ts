@@ -810,9 +810,24 @@ export class ApiService extends ServiceModule {
     private surfaceContracts(mesh: Site['mesh']): readonly Site['mesh'][number][] {
         const granted = new Set(mesh.flatMap((d) => d.contracts.map((c) => c.key)));
         const lookup = this.lookup();
-        const contracts = (['approval.check', 'approval.decide', 'approval.list'] as const)
-            .filter((key) => !granted.has(key) && lookup(key) !== undefined)
-            .map((key) => ({ key, auth: 'user' as const }));
+        /**
+         * Two gates, because these answer two audiences.
+         *
+         * `check` and `decide` are `user`: the handlers behind them do the real narrowing — `check`
+         * answers only a requester or an approver, `decide` only an approver — and an agent holding
+         * no role has to be able to poll its own parked call.
+         *
+         * `find` and `get` are `operator`, matching the event stream and `DEFAULT_APPROVER`. They
+         * are the **queue**, and a queue row carries the frozen input of a call somebody was about
+         * to make. At `user` every member of an organization could read what every agent in it was
+         * doing.
+         */
+        const contracts = ([
+            ['approval.check', 'user'], ['approval.decide', 'user'],
+            ['approval.find', 'operator'], ['approval.get', 'operator'],
+        ] as const)
+            .filter(([key]) => !granted.has(key) && lookup(key) !== undefined)
+            .map(([key, auth]) => ({ key, auth }));
 
         /**
          * **The notification, and it is not a new event.**

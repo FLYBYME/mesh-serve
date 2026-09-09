@@ -30,9 +30,23 @@ import { ApprovalSchema, ApprovalStatusEnum, RequesterSchema } from '../schema/a
 export const approvalCrud = defineCrud('approval', ApprovalSchema, {
     pluralPath: 'approvals',
     scopedBy: 'tenantId',
+    /**
+     * **Reads are exposable; every write stays internal.**
+     *
+     * `find` and `get` are public *may-be-exposed*, and `ApiService` gates them at `operator` —
+     * `visibility` never means unauthenticated. They are open at all because **a queue has to be
+     * live**: `createCollection` streams a collection only when the client declares its events, and
+     * `Models` gives an application no way to subscribe to anything that is not a collection. A
+     * bespoke read would have meant a board that polls.
+     *
+     * The writes stay shut. `approval.decide` is the door, and it checks the approver, refuses a
+     * second decision and replays the frozen input — a generated `approval.update` reaching `status`
+     * would be a decision with none of that.
+     */
     visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
+        find: 'public', get: 'public',
+        findOne: 'internal', resolve: 'internal', count: 'internal',
+        create: 'internal', createMany: 'internal', update: 'internal',
         replace: 'internal', delete: 'internal',
     },
     dependencies: [],
@@ -126,29 +140,17 @@ export const approvalDecideContract = defineContract({
     print: (o) => `${o.approvalId}: ${o.status}`,
 });
 
-/** The queue a board renders. Answers only what this caller may decide. */
-export const approvalListContract = defineContract({
-    domain: 'approval',
-    action: 'list',
-    description: 'Parked calls this caller may decide.',
-    inputSchema: z.object({
-        status: ApprovalStatusEnum.optional(),
-        limit: z.number().int().positive().max(200).default(50),
-    }),
-    outputSchema: z.object({
-        approvals: z.array(z.object({
-            approvalId: z.string(),
-            call: z.string(),
-            host: z.string(),
-            status: ApprovalStatusEnum,
-            requestedBy: RequesterSchema,
-            requestedAt: z.string(),
-            expiresAt: z.string(),
-            input: z.record(z.string(), z.unknown()),
-        })),
-    }),
-    rest: { method: 'GET', path: '/approvals' },
-    visibility: 'public',
-    destructive: false,
-    print: (o) => `${o.approvals.length} awaiting a decision`,
-});
+/**
+ * **There is no `approval.list`, and there was for about twenty minutes.**
+ *
+ * It answered *parked calls this caller may decide* — a bespoke read that filtered rows by
+ * `satisfiesApprover`. It went because the queue has to be **live**, and the only thing that streams
+ * in this platform is a collection: `createCollection` subscribes to `<domain>.created|updated|deleted`
+ * and `Models` gives an application no way to subscribe to anything else. A board on a bespoke read
+ * is a board that polls.
+ *
+ * So the queue is `approval.find`, gated at `operator` — and the two coincide exactly today, because
+ * `DEFAULT_APPROVER` is `role:operator`. When an approver becomes the site's to name, the filter
+ * belongs in the **gate** as a permission, which is where this platform already puts *who may reach
+ * this*, rather than in a second contract that reads the same rows a different way.
+ */
