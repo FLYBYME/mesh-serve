@@ -631,6 +631,35 @@ Nothing resolves until this exists. Every version a site names is a row here.
       what will be refused, so the failure lands on the person deploying rather than on the person
       wondering why a list is stale. **S**
 
+- [ ] **D10 ★★ `ApiService` and `McpService` are two entry paths over one exposure, and they have
+      already drifted.** Raised 2026-09-09: *"i'm starting to think there might be two entry paths
+      that now have to stay in sync."* They do, and they don't.
+
+      Both read the same `ExposureDescriptor` and share `methods/{gate,input,errors,routes,tickets}`,
+      so the *shapes* cannot disagree. What is duplicated is the **sequence**, written out by hand in
+      each, and two steps are already different:
+
+      | | `ApiService` | `McpService` |
+      | --- | --- | --- |
+      | order | coerce → **gate** → parse (`api.service.ts:323-347`) | coerce → **parse** → gate (`mcp.service.ts:403-416`) |
+      | credential | `tickets.resolve(bearer)` only | ticket, then `identity.api_token_validate` |
+
+      The order matters because `executeGate` takes `input` and passes it to the site's `authorize`
+      hook: **a hook is handed unvalidated input over HTTP and validated input over MCP.** A site that
+      reads a field in its hook gets two different values for the same call depending on how it was
+      reached, and nothing in either file mentions the other.
+
+      The credential difference is sharper: **an API token authenticates over MCP and is anonymous
+      over HTTP.** So the CLI — which is an HTTP client — cannot use the credential the platform
+      issues to programs, and [D9](#) is worse than it looks: the token path is not only undeliverable,
+      it is half-implemented.
+
+      The destructive-refuses-agents rule is the *intended* asymmetry and should stay; these two are
+      not. The fix is to lift the shared sequence into one function both call — `resolve caller →
+      resolve scope → coerce → gate → parse → broker.call with meta` — leaving each service only its
+      transport. The `meta` construction at `api.service.ts:379` and `mcp.service.ts:432` is already
+      character-for-character identical, which is the tell. **M**
+
 ## Track F — Managing the platform
 
 Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
