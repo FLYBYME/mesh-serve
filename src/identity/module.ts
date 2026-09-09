@@ -140,57 +140,21 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
             for (const role of BUILTIN_ROLES) await store.upsertRole(role);
 
             /**
-             * **The first operator, named by the machine rather than by a request.**
+             * **`MESH_BOOTSTRAP_OPERATOR` was here, and `ensureFirstOperator` replaced it.**
              *
-             * `identity.grant_role` requires the operator role, which leaves nobody able to make
-             * the first one — every operator-gated contract unreachable for ever, which is exactly
-             * where this deployment sat until now. An input flag would let any caller nominate
-             * themselves, so the decision is the node operator's, made once, in a file: read from
-             * the environment, never from a call.
+             * It named an already-registered address in the node's environment and promoted it to
+             * `operator` on every boot — a reasonable answer to *the first operator cannot exist*,
+             * written before there was a better one. `ensureFirstOperator` (below) creates that
+             * account itself on a cluster with no users, prints a real password once, and marks it
+             * `provisional` so it can do nothing until somebody claims it.
              *
-             * Idempotent and quiet when there is nothing to do, because it runs on every boot. It
-             * does not create the account — the address has to have registered — since a node
-             * silently minting a privileged account nobody asked for is worse than a clear failure.
+             * Two mechanisms for one job, and the environment variable was the weaker in the way
+             * that matters: it granted `operator` to an account whose password nobody had just
+             * chosen, so the wall the provisional flag exists to build did not apply to it. It also
+             * had to be remembered on every restart — forget it, and every write on the deployment
+             * answers `403 card.create requires the operator role`, which is a confusing sentence
+             * about a missing environment variable.
              */
-            const bootstrapOperator = process.env['MESH_BOOTSTRAP_OPERATOR'];
-            if (bootstrapOperator !== undefined && bootstrapOperator.trim() !== '') {
-                /**
-                 * **Caught, because a convenience must not be able to take the node down.**
-                 *
-                 * The first version was not, and it did: `operator` had no `role` row, `updateUser`
-                 * correctly refused a role key it could not find, and the throw travelled out of
-                 * `onStart` and killed the process. systemd restarted it, into the same crash, for
-                 * ever — so a line in an environment file turned the whole platform off.
-                 *
-                 * The missing row is fixed (`BUILTIN_ROLES`), and that is the smaller half. The
-                 * lesson is the boundary: this promotes an account as a favour at boot, and
-                 * *nothing* it can discover about the database is worth refusing to serve over. A
-                 * node that starts without an operator is inconvenient; a node that will not start
-                 * is an outage.
-                 */
-                try {
-                    const account = await store.findUserByEmail(bootstrapOperator.trim());
-                    if (account === undefined) {
-                        started.logger.warn(
-                            `[identity] MESH_BOOTSTRAP_OPERATOR names ${bootstrapOperator}, which `
-                            + `has no account. Register it and restart, or the fleet has no operator.`,
-                        );
-                    } else if (!account.value.roles.includes('operator')) {
-                        await store.updateUser(account.id, {
-                            roles: [...new Set([...account.value.roles, 'operator'])],
-                        });
-                        started.logger.warn(
-                            `[identity] ${account.value.email} is now a platform operator`,
-                        );
-                    }
-                } catch (error) {
-                    started.logger.error(
-                        `[identity] could not promote ${bootstrapOperator} to operator: `
-                        + `${error instanceof Error ? error.message : String(error)}. `
-                        + `The node is serving; the fleet console will refuse until this is fixed.`,
-                    );
-                }
-            }
 
             const organizationModule: IServiceModule = {
                 domain: 'organization',
@@ -611,7 +575,8 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     if (!(caller?.roles ?? []).includes('operator')) {
                         throw new Error(
                             'identity.grant_role requires the operator role. The first operator is '
-                            + 'named by MESH_BOOTSTRAP_OPERATOR in the node\'s environment.',
+                            + 'created on a cluster\'s first boot, and its password is printed to '
+                            + 'the node\'s own terminal once.',
                         );
                     }
 

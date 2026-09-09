@@ -405,10 +405,15 @@ export const registerContract = defineContract({
  * ## Who may call it
  *
  * An operator, and nobody else — the role is what grants the role. That is deliberate and it leaves
- * the obvious hole: the *first* operator cannot exist. `MESH_BOOTSTRAP_OPERATOR` closes it, naming
- * one email that identity promotes at startup, **read from the server's environment and never from
- * a request**. An input flag would let any caller nominate themselves, which is not a bootstrap but
- * an escalation. The node operator decides once, in a file somebody can look at.
+ * the obvious hole: the *first* operator cannot exist. `ensureFirstOperator` closes it: on a cluster
+ * with no accounts identity creates one holding `operator`, generates a real password, prints it to
+ * the node's own stdout once, and marks it `provisional` — refused everywhere above `public` until
+ * somebody sets a password of their own.
+ *
+ * An input flag would let any caller nominate themselves, which is not a bootstrap but an
+ * escalation. Naming an address in the environment (`MESH_BOOTSTRAP_OPERATOR`, removed) was the
+ * earlier answer and was weaker in the way that matters: it granted the role to an account whose
+ * password nobody had just chosen, so the wall did not apply to it.
  *
  * ## Cluster-scoped only
  *
