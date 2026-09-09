@@ -560,6 +560,33 @@ Nothing resolves until this exists. Every version a site names is a row here.
       a build record names a repository and a commit. `artifact`, `part` and `partVersion` are
       global **on purpose** and say so; those three stay. **S**
 
+- [ ] **D9 ★★ An API token is the whole basis of the agent/person distinction, and there is no way to
+      get one.** Found 2026-09-08 pointing Claude Code at flowboard's MCP endpoint.
+
+      `McpService` draws its central line between a program and a person by *how the caller
+      authenticated*: `#resolve` tries the ticket cache, then `identity.api_token_validate`, and a
+      caller that arrived on a token carries `agent`. Everything downstream hangs off that — a
+      `destructive` contract refuses `caller?.agent !== undefined` and nobody else, which is
+      [mcp.md §7](./mcp.md) resolved the right way: *a destructive write asks a person*, and a token
+      is not one.
+
+      **`identity.api_token_issue` is not `visibility: 'public'`, so no site can grant it**
+      (`describeExposure` throws on an internal contract, by design). Nothing in `src/cli`,
+      `bring-up.ts` or `scripts/` mints one. `src/identity/module.ts:673` implements it and only the
+      broker can reach it. So the only credential anybody can actually obtain is a ticket — and a
+      ticket is a *person*, which means an agent client pointed at a site holds a person's authority
+      over every destructive call on it, exactly the case the refusal exists to prevent.
+
+      F7 already depends on this and papers over it: `publish-cli` "now requires an API token
+      credential (`--token`, `MESH_TOKEN`, or `MESH_API_TOKEN`)" — required from somewhere unstated.
+
+      The fix is a door, and which door is the decision: a public `identity.api_token_issue` gated at
+      `user` and scoped to the caller's own principal (a person mints a token for their own agent),
+      or a `mesh-serve token` CLI command over the bootstrap socket (operators only, no site
+      exposure). The first is what a console needs; the second is what tonight needs. Until one
+      exists, the agent path is designed and undeliverable, and every MCP client is a person. **S** ·
+      [mcp.md §7](./mcp.md)
+
 ## Track F — Managing the platform
 
 Found while specifying an admin console. See [managing.md](./managing.md). **None of these is a UI
