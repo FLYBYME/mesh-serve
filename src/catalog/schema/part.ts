@@ -129,6 +129,26 @@ export const PartDeclarationSchema = z.object({
     roles: AgentRolesSchema.optional(),
 
     /**
+     * **The specifier other parts import this one as** — `@flybyme/mesh-core/ui`.
+     *
+     * Absent on a part nothing imports, which is most of them: an application is composed, not
+     * called. Present on a part that publishes a vocabulary or a library, and it is what makes
+     * *one shopping cart, run everywhere* mean something rather than one copy per site.
+     *
+     * A **package subpath**, not a bare name, so TypeScript resolves it through the providing
+     * package's own `exports` with no `paths` mapping — the author writes an ordinary import and
+     * the compiler checks the props. The builder marks it external and the page's import map points
+     * it at the composed artifact, which is exactly what `@flybyme/mesh-web` has always done; this
+     * generalises the one specifier that already worked to any number of them.
+     *
+     * **One URL per specifier, always.** Two would be two module graphs and two of every singleton
+     * — the failure named in `bundle.ts`, and the reason a site rather than a part decides what a
+     * name resolves to. That is also where the policy lives: two sites may run one application
+     * against different `ui` versions, and the release hash covers the difference.
+     */
+    import: z.string().min(1).optional(),
+
+    /**
      * Which branch a release is cut from. Resolved to an exact commit at release time, always —
      * a build keyed on a branch name would answer the same forever while the code moved underneath.
      *
@@ -373,6 +393,12 @@ export const PartVersionSchema = z.object({
      * and at what gate, stays the site's (D2). Composing an agent part is what turns the map on.
      */
     roles: AgentRolesSchema.optional(),
+
+    /**
+     * The specifier this version is importable as. Versioned with everything else, because a part
+     * that renames its public entry has changed what a consumer's bare import resolves to.
+     */
+    import: z.string().min(1).optional(),
 
     /** For a monorepo. A name within the repository, never a path on a disk. */
     subdirectory: z.string().min(1).optional(),

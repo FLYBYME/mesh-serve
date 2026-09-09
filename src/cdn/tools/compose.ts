@@ -99,7 +99,13 @@ export async function cdn_compose(
             continue;
         }
 
-        pinned[part.name] = { version: part.version, digest: version.artifactDigest };
+        pinned[part.name] = {
+            version: part.version,
+            digest: version.artifactDigest,
+            // Carried onto the release so the page can write an import map without asking the
+            // catalog per request. Absent for a part nothing imports, which is most of them.
+            ...(version.import === undefined ? {} : { import: version.import }),
+        };
         kernelRanges[part.name] = version.kernel;
         for (const key of version.requires) requires.add(key);
         for (const need of version.requiredParts) {

@@ -66,6 +66,16 @@ export async function bundlePart(
      */
     part: Pick<DescribedPart, 'kind' | 'id'> & { readonly entry: string },
     maxBytes: number = DEFAULT_MAX_BYTES,
+    /**
+     * Specifiers this part imports from **other composed parts**, beyond the framework.
+     *
+     * Resolved by the caller from the part's `requiredParts` — each provider declares the specifier
+     * it is importable as — so a part cannot mark something external by asserting it. The site's
+     * import map resolves each to the composed artifact, exactly as it has always done for the one.
+     *
+     * Empty for almost every part. An application is composed, not called.
+     */
+    imports: readonly string[] = [],
 ): Promise<Bundled> {
     const outdir = join(root, '.mesh-out');
 
@@ -76,8 +86,9 @@ export async function bundlePart(
         platform: 'browser',
         target: 'es2022',
         // The kernel *is* the framework, so it has nothing to leave out. Everything else leaves out
-        // exactly one specifier and takes it from the import map instead.
-        external: part.kind === 'kernel' ? [] : [FRAMEWORK],
+        // the framework — plus whatever its `requiredParts` declare they are imported as, which the
+        // same import map resolves to the same kind of composed artifact.
+        external: part.kind === 'kernel' ? [] : [FRAMEWORK, ...imports],
         // Every part's entry is `index.js` inside its own artifact. The name means nothing outside
         // it — the artifact is addressed by hash, and the page imports it by that.
         entryNames: 'index',

@@ -111,6 +111,9 @@ export async function catalog_publish(
             ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
             ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
             requires: input.requires ?? [],
+            // Never written until now, so `version.requiredParts` was `[]` platform-wide — and
+            // compose's requirement check, which loops it, had nothing to loop.
+            requiredParts: input.requiredParts ?? [],
             capabilities: input.capabilities ?? { needs: [], provides: [] },
             // `state` and `artifactDigest` are deliberately untouched. The bytes are a property of
             // the commit and the entry, both of which are the same — so a re-publish must never
@@ -149,9 +152,13 @@ export async function catalog_publish(
          */
         ...(input.entry === undefined ? {} : { entry: input.entry }),
         ...(input.roles === undefined ? {} : { roles: input.roles }),
+        ...(input.import === undefined ? {} : { import: input.import }),
         ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
         ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
         requires: input.requires ?? [],
+        // Never written until now, so `version.requiredParts` was `[]` platform-wide — and
+        // compose's requirement check, which loops it, had nothing to loop.
+        requiredParts: input.requiredParts ?? [],
         capabilities: input.capabilities ?? { needs: [], provides: [] },
         // Declared, not built. The row exists and is buildable, which is the point of it — a version
         // is a thing you can ask for before anybody has produced the bytes.

@@ -124,7 +124,33 @@ function indexHtml(
      * singleton the capability model depends on, which is the failure that inlining the framework
      * into each part produced and that no amount of testing one part at a time would reveal.
      */
-    const importMap = JSON.stringify({ imports: { '@flybyme/mesh-web': kernelUrl } }, null, 4);
+    /**
+     * **And one entry per composed part that publishes a specifier.**
+     *
+     * The same argument as the framework's, generalised: a part built with
+     * `@flybyme/mesh-core/ui` external carries a bare import a browser cannot resolve, and this is
+     * what resolves it — to the artifact *this site composed*, at that digest, and to nothing else.
+     *
+     * Which is where the policy lives. Two sites running one application against different `ui`
+     * versions are two import maps over one bundle; the part does not choose and does not know.
+     * It also runs backwards: anything the kernel does today that could be a part can become one,
+     * gaining an entry here and leaving the kernel smaller, rather than the kernel growing every
+     * time a part needs something.
+     *
+     * `cdn.compose` refuses a release whose `requiredParts` are not all present, so a bare import
+     * that survived a bundle always has an entry waiting for it.
+     */
+    const partImports = Object.entries(release.parts)
+        .filter(([, artifact]) => artifact.import !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, artifact]) => [artifact.import as string, urlOf(artifact.digest, 'index.js')] as const);
+
+    const importMap = JSON.stringify({
+        imports: {
+            '@flybyme/mesh-web': kernelUrl,
+            ...Object.fromEntries(partImports),
+        },
+    }, null, 4);
 
     const kernelLinks = kernel.styles
         .map((path) => `    <link rel="stylesheet" href="${attr(urlOf(release.kernel.digest, path))}">`);

@@ -53,11 +53,16 @@ export interface PublishInput {
     readonly requires: readonly string[];
     readonly requiredParts: readonly { readonly id: string; readonly version: string; readonly optional: boolean }[];
     readonly builtAgainst: readonly ResolvedDependency[];
+    /**
+     * Specifiers this part imports from the parts it requires, resolved by the caller from each
+     * provider's own declaration. Marked external and left to the site's import map.
+     */
+    readonly imports?: readonly string[];
 }
 
 export async function publishPart(
     service: BuilderService,
-    { part, root, source, kernel, requires, requiredParts, builtAgainst }: PublishInput,
+    { part, root, source, kernel, requires, requiredParts, builtAgainst, imports }: PublishInput,
     ctx: IServiceContext,
 ): Promise<PartResult> {
     const startedAt = new Date();
@@ -70,7 +75,7 @@ export async function publishPart(
     }
 
     try {
-        const { files, blobs } = await bundlePart(root, part, service.maxBytes);
+        const { files, blobs } = await bundlePart(root, part, service.maxBytes, imports ?? []);
 
         // Bytes first. An artifact record naming content this node never stored would be a row
         // pointing at nothing, and every serving node would ask for it forever.

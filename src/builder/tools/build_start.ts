@@ -126,6 +126,29 @@ export async function builder_build_start(
         );
     }
 
+    /**
+     * **What this part may import from other parts, asked of the providers.**
+     *
+     * A part declares `requiredParts` — *I do not function without that one* — and each provider
+     * declares the specifier it is importable as. Marking those external is what lets
+     * `import { ui } from '@flybyme/mesh-core/ui'` survive a bundle and be resolved by the site's
+     * import map instead of being inlined.
+     *
+     * **Read from the provider, never from the consumer.** A part naming its own externals could
+     * mark anything external and ship a bundle with an import nothing resolves — a blank page and a
+     * console error, at whichever site composed it. Here the specifier can only come from a part
+     * that actually publishes one, and `cdn.compose` separately refuses a release whose
+     * `requiredParts` are not all present, so a surviving bare import always has somewhere to land.
+     *
+     * A provider with no `import` contributes nothing: most parts are composed, not called.
+     */
+    const imports: string[] = [];
+    for (const required of version.requiredParts) {
+        const provider = await ctx.call('part.find_one', { query: { name: required.id } });
+        const specifier = provider?.declaration?.import;
+        if (specifier !== undefined && specifier !== '') imports.push(specifier);
+    }
+
     // Built from the catalog, so there is no field a caller could have used to name a repository.
     // The commit is already exact: `catalog.publish` refuses anything else, which is what makes an
     // input hash meaningful and a rebuild reproducible.
@@ -179,6 +202,7 @@ export async function builder_build_start(
             requires: version.requires,
             requiredParts: version.requiredParts,
             builtAgainst,
+            imports,
         }, ctx);
 
         if (built.artifactDigest !== undefined) {

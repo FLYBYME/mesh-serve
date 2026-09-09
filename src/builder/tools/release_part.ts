@@ -139,9 +139,11 @@ export async function builder_release_part(
         commit: source.ref,
         ...(declaration.entry === undefined ? {} : { entry: declaration.entry }),
         ...(declaration.roles === undefined ? {} : { roles: declaration.roles }),
+        ...(declaration.import === undefined ? {} : { import: declaration.import }),
         ...(declaration.subdirectory === undefined ? {} : { subdirectory: declaration.subdirectory }),
         ...(declaration.kernel === undefined ? {} : { kernel: declaration.kernel }),
         requires: declaration.requires,
+        requiredParts: declaration.requiredParts,
     });
 
     /**

@@ -87,6 +87,9 @@ export async function builder_import_repo(
                 // that carries one and a buildable kind that does not.
                 ...(part.entry === undefined ? {} : { entry: part.entry }),
                 ...(part.roles === undefined ? {} : { roles: part.roles }),
+                // What other parts import this one as. Read once at import, like everything else on
+                // a declaration — the collection is authoritative from then on.
+                ...(part.import === undefined ? {} : { import: part.import }),
                 branch: input.ref,
                 ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
                 // A kernel has no kernel. Everything else carries the range it is written against,

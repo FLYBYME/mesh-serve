@@ -28,6 +28,19 @@ export const PinnedArtifactSchema = z.object({
     version: z.string().min(1),
     /** → artifact.digest. */
     digest: z.string().min(1),
+
+    /**
+     * The specifier other parts import this one as, if it publishes one.
+     *
+     * Pinned here rather than looked up at serve time so the page is a string concatenation over
+     * data the edge already holds — `page.ts` builds the import map per request, and a database
+     * round trip per part would put the catalog in the serving path.
+     *
+     * **Outside the release hash**, which is `[id, version, digest]` per part: the specifier is a
+     * label on bytes already identified by their digest, so including it would re-identify every
+     * release on the platform to say nothing new.
+     */
+    import: z.string().min(1).optional(),
 });
 export type PinnedArtifact = z.infer<typeof PinnedArtifactSchema>;
 

@@ -125,6 +125,16 @@ export const DescribedPartSchema = z.object({
     roles: AgentRolesSchema.optional(),
 
     /**
+     * **The specifier other parts import this one as** — `@flybyme/mesh-core/ui`.
+     *
+     * A package **subpath**, so a consumer writes an ordinary import and TypeScript resolves it
+     * through this package's own `exports` with no `paths` mapping; the builder marks it external
+     * and the site's import map points it at the composed artifact. Absent on a part nothing
+     * imports, which is most of them — an application is composed, not called.
+     */
+    import: z.string().min(1).optional(),
+
+    /**
      * The packages this part was written against, name → range.
      *
      * **Not an instruction to install.** A build fetches a commit and runs esbuild; it has no

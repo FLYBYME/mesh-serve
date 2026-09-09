@@ -23,7 +23,7 @@
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import {
-    AgentRolesSchema,
+    AgentRolesSchema, RequiredPartRefSchema,
     CapabilitiesSchema, PartDeclarationSchema, PartKindSchema, PartSchema, PartVersionSchema,
 } from '../schema/part.js';
 
@@ -140,9 +140,25 @@ export const publishContract = defineContract({
         entry: z.string().min(1).optional(),
         /** An `agent` version's role map. Meaningless on any other kind. */
         roles: AgentRolesSchema.optional(),
+        /** The specifier other parts import this one as. Absent on a part nothing imports. */
+        import: z.string().min(1).optional(),
         subdirectory: z.string().min(1).optional(),
         kernel: z.string().min(1).optional(),
         requires: z.array(z.string()).optional(),
+        /**
+         * **The parts this version does not function without.**
+         *
+         * `PartVersionSchema` has carried this field with a `default([])` since it was written, and
+         * nothing ever set it: `import_repo` wrote `requiredParts` onto the part's *declaration*
+         * and publish did not copy it onto the version. So `version.requiredParts` was `[]` for
+         * every version on the platform — and `cdn.compose`, which loops it to refuse a release
+         * with an unmet requirement, **has never had anything to loop.**
+         *
+         * A check that always passes reads exactly like a check that works. Found by needing the
+         * same field for a second reason: the builder resolves it to the specifiers a part may
+         * import, and the imports came back empty on a part that plainly declared one.
+         */
+        requiredParts: z.array(RequiredPartRefSchema).optional(),
         capabilities: CapabilitiesSchema.optional(),
         /** Frozen with the version, unlike everything above. */
         changelog: z.string().optional(),
