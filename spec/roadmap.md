@@ -537,6 +537,25 @@ Nothing resolves until this exists. Every version a site names is a row here.
       process may reach anything. That distinction exists in the transport and is not currently
       passed to the dispatcher. **L** · ⛔ mesh
 
+      **Mitigated 2026-09-09 by closing the door, because the fix cannot be taken.** `mesh` is frozen
+      (`mesh/docs/STABILITY.md`), so the broker-level check is not available — and the hole is only
+      reachable by something that joins the mesh, so what remains is to stop doing that.
+
+      > "Everything that the package mesh-serve provides must be managed through the api and the cli.
+      > This is a must now. Nothing else."
+
+      A node now serves a **control site** for itself (`cdn/methods/control.ts`), which is what made
+      this possible: a cluster with no sites had nothing to point a CLI at, so going around the api
+      was not laziness, it was the only way in. With a route to `identity.ticket_issue` on a bare
+      node, `src/bring-up.ts` became an HTTP client holding a ticket, `callerFor` and
+      `MESH_BOOTSTRAP_OPERATOR` are deleted, and `npx mesh … --bootstrap` is retired as a way to
+      reach a cluster ([cli.md §7](./cli.md)). `publish-cli` went the same way in F6.
+
+      **The hole itself is unchanged** — anything that completes the handshake can still assert an
+      identity — and `MESH_KEY` is still the only boundary. What changed is that nothing this
+      repository ships does it any more, so a key that leaks is a key an attacker must first obtain
+      rather than a step in a documented workflow.
+
 - [x] **D7 ★ `release` is exposed on an argument for safety it never implemented.** *(fixed 2026-09-07)*
       `scopedBy: 'tenantId'` is declared. Scoping it broke serving, which is the half worth
       remembering: `site` is scoped and `cdn.resolve_site` exists because a browser is anonymous,
@@ -560,8 +579,9 @@ Nothing resolves until this exists. Every version a site names is a row here.
       a build record names a repository and a commit. `artifact`, `part` and `partVersion` are
       global **on purpose** and say so; those three stay. **S**
 
-- [ ] **D9 ★★ An API token is the whole basis of the agent/person distinction, and there is no way to
-      get one.** Found 2026-09-08 pointing Claude Code at flowboard's MCP endpoint.
+- [x] **D9 ★★ An API token is the whole basis of the agent/person distinction, and there is no way to
+      get one.** *(fixed 2026-09-09 by the control site)* Found 2026-09-08 pointing Claude Code at
+      flowboard's MCP endpoint.
 
       `McpService` draws its central line between a program and a person by *how the caller
       authenticated*: `#resolve` tries the ticket cache, then `identity.api_token_validate`, and a
@@ -586,17 +606,29 @@ Nothing resolves until this exists. Every version a site names is a row here.
       exposure). The first is what a console needs; the second is what tonight needs. **S** ·
       [mcp.md §7](./mcp.md)
 
-      **Corrected 2026-09-09: there is a door, and it is the bootstrap socket.**
-      `npx mesh identity api_token_issue --bootstrap ws://127.0.0.1:4001 --name … --userId … --roles …`
-      mints one — the framework CLI reaches an internal contract over the mesh, which is exactly what
-      *internal* means and not what this entry assumed. So the token path is reachable today, and
-      approvals were verified end to end on one.
-      What is actually missing is narrower and still worth doing: it needs the node's socket rather
-      than the site, so it is an operator's laptop and not a console; it prints through the
-      contract's `print`, which deliberately omits the secret, so the token has to be read some other
-      way; and there is no revoke or list beside it. **The HTTP half of the divergence stands** —
-      `ApiService` resolves tickets only, so a token that works over MCP is anonymous over HTTP and
-      the CLI cannot use it (D10).
+      **Corrected once, then fixed 2026-09-09.**
+
+      The first correction was that a door existed — the framework CLI over the bootstrap socket —
+      and it was the wrong door. `npx mesh … --bootstrap` joins the mesh as a peer, and a joined peer
+      asserts whatever identity it likes (D6). Minting a credential through the one hole the
+      credential exists to close is not a bootstrap, it is the hole.
+
+      **Fixed properly by the control site.** A node serves a site for itself
+      (`cdn/methods/control.ts`), `identity.api_token_issue` is exposed on it at `operator`, and the
+      CLI is descriptor-driven — so:
+
+      ```
+      mesh-serve --host 127.0.0.1:5005 identity api_token_issue \
+          --name agy-1 --userId u-… --roles worker --json
+      ```
+
+      prints the token, because `--json` renders the whole answer rather than the contract's `print`,
+      which deliberately omits the secret. No second command was needed: **the missing piece was a
+      route, not a feature.**
+
+      Still worth doing beside it, and small: a `list` and a `revoke`, so a token can be taken back
+      without a database. **The HTTP half of the divergence is also fixed** (D11): `resolveCaller` is
+      one function both services read, so a token authenticates over HTTP as well as MCP.
 
 - [x] **D10 ★★★ No collection outside this repository could ever stream an event.** *(fixed 2026-09-09)*
       Found asking why flowboard's board did not notice rows created through its own API.

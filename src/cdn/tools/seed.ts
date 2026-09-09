@@ -208,9 +208,16 @@ export async function site_seed(
      * `application` and `title` were both hardcoded `console`, so a site holding one application
      * called flowboard served a page whose `<title>` said Console — which is what a person sees in a
      * tab, and it was wrong for every site but this platform's own.
+     *
+     * **The single *application* names it, not the single part.** The CLI's rule was "one `--parts`
+     * names the site", which is a different question: `--parts flowboard,auth,flowboard-agent` is
+     * one application plus an extension plus an agent surface, and it still fell back to `console`.
+     * A release has one thing a person opens; extensions and agent parts are not it.
      */
-    const single = input.parts?.length === 1 ? input.parts[0] : undefined;
-    const application = input.application ?? single ?? 'console';
+    const applications = composing.filter((part) => part.kind === 'application');
+    const application = input.application
+        ?? (applications.length === 1 ? applications[0]?.id : undefined)
+        ?? 'console';
 
     const composed = await call('cdn.compose', {
         kernel: input.kernelRange ?? rangeFor(kernelVersion),

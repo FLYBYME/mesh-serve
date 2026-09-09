@@ -186,15 +186,41 @@ $ npx mesh builder build_start --part todo --version 0.1.0
 No build, no error, exit 0 — a command that looks like it worked. It hits `builder.build_start`,
 `catalog.publish` and all eight `partVersion` commands. A generated CLI cannot ship over that.
 
-## 7. Where this leaves `mesh`'s own CLI
+## 7. Where this leaves `mesh`'s own CLI — **decided 2026-09-09**
 
-The framework's generator and CLI may not survive this, and that is fine rather than a loss. They
-were written when a contract call was a call on a broker by whoever held one; **`scopedBy` and the
-gate changed what a caller is**, and a CLI that predates tenancy is a CLI that cannot express it.
+> "npx mesh is no longer something that can be used and should be removed. Everything that the
+> package mesh-serve provides must be managed through the api and the cli. This is a must now.
+> Nothing else."
 
-Not a decision to take here, and not one to drift into either: if `mesh-serve`'s CLI becomes the way
-people drive contracts, say so and retire the other rather than maintaining two that disagree about
-who is calling.
+Settled the way this section anticipated. The framework's CLI was written when a contract call was a
+call on a broker by whoever held one; **`scopedBy` and the gate changed what a caller is**, and a CLI
+that predates tenancy cannot express it. It does not merely fail to express it — it *bypasses* it:
+`npx mesh <domain> <action> --bootstrap ws://…` joins the mesh as a peer, and a joined peer
+constructs whatever `meta` it likes, so `requireOperator` reads what the caller said about itself
+(roadmap D6). The framework CLI is not a door to this platform.
+
+**`mesh-serve` is the CLI.** It is descriptor-driven — it reads `/_describe` from a site and
+dispatches — so every command is an authenticated HTTP call through the same gate as a browser's,
+and there is nothing it can reach that a person could not.
+
+What made that possible was the missing piece rather than a rewrite: a cluster with no sites had
+nothing to point a CLI at, because the api dispatches by `Host`. **A node now serves a control site
+for itself** (`cdn/methods/control.ts`), so `login`, seeding and token issuing are ordinary calls
+against an ordinary site:
+
+```
+node bin/mesh-serve.mjs node --db <fresh>        # prints one password, once
+node bin/mesh-serve.mjs seed --password … --set-password … \
+    --host example.localhost --repo … --parts …
+```
+
+`src/bring-up.ts` was the last thing joining the mesh to make privileged calls; it is an HTTP client
+now, and `callerFor` and `MESH_BOOTSTRAP_OPERATOR` are deleted. `publish-cli` was moved off the same
+shape by F6.
+
+**`npx mesh` remains what it always was for**: `mesh generate`, run inside a repository against its
+own source. That is a build-time tool over files, not a way to reach a running cluster, and F7 below
+is about that generator rather than about driving contracts.
 
 ## 8. Open
 
