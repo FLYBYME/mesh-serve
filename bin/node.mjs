@@ -341,6 +341,48 @@ const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
 /**
+ * **`--service <path>` — load a module this node did not ship with.**
+ *
+ * A site's contracts have to *exist in a process* before the api can serve them. `describeExposure`
+ * builds a route from a contract's shape — its method, its path, its input schema — and reads those
+ * from `globalContractRegistry`, which is populated at **import time** by whatever the process
+ * loaded. So a site can grant twenty contracts and expose none of them, which is exactly what
+ * happened:
+ *
+ *     [api] flowboard.localhost exposes 20 contract(s) nothing provides: card.create, card.find, …
+ *
+ * The platform's answer is `node.provision` + `node.assign`: the fleet clones a repository at a
+ * pinned ref and the supervisor mounts it. That is right for a machine somebody else runs, and it
+ * is ceremony — an allowlist, an operator role, a tag rather than a branch — for a laptop.
+ *
+ * **This is the development path and it is marked as one.** It takes a path, imports it, and mounts
+ * the default export. No clone, no ref, no allowlist: it trusts the person who typed it, which is
+ * the whole difference between this and provisioning, and the reason this must never be how a
+ * deployed node gets its services.
+ */
+const servicePaths = [];
+for (let i = 0; i < process.argv.length - 1; i += 1) {
+    if (process.argv[i] === '--service') servicePaths.push(process.argv[i + 1]);
+}
+
+for (const servicePath of servicePaths) {
+    const resolved = path.resolve(process.cwd(), servicePath);
+    const module = await import(resolved);
+    const Service = module.default ?? module.Service;
+
+    if (typeof Service !== 'function') {
+        process.stderr.write(
+            `--service ${servicePath}: no default export to construct.\n`
+            + `  A service module default-exports its class, the way the supervisor expects to find it.\n`,
+        );
+        process.exit(2);
+    }
+
+    await app.registerModule(new Service());
+    process.stdout.write(`  service   ${servicePath} (development — provision it for real)\n`);
+}
+
+/**
  * **The agent surface, off unless a port is given.**
  *
  * `--mcp 5006` starts it; no flag starts nothing. Off by default because an MCP endpoint is a way

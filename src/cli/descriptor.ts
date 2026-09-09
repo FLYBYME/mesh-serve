@@ -28,6 +28,17 @@ export interface Descriptor {
     readonly base: string;
     readonly exposure: string;
     readonly calls: readonly Call[];
+    /**
+     * **Where the api actually answered** — added by `fetchDescriptor`, not sent by the server.
+     *
+     * The descriptor is found by following the page's `data-api`, so the origin that answered is
+     * often not the one `--host` names. Carrying it means every later call goes to the same place
+     * the descriptor came from.
+     *
+     * Without it `help` worked and `card find` returned HTML: discovery followed the redirect and
+     * the call did not, so one hit the api and the other hit the cdn.
+     */
+    readonly origin?: string;
 }
 
 export class CliError extends Error {
@@ -102,7 +113,7 @@ export async function fetchDescriptor(host: string, ticket?: string): Promise<De
 
         const text = await response.text();
         try {
-            return JSON.parse(text) as Descriptor;
+            return { ...JSON.parse(text) as Descriptor, origin };
         } catch {
             // HTML: this origin is the cdn, not the api. Keep looking rather than reporting a JSON
             // parse error, which describes the symptom and not the situation.
@@ -164,7 +175,7 @@ async function declaredApi(origin: string, headers: Record<string, string>): Pro
  */
 export async function callContract(
     host: string,
-    base: string,
+    descriptor: Descriptor,
     call: Call,
     input: Record<string, unknown>,
     ticket?: string,
@@ -184,7 +195,15 @@ export async function callContract(
         }
     }
 
-    const url = `${originOf(host)}${base}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
+    /**
+     * **The call goes where the descriptor came from.**
+     *
+     * Not `originOf(host)`: discovery followed the page's `data-api` to the api, and a call that
+     * recomputes the origin from `--host` goes back to the cdn instead. That was `help` listing 20
+     * calls and `card find` answering with HTML.
+     */
+    const origin = descriptor.origin ?? originOf(host);
+    const url = `${origin}${descriptor.base}${path}${query.size > 0 ? `?${query.toString()}` : ''}`;
 
     const response = await fetch(url, {
         method: call.method,

@@ -94,7 +94,7 @@ async function invoke(
         return 2;
     }
 
-    const { status, body } = await callContract(host, descriptor.base, call, input, ticket);
+    const { status, body } = await callContract(host, descriptor, call, input, ticket);
 
     if (status >= 400) {
         /**
@@ -205,7 +205,7 @@ async function help(host: string | undefined, io: Io): Promise<number> {
 
     const descriptor = await fetchDescriptor(host, ticketFor(host));
     const remembered = currentHost() === host ? ' (remembered)' : '';
-    io.out(`${descriptor.application} at ${originOf(host)}${remembered} offers ${String(descriptor.calls.length)} call(s):\n`);
+    io.out(`${descriptor.application} at ${descriptor.origin ?? originOf(host)}${remembered} offers ${String(descriptor.calls.length)} call(s):\n`);
 
     if (descriptor.calls.length === 0) {
         io.out('  (none — this site grants nothing to this caller)\n');
@@ -276,7 +276,7 @@ async function login(host: string, argv: readonly string[], io: Io): Promise<num
     const email = valueOf(argv, '--email') ?? await io.prompt('email: ', false);
     const password = await io.prompt('password: ', true);
 
-    const { status, body } = await callContract(host, descriptor.base, issue, { email, password });
+    const { status, body } = await callContract(host, descriptor, issue, { email, password });
 
     if (status >= 400) {
         io.err(status === 401
@@ -333,7 +333,7 @@ async function setPassword(
         return 1;
     }
 
-    const { status, body } = await callContract(host, descriptor.base, call, { password }, ticket);
+    const { status, body } = await callContract(host, descriptor, call, { password }, ticket);
     if (status >= 400) {
         io.err(isRecord(body) && typeof body['message'] === 'string' ? body['message'] : `Failed (${String(status)}).`);
         return 1;
