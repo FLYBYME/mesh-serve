@@ -79,6 +79,22 @@ export type EventLookup = (name: string) => { readonly scopedBy?: string } | und
  *
  * Anything not listed here keeps the framework's answer, so a new collection that forgets to say
  * what it is still fails loudly instead of quietly streaming to everybody.
+ *
+ * ---
+ *
+ * **This list is this repository's own collections, and it used to be the only way in.**
+ *
+ * Every name above is defined in `src/`. An application published to this platform could never join
+ * it, because joining meant editing a file in mesh-serve — so *every* third-party collection was
+ * undeliverable, permanently, whatever it was. flowboard found it the obvious way: seven collections,
+ * twenty-one derived events, and `/events` refusing the entire subscription with
+ * `no module here defines it` twenty-one times.
+ *
+ * The decision was in the wrong repository. It belongs to the collection that owns the data, beside
+ * `scopedBy`, which is where `defineCrud`'s `delivery: 'global'` now puts it — and `registryLookup`
+ * reads that first. This set stays as what it always described: the platform's own collections,
+ * kept here rather than threaded through six `defineCrud` calls for no gain, and now one of two
+ * routes to the same answer rather than the only one.
  */
 export const GLOBALLY_DELIVERED = new Set([
     'part', 'partVersion', 'artifact', 'node', 'group', 'role',
@@ -96,9 +112,11 @@ export const registryLookup: EventLookup = (name) => {
         if (action === 'created' || action === 'updated' || action === 'deleted') {
             const crud = globalCrudRegistry.get(domain);
             if (crud !== undefined) {
-                // A declared row scope always wins: it is a stronger statement than this list, and
-                // a collection that grows one later must not keep being delivered globally.
+                // A declared row scope always wins: it is a stronger statement than either list,
+                // and a collection that grows one later must not keep being delivered globally.
                 if (crud.scopedBy !== undefined) return { scopedBy: crud.scopedBy };
+                // What the collection says about itself, then what this repository says about its own.
+                if (crud.delivery === 'global') return { scopedBy: 'global' };
                 if (GLOBALLY_DELIVERED.has(domain)) return { scopedBy: 'global' };
             }
         }
