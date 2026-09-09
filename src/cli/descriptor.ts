@@ -76,6 +76,16 @@ export async function fetchDescriptor(host: string, ticket?: string): Promise<De
      * `data-api="…"` into the document, which is how a bundle knows where to call. So this asks the
      * same question a browser asks. Point it at what you would open, and it finds the rest.
      */
+    /**
+     * **"Nothing is listening" and "nothing serves this hostname" are different problems.**
+     *
+     * They produced one message, which then guessed wrong: it told somebody whose node was plainly
+     * running to start a node. A 404 means something answered — the platform is up and no site
+     * claims this host, which is one command away. A refused connection means nothing is there at
+     * all, which is a different command.
+     */
+    let answered = false;
+
     for (const origin of await candidateOrigins(host, headers)) {
         const url = `${origin}/_describe`;
 
@@ -86,6 +96,7 @@ export async function fetchDescriptor(host: string, ticket?: string): Promise<De
             continue;
         }
 
+        answered = true;
         if (response.status === 404) continue;
         if (!response.ok) throw new CliError(`${url} answered ${String(response.status)}.`);
 
@@ -99,10 +110,24 @@ export async function fetchDescriptor(host: string, ticket?: string): Promise<De
         }
     }
 
+    if (answered) {
+        throw new CliError(
+            `A node is running, and no site serves ${host}.`,
+            `Seed one:\n\n`
+            + `  mesh-serve seed --org-slug <slug> --org-name "<name>" \\\n`
+            + `    --host ${host.split(':')[0] ?? host} \\\n`
+            + `    --api http://${host.split(':')[0] ?? host}:5005 \\\n`
+            + `    --app-repo <a git url or bare repo> --parts <part>\n\n`
+            + `A site is a hostname, a release, and what it may call. Until one exists the api has `
+            + `nothing to resolve this Host header to.`,
+        );
+    }
+
     throw new CliError(
-        `Could not find an api for ${host}.`,
-        'Point --host at the site as you would open it — the page names its own api and this follows '
-        + 'that. If nothing is serving, start a node (npm run node) and seed a site (npm run seed).',
+        `Nothing is listening for ${host}.`,
+        'Start a node:\n\n  mesh-serve node --ws 4001 --cdn 8080 --api 5005\n\n'
+        + 'Then point --host at the site as you would open it — the page names its own api and this '
+        + 'follows that.',
     );
 }
 
