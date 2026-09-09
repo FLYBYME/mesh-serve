@@ -22,8 +22,45 @@ import { z } from '@flybyme/mesh';
 
 // ---------------------------------------------------------------------------- the part
 
-export const PartKindSchema = z.enum(['kernel', 'application', 'extension']);
+/**
+ * **A kind is a build recipe and a host, and nothing else branches on it.**
+ *
+ * Worth stating because `kind` did not mean much until now: the only behavioural branch in the
+ * whole platform was `bundle.ts`'s `external: kind === 'kernel' ? [] : [FRAMEWORK]`, and the browser
+ * kernel never reads it at all — a `PartRef` is `{ id, contribution, options }` and
+ * application-vs-extension is decided by what the contribution *declares*. So `kind` was doing build
+ * configuration while presenting as taxonomy.
+ *
+ * | kind | build recipe | host |
+ * | --- | --- | --- |
+ * | `kernel` | bundle, nothing external | the page |
+ * | `application` | bundle, framework external | the browser kernel |
+ * | `extension` | bundle, framework external | the browser kernel |
+ * | `agent` | **none** — it is a declaration | `McpService` |
+ *
+ * Adding a kind has exactly two obligations: one recipe, one host. If a new kind needs a third
+ * change somewhere, the abstraction is wrong and you find out immediately.
+ *
+ * `agent` has no source at all, which is the simplification that fell out of deciding an agent part
+ * *describes* a surface rather than running one (`spec/mcp.md`). A description does not need
+ * compiling, so there is no entry, no bundle and no artifact — only a manifest entry a site composes.
+ */
+export const PartKindSchema = z.enum(['kernel', 'application', 'extension', 'agent']);
 export type PartKind = z.infer<typeof PartKindSchema>;
+
+/**
+ * Which contracts an agent part offers, per role.
+ *
+ * **Roles are open-ended strings**, on purpose: a deployment may have `planner` and `worker`, or ten
+ * roles nobody else would guess, and the platform has no business enumerating them. What matters is
+ * that a role is a role — ten worker accounts hold `worker` and nothing lists the accounts.
+ *
+ * **Default off.** A contract not named here is on no MCP surface, so adding a contract to a site can
+ * never silently widen what a model can reach. The same principle as `auth` having no default: an
+ * omission must not mean *open*.
+ */
+export const AgentRolesSchema = z.record(z.string().min(1), z.array(z.string().min(1)).min(1));
+export type AgentRoles = z.infer<typeof AgentRolesSchema>;
 
 /**
  * Another part this one needs on the page, as a range.
@@ -55,8 +92,21 @@ export type RequiredPartRef = z.infer<typeof RequiredPartRefSchema>;
  * what says at what gate, if at all, each one is exposed.
  */
 export const PartDeclarationSchema = z.object({
-    /** The **source** entry — `src/app.ts`. esbuild reads types; it does not check them. */
-    entry: z.string().min(1),
+    /**
+     * The **source** entry — `src/app.ts`. esbuild reads types; it does not check them.
+     *
+     * Optional only because an `agent` part has no source: it is a declaration of a surface, not
+     * code that runs. Every other kind must have one, and `catalog.declare` refuses a part that gets
+     * this wrong — here rather than in the schema, because the rule depends on `kind` and because
+     * the moment somebody is looking at what they just typed is the moment to say so.
+     */
+    entry: z.string().min(1).optional(),
+
+    /**
+     * For an `agent` part: which contracts it offers, per role. Meaningless on any other kind and
+     * refused there by `catalog.declare`.
+     */
+    roles: AgentRolesSchema.optional(),
 
     /**
      * Which branch a release is cut from. Resolved to an exact commit at release time, always —
@@ -281,8 +331,22 @@ export const PartVersionSchema = z.object({
      */
     changelog: z.string().optional(),
 
-    /** The source entry within the repository — `src/index.ts`. Part of the build's input hash. */
-    entry: z.string().min(1),
+    /**
+     * The source entry within the repository — `src/index.ts`. Part of the build's input hash.
+     *
+     * Absent on an `agent` version, which has no source: it records a declaration at a commit rather
+     * than bytes built from one. `build_start` refuses that kind before it could read this.
+     */
+    entry: z.string().min(1).optional(),
+
+    /**
+     * An `agent` version's role map: which contracts each role may call over MCP.
+     *
+     * **Versioned, because it is part content and not deployment configuration.** Which roles a
+     * surface offers travels with the part the way an application's views do; what a site *grants*,
+     * and at what gate, stays the site's (D2). Composing an agent part is what turns the map on.
+     */
+    roles: AgentRolesSchema.optional(),
 
     /** For a monorepo. A name within the repository, never a path on a disk. */
     subdirectory: z.string().min(1).optional(),

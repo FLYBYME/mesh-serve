@@ -23,6 +23,7 @@
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import {
+    AgentRolesSchema,
     CapabilitiesSchema, PartDeclarationSchema, PartKindSchema, PartSchema, PartVersionSchema,
 } from '../schema/part.js';
 
@@ -135,7 +136,10 @@ export const publishContract = defineContract({
 
         version: z.string().min(1),
         commit: z.string().regex(/^[0-9a-f]{40}$/),
-        entry: z.string().min(1),
+        /** Absent on an `agent` version, which records a declaration rather than bytes. */
+        entry: z.string().min(1).optional(),
+        /** An `agent` version's role map. Meaningless on any other kind. */
+        roles: AgentRolesSchema.optional(),
         subdirectory: z.string().min(1).optional(),
         kernel: z.string().min(1).optional(),
         requires: z.array(z.string()).optional(),

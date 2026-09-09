@@ -61,6 +61,25 @@ export async function builder_build_start(
     }
 
     /**
+     * **The builder builds code, and an agent part is a declaration.**
+     *
+     * It has no entry — `catalog.declare` refuses one — so there is nothing to fetch and nothing to
+     * bundle. `PublishInput.part.kind` names only the buildable kinds on purpose, and this is the
+     * guard that makes that narrowing true rather than merely asserted.
+     *
+     * A `release_part` on one is refused earlier and with the same reasoning; this catches a
+     * `build_start` reached directly, which is the path a fleet or a rebuild-on-eviction takes.
+     */
+    if (part.kind === 'agent') {
+        throw new ClientError(
+            `"${input.part}" is an agent part: it declares which contracts each role may call and `
+            + 'has no source. There is nothing to build.',
+            'agent_not_buildable', 400,
+        );
+    }
+    const buildableKind = part.kind;
+
+    /**
      * A commit if the caller has one, otherwise the newest row carrying that label.
      *
      * `version` is a label rather than an identity since 2026-09-07, so two rows may carry `0.2.4`
@@ -89,6 +108,23 @@ export async function builder_build_start(
     }
 
     assertMayPublish(part.publisher, ctx);
+
+    /**
+     * `entry` is optional on a version *because* of the agent kind, and this narrows it back.
+     *
+     * Read from the version rather than the part's declaration: a build is keyed on the row, and the
+     * declaration may have moved since it was published. Unreachable for a row this repository
+     * wrote — `catalog.declare` and the agent guard above both refuse the states that produce it —
+     * so this is the second line for a row that arrived some other way, failing here with a sentence
+     * rather than inside esbuild with a missing entry point.
+     */
+    const versionEntry = version.entry;
+    if (versionEntry === undefined) {
+        throw new ClientError(
+            `${input.part}@${version.version} records no entry, so there is nothing to bundle.`,
+            'entry_missing', 409,
+        );
+    }
 
     // Built from the catalog, so there is no field a caller could have used to name a repository.
     // The commit is already exact: `catalog.publish` refuses anything else, which is what makes an
@@ -134,10 +170,10 @@ export async function builder_build_start(
             root,
             source,
             part: {
-                kind: part.kind,
+                kind: buildableKind,
                 id: part.name,
                 version: version.version,
-                entry: version.entry,
+                entry: versionEntry,
             },
             ...(version.kernel === undefined ? {} : { kernel: version.kernel }),
             requires: version.requires,

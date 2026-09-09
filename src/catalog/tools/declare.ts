@@ -51,6 +51,48 @@ export async function catalog_declare(
         );
     }
 
+    /**
+     * **An agent part is a declaration, and every other kind is code.**
+     *
+     * Refused here for the same reason as the kernel check above: at compose time this is a part
+     * quietly missing from a release, and here it is a sentence in front of somebody who can fix it.
+     *
+     * The pairing is strict in both directions. An agent with an `entry` would look like something
+     * that runs and would never be built — the builder skips this kind entirely — so the entry would
+     * be a file nobody compiles, silently. An agent with no `roles` offers nothing to anybody, which
+     * is not a narrow surface, it is an absent one.
+     */
+    if (input.kind === 'agent') {
+        if (input.declaration.entry !== undefined) {
+            throw new ClientError(
+                'An agent part has no entry: it declares which contracts each role may call and is '
+                + 'never built. An entry here would be a file nothing compiles.',
+                'agent_declares_entry', 400,
+            );
+        }
+        if (input.declaration.roles === undefined || Object.keys(input.declaration.roles).length === 0) {
+            throw new ClientError(
+                'An agent part with no roles offers nothing. Declare at least one role and the '
+                + 'contracts it may call.',
+                'agent_declares_no_roles', 400,
+            );
+        }
+    } else {
+        if (input.declaration.entry === undefined) {
+            throw new ClientError(
+                `A ${input.kind} part is built from source and needs an entry.`,
+                'entry_required', 400,
+            );
+        }
+        if (input.declaration.roles !== undefined) {
+            throw new ClientError(
+                `Only an agent part declares roles; this is a ${input.kind}. Roles decide what an `
+                + 'MCP caller may reach, and a part that runs in a page has no say in that.',
+                'roles_on_non_agent', 400,
+            );
+        }
+    }
+
     const found = await ctx.call('part.find_one', { query: { name: input.name } });
 
     if (found === null || found === undefined) {

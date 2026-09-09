@@ -49,6 +49,8 @@ export async function cdn_compose(
     const required: Requirement[] = [];
     const requires = new Set<string>();
     const kernelRanges: Record<string, string | undefined> = {};
+    /** Merged across every agent part in this release: which contracts each role may call. */
+    const agentRoles: Record<string, string[]> = {};
 
     for (const part of resolved.parts) {
         /**
@@ -64,6 +66,28 @@ export async function cdn_compose(
             query: { partName: part.name, commit: part.commit },
         });
         if (version === null || version === undefined) continue;
+
+        /**
+         * **An agent part carries no artifact, and is not missing one.**
+         *
+         * It is a declaration of which contracts each role may call — there is no source, so
+         * `release_part` records the version and skips the build. Falling through to the check below
+         * would report every agent part as *published but has no artifact. Build it first*, which is
+         * true, useless, and points at a command that refuses it.
+         *
+         * It is not pinned either: `parts` maps a name to a digest, and there is nothing to address.
+         * What the release carries is the map itself, merged across every agent part in it.
+         */
+        if (version.roles !== undefined) {
+            for (const [role, keys] of Object.entries(version.roles)) {
+                const existing = agentRoles[role] ?? [];
+                // Union rather than replace. Two agent parts may both offer `worker` tools, and one
+                // silently winning would make the surface depend on resolution order.
+                agentRoles[role] = [...new Set([...existing, ...keys])].sort();
+            }
+            for (const key of version.requires) requires.add(key);
+            continue;
+        }
 
         if (version.artifactDigest === undefined) {
             // Published and never built. A real state — `catalog.publish` writes `declared` — and
@@ -118,7 +142,15 @@ export async function cdn_compose(
 
     const kernel: PinnedArtifact = { version: resolved.kernel.version, digest: kernelDigest };
     const policy = input.policy ?? {};
-    const hash = releaseHash({ kernel, parts: pinned, policy });
+    /**
+     * **The role map is part of the hash.**
+     *
+     * Two releases differing only in what an agent may call are genuinely different releases — for
+     * the same reason `policy` is in here, and it matters more: this decides what a program can
+     * reach. A hash that ignored it would let a narrowed surface answer from cache as the wide one,
+     * which is a security change that deploys as a no-op.
+     */
+    const hash = releaseHash({ kernel, parts: pinned, policy, agentRoles });
 
     const existing = await ctx.call('release.find_one', { query: { hash } });
     if (existing !== null && existing !== undefined) {
@@ -139,6 +171,7 @@ export async function cdn_compose(
             parts: pinned,
             requires: [...requires].sort(),
             policy,
+            agentRoles,
             ...(input.rolling === undefined ? {} : { rolling: input.rolling }),
             /**
              * **What it was composed from, kept beside what it resolved to.**

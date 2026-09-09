@@ -72,6 +72,15 @@ export async function builder_release_part(
         );
     }
 
+    if (part.kind !== 'agent' && declaration.entry === undefined) {
+        // Unreachable through `catalog.declare`, which refuses it. Second line of defence for a row
+        // that arrived some other way — the same two-layer approach the gates take.
+        throw new ClientError(
+            `"${input.part}" is a ${part.kind} and has no entry, so there is nothing to build.`,
+            'entry_missing', 409,
+        );
+    }
+
     /**
      * **A branch becomes a commit before anything else happens.**
      *
@@ -128,11 +137,29 @@ export async function builder_release_part(
         publisher: caller,
         version,
         commit: source.ref,
-        entry: declaration.entry,
+        ...(declaration.entry === undefined ? {} : { entry: declaration.entry }),
+        ...(declaration.roles === undefined ? {} : { roles: declaration.roles }),
         ...(declaration.subdirectory === undefined ? {} : { subdirectory: declaration.subdirectory }),
         ...(declaration.kernel === undefined ? {} : { kernel: declaration.kernel }),
         requires: declaration.requires,
     });
+
+    /**
+     * **An agent part is released by being recorded, and that is the whole of it.**
+     *
+     * There is no source, so there is nothing to fetch, bundle, hash or store — the version row *is*
+     * the artifact. Skipping the build here rather than refusing the call keeps one release path:
+     * `release_part` means *make this commit of this part available*, and for a declaration that
+     * means writing it down.
+     *
+     * `compose` knows the same thing from the other side and does not ask an agent version for a
+     * digest. If it did, every agent part would be reported as *published but has no artifact*,
+     * which is true and useless.
+     */
+    if (part.kind === 'agent') {
+        ctx.logger.info(`[builder] recorded agent ${input.part}@${version} — ${Object.keys(declaration.roles ?? {}).length} role(s), no build`);
+        return { part: input.part, version, commit: source.ref, existed: already !== undefined, cached: true };
+    }
 
     /**
      * The build is a call, not a function.

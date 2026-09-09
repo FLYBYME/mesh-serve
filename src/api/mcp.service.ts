@@ -67,6 +67,44 @@ import { DEFAULT_APPROVER } from '../approval/schema/approval.js';
  */
 const APPROVAL_CHECK = 'approval.check';
 
+/**
+ * **What this caller's roles put on the table, or `undefined` for "no roles are declared".**
+ *
+ * The narrow surface (`spec/mcp.md`). A site composing an `agent` part gets a role map on its
+ * release — open-ended role names, each naming contract keys — and a caller sees the union of the
+ * roles it holds. Ten worker accounts all hold `worker`; nothing enumerates accounts.
+ *
+ * Three answers, and the middle one is the one to get right:
+ *
+ * - **No map at all** → `undefined`, meaning *do not narrow*. Every site composed before agent parts
+ *   existed is in this state, and narrowing them to nothing would take away a working MCP surface on
+ *   an upgrade. Backwards compatibility, stated rather than accidental.
+ * - **A map, and this caller holds none of its roles** → the empty set. **Not `undefined`.** A site
+ *   that has decided what its agents may reach has decided that a caller outside those roles reaches
+ *   nothing, and answering "do not narrow" here would invert the whole feature — the moment somebody
+ *   declares a role, everyone *without* one would get everything.
+ * - **A map and matching roles** → their union.
+ *
+ * `approval.check` is exempt and is added by `#surfaceCalls` regardless: the surface hands out an
+ * approval id and owes the way to redeem it, and a role list that forgot to name it would strand an
+ * agent holding one.
+ */
+function offeredTo(
+    descriptor: ExposureDescriptor,
+    caller: Caller | undefined,
+): ReadonlySet<string> | undefined {
+    const roles = descriptor.agentRoles;
+    if (roles === undefined || Object.keys(roles).length === 0) return undefined;
+
+    const held = new Set(caller?.roles ?? []);
+    const keys = new Set<string>([APPROVAL_CHECK]);
+    for (const [role, contracts] of Object.entries(roles)) {
+        if (!held.has(role)) continue;
+        for (const key of contracts) keys.add(key);
+    }
+    return keys;
+}
+
 // ---------------------------------------------------------------------------- the protocol
 
 /** JSON-RPC 2.0, the subset MCP needs. `id` absent means a notification, which wants no reply. */
@@ -294,9 +332,11 @@ export class McpService extends ServiceModule {
         scope: string | undefined,
     ): Promise<readonly unknown[]> {
         const tools: unknown[] = [];
+        const offered = offeredTo(descriptor, caller);
 
         for (const call of [...descriptor.calls, ...this.#surfaceCalls()]) {
             if (call.stream) continue;   // a stream is not a tool result; see spec/mcp.md §7
+            if (offered !== undefined && !offered.has(call.key)) continue;
             if (!await this.#permitted(call, caller, scope)) continue;
 
             tools.push({
@@ -388,7 +428,12 @@ export class McpService extends ServiceModule {
         const name = typeof params['name'] === 'string' ? params['name'] : '';
         const args = isRecord(params['arguments']) ? params['arguments'] : {};
 
-        const call = [...descriptor.calls, ...this.#surfaceCalls()].find((c) => toolName(c) === name);
+        const offered = offeredTo(descriptor, caller);
+        const call = [...descriptor.calls, ...this.#surfaceCalls()]
+            // The same narrowing `tools/list` applies. A tool that is not offered is not callable —
+            // listing and calling reading one rule is what stops a stale list from being a way in.
+            .filter((c) => offered === undefined || offered.has(c.key))
+            .find((c) => toolName(c) === name);
 
         /**
          * Absent and refused are answered differently, on purpose.

@@ -13,6 +13,14 @@ export interface Composition {
     readonly kernel: PinnedArtifact;
     readonly parts: Readonly<Record<string, PinnedArtifact>>;
     readonly policy: Readonly<Record<string, string>>;
+    /**
+     * Which contracts each role may call over MCP, from the agent parts composed in.
+     *
+     * Optional so every existing caller and every release hashed before this keeps its identity —
+     * an absent map and an empty one hash the same, which is what stops this from silently
+     * re-identifying every release on the platform.
+     */
+    readonly agentRoles?: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
@@ -35,10 +43,23 @@ export function releaseHash(composition: Composition): string {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([id, pinned]) => [id, pinned.version, pinned.digest]);
 
+    /**
+     * Sorted, and omitted entirely when empty.
+     *
+     * Sorted for the same reason `parts` is: a reordered declaration is not a different release.
+     * Omitted when empty so that every release composed before agent parts existed keeps the hash it
+     * has — adding a field that is always present would re-identify the whole platform's releases at
+     * once, and a release hash is what "staging runs what production runs" is answered with.
+     */
+    const agentRoles = Object.entries(composition.agentRoles ?? {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([role, keys]) => [role, [...keys].sort()]);
+
     return digestOf(canonical({
         kernel: [composition.kernel.version, composition.kernel.digest],
         parts,
         policy: composition.policy,
+        ...(agentRoles.length === 0 ? {} : { agentRoles }),
     }));
 }
 

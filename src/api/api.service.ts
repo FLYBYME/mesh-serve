@@ -933,6 +933,9 @@ export class ApiService extends ServiceModule {
                 base: BASE_PATH,
                 allowInternal: false,
                 events: table.events,
+                // From the release, because which roles exist is part content. What the site grants
+                // is still the site's, and a tool needs both: named by a role *and* exposed here.
+                ...(activeRelease?.agentRoles === undefined ? {} : { agentRoles: activeRelease.agentRoles }),
             });
             this.descriptors.set(key, descriptor);
             return descriptor;

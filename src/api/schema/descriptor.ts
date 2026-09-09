@@ -78,6 +78,18 @@ export interface DescribedEvent {
 export interface ExposureDescriptor {
     /** The site this exposure belongs to, e.g. `surfdns.console`. */
     readonly application: string;
+    /**
+     * Which contracts each role may call over MCP, from the release's agent parts.
+     *
+     * Carried here because the MCP surface is a projection of *this* — `McpService` is handed a
+     * descriptor and nothing else, and giving it a second source for who-may-call-what is how the
+     * two get to disagree.
+     *
+     * **Absent means no MCP surface at all**, not an unrestricted one. A site composing no agent
+     * part offers a model nothing, which is the same principle as `auth` having no default: an
+     * omission must never quietly mean open.
+     */
+    readonly agentRoles?: Readonly<Record<string, readonly string[]>>;
     /** Where the routes mount. Both the router and the generated client read this one value. */
     readonly base: string;
     /**
@@ -107,6 +119,8 @@ export interface DescribeOptions {
      * the public internet is a decision that deserves to be made out loud rather than by omission.
      */
     readonly allowInternal?: boolean;
+    /** The release's merged agent role map, carried through onto the descriptor unchanged. */
+    readonly agentRoles?: Readonly<Record<string, readonly string[]>>;
     /**
      * Events this site streams over /events, derived from the site record and eventTable.
      * Filtered to only exposed collection domains and sorted deterministically.
@@ -218,6 +232,10 @@ export function describeExposure(
         shapeHash,
         calls,
         ...(events !== undefined ? { events } : {}),
+        // Deliberately outside `exposure` and `shapeHash`: it changes what an *agent* may reach and
+        // nothing about the HTTP shapes a generated client is checked against. Folding it in would
+        // report every browser client stale the first time a role was edited.
+        ...(options.agentRoles === undefined ? {} : { agentRoles: options.agentRoles }),
     };
 }
 

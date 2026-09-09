@@ -84,6 +84,20 @@ export const ReleaseSchema = z.object({
      */
     policy: z.record(z.string(), z.string()).default({}),
 
+    /**
+     * Which contracts each role may call over MCP, merged from every agent part in this release.
+     *
+     * **Here and not on the site**, because it is part content: which roles a surface offers travels
+     * with the parts, the way an application's views do. What a site *grants*, and at what gate,
+     * stays the site's (D2) — so a release names the map and a site still decides whether those
+     * contracts are exposed at all. Both have to agree before a tool appears.
+     *
+     * Empty on every release composed without an agent part, which is every release before this
+     * existed. Empty means **no MCP surface**, not an open one: a contract nobody named is on no
+     * role's list, so adding a contract to a site can never widen what a model reaches.
+     */
+    agentRoles: z.record(z.string().min(1), z.array(z.string().min(1))).default({}),
+
     // `exposure` was removed from ReleaseSchema (D4).
     //
     // A release is site-independent by design (C1): two organizations composing the same kernel
