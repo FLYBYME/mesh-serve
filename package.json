@@ -28,8 +28,8 @@
         "typecheck": "npm run generate && tsc -p tsconfig.check.json --noEmit",
         "test": "npm run generate && vitest run",
         "test:watch": "vitest",
-        "node": "node bin/node.mjs --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-dev",
-        "seed": "tsx src/bring-up.ts"
+        "node": "node bin/mesh-serve.mjs node --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-dev",
+        "seed": "node bin/mesh-serve.mjs seed"
     },
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.4.1",

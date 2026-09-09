@@ -177,10 +177,24 @@ const short = (value: unknown): string => {
 async function help(host: string | undefined, io: Io): Promise<number> {
     io.out('mesh-serve — a client for one site\n');
     io.out('  mesh-serve --host <site> <domain> <action> [--flags]\n');
-    io.out('  login     sign in to a site and keep the ticket');
-    io.out('  logout    forget it');
-    io.out('  whoami    who this machine is signed in as');
-    io.out('  --json    print the raw result rather than a table\n');
+    /**
+     * Two groups, and the split is real rather than cosmetic.
+     *
+     * The first run *here* — a node, a checkout, a seed. The second talk to a site over HTTP and
+     * need a host and a ticket. A person who cannot tell which is which ends up passing `--host` to
+     * `node`, or wondering why `seed` does not appear in a site's command list.
+     */
+    io.out('  running a platform');
+    io.out('    node      run a node: all services, one process');
+    io.out('    seed      bring an empty cluster up to a hostname that answers');
+    io.out('    publish   publish this checkout to a catalog');
+    io.out('    client    generate a typed client from mesh.json');
+    io.out('    dev       serve this part on a dev page\n');
+    io.out('  talking to a site');
+    io.out('    login     sign in and keep the ticket');
+    io.out('    logout    forget it');
+    io.out('    whoami    who this machine is signed in as');
+    io.out('    --json    print the raw result rather than a table\n');
 
     if (host === undefined) {
         io.out('Everything else comes from the site itself. Pass --host to see what one offers.');

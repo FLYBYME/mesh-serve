@@ -19,16 +19,49 @@ const value = (flag, fallback) => {
     return at === -1 ? fallback : rest[at + 1];
 };
 
-if (command === 'client') {
+/**
+ * **`node` and `seed` belong here, not in `package.json`.**
+ *
+ * They were npm scripts wrapping `bin/node.mjs` and `src/bring-up.ts`, which meant the two most
+ * important commands on the platform were reachable only from a checkout of this repository — and
+ * `publish` was a subcommand while `node` was not, with no principle behind the split.
+ *
+ * One binary has all of it. `npm run node` still works and is now an alias, which is the right
+ * direction for that dependency: the script points at the CLI rather than the CLI existing beside
+ * the scripts.
+ */
+if (command === 'node') {
+    // Argv is rewritten because node.mjs reads `process.argv` directly, and it should keep doing so:
+    // it is a program that happens to be reachable from here, not a function this file calls.
+    process.argv = [process.argv[0], process.argv[1], ...rest];
+    await import('./node.mjs');
+    /**
+     * No exit — the node runs until it is stopped, and **nothing after this may run**.
+     *
+     * This was three separate `if` statements, so a started node fell through to the last `else`,
+     * the site client ran with no `--host`, printed "Which site?" and called `process.exit`. The
+     * node had already announced itself, so the log said it was up and the process was gone: every
+     * later command failed with `Tool "identity.register" not found`, which describes a mesh
+     * discovery problem and not a dead process.
+     *
+     * One chain, so a branch that means *keep running* cannot be followed by one that means *exit*.
+     */
+} else if (command === 'seed') {
+    process.argv = [process.argv[0], process.argv[1], ...rest];
+    const { main } = await import('../dist/bring-up.js');
+    try {
+        await main();
+        process.exit(0);
+    } catch (error) {
+        process.stderr.write(`Bring-up failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.exit(1);
+    }
+} else if (command === 'client') {
     process.exit(await run(rest));
-}
-
-if (command === 'publish') {
+} else if (command === 'publish') {
     const { run_ } = await import('../dist/api/publish-cli.js');
     process.exit(await run_(rest));
-}
-
-if (command === 'dev') {
+} else if (command === 'dev') {
     const root = process.cwd();
     const descriptor = parseDescriptor(readFileSync(value('--descriptor', 'mesh.json'), 'utf8'));
 

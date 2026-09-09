@@ -393,7 +393,35 @@ export async function importRepository(
         // Absent means the repository's own default branch, whatever it is called. Naming `main`
         // here is a guess about somebody else's repository, and it was wrong the first time it ran.
         ...(options.ref === undefined ? {} : { ref: options.ref }),
-    }, { ...as, timeout: BUILD_TIMEOUT_MS });
+    }, { ...as, timeout: BUILD_TIMEOUT_MS }).catch((error: unknown) => {
+        /**
+         * **"No such part." means somebody else's part, and only here can that be said.**
+         *
+         * `catalog.declare` answers 404 rather than 403 when a part of that name exists under a
+         * different publisher, deliberately: *which organization publishes a part* is not something
+         * an unrelated caller gets to confirm by probing. That refusal is right and stays.
+         *
+         * But this caller is not unrelated — it is the operator seeding their own cluster, and to
+         * them the message reads as *the repository is wrong*, which sends them to check a URL that
+         * was never the problem. Seeding a **second organization** against a catalog that already
+         * holds parts hits it every time, and the parts belong to whichever organization seeded
+         * first.
+         *
+         * So the situation is named here, where it is knowable, without the platform telling
+         * anybody anything it would not tell a stranger.
+         */
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('No such part')) throw error;
+
+        throw new Error(
+            `${options.repository} declares a part this catalog already holds under a different `
+            + `organization.\n\n`
+            + `  A part belongs to the organization that first published it, and this run is `
+            + `seeding a different one.\n`
+            + `  Either seed as the organization that owns them (--org-slug <theirs>), or start `
+            + `against an empty database (--db <a new name>).`,
+        );
+    });
 
     for (const part of imported.parts) {
         console.log(`[builder]   ${part.kind} ${part.name} ${part.existed ? 'updated' : 'declared'}`);
