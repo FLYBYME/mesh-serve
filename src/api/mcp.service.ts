@@ -54,8 +54,18 @@ import { executeGate, SCOPE_HEADER, type AuthorizeHook, type Caller } from './me
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { toHttpError } from './methods/errors.js';
 import type { ContractLookup } from './methods/routes.js';
-import type { DescribedCall, ExposureDescriptor } from './schema/descriptor.js';
+import { callShapeOf, type DescribedCall, type ExposureDescriptor } from './schema/descriptor.js';
 import type { TicketCache } from './methods/tickets.js';
+import { DEFAULT_APPROVER } from '../approval/schema/approval.js';
+
+/**
+ * The one call this surface offers whether a site asked for it or not.
+ *
+ * Named here rather than imported as a contract so that `McpService` does not depend on
+ * `ApprovalService` being in the process — `lookup` answers `undefined` when it is not, and the
+ * surface simply offers nothing.
+ */
+const APPROVAL_CHECK = 'approval.check';
 
 // ---------------------------------------------------------------------------- the protocol
 
@@ -209,7 +219,7 @@ export class McpService extends ServiceModule {
 
                 case 'tools/call':
                     return sendJson(res, 200, rpcResult(id, await this.#callTool(
-                        descriptor, caller, scope, request.params ?? {},
+                        descriptor, caller, scope, request.params ?? {}, host,
                     )));
 
                 default:
@@ -285,7 +295,7 @@ export class McpService extends ServiceModule {
     ): Promise<readonly unknown[]> {
         const tools: unknown[] = [];
 
-        for (const call of descriptor.calls) {
+        for (const call of [...descriptor.calls, ...this.#surfaceCalls()]) {
             if (call.stream) continue;   // a stream is not a tool result; see spec/mcp.md §7
             if (!await this.#permitted(call, caller, scope)) continue;
 
@@ -301,6 +311,31 @@ export class McpService extends ServiceModule {
         }
 
         return tools;
+    }
+
+    /**
+     * Calls this surface always offers, because this surface is what creates the need for them.
+     *
+     * **`approval.check` is not a site's contract to grant.** When the destructive rule parks a
+     * call, the agent is handed an id and told to poll — and if the site had to remember to expose
+     * the polling tool, the first site that forgot would leave every agent holding an id it could
+     * never redeem. A surface that raises a question owes the way to hear the answer.
+     *
+     * Gated like anything else: `auth: 'user'`, and `approval.check` itself answers only to the
+     * requester or an approver. Listed only when the contract is actually in the process — a node
+     * running no `ApprovalService` offers nothing rather than offering a tool that 404s.
+     */
+    #surfaceCalls(): readonly DescribedCall[] {
+        const contract = this.lookup(APPROVAL_CHECK);
+        if (contract === undefined) return [];
+
+        return [{
+            ...callShapeOf(contract, APPROVAL_CHECK),
+            domain: contract.domain,
+            action: contract.action,
+            description: contract.description ?? '',
+            gate: { kind: 'auth', level: 'user' },
+        } as DescribedCall];
     }
 
     /**
@@ -348,11 +383,12 @@ export class McpService extends ServiceModule {
         caller: Caller | undefined,
         scope: string | undefined,
         params: Record<string, unknown>,
+        host: string,
     ): Promise<unknown> {
         const name = typeof params['name'] === 'string' ? params['name'] : '';
         const args = isRecord(params['arguments']) ? params['arguments'] : {};
 
-        const call = descriptor.calls.find((c) => toolName(c) === name);
+        const call = [...descriptor.calls, ...this.#surfaceCalls()].find((c) => toolName(c) === name);
 
         /**
          * Absent and refused are answered differently, on purpose.
@@ -390,14 +426,6 @@ export class McpService extends ServiceModule {
          * person* — rather than a blunt approximation of it. A person driving MCP is a person; a
          * token is not, and no amount of it being a *trusted* token makes it one.
          */
-        if (call.destructive && caller?.agent !== undefined && (this.options.destructive ?? 'refuse') === 'refuse') {
-            return toolError(
-                `${name} changes state, and "${caller.agent}" is an API token rather than a person. ` +
-                `A destructive contract asks somebody to confirm, and a token cannot be asked. ` +
-                `A person holding a session may call it; a site may allow it deliberately.`,
-            );
-        }
-
         const contract = this.lookup(call.key);
         if (contract === undefined) return toolError(`${name}: no contract behind an exposed call.`);
 
@@ -414,6 +442,30 @@ export class McpService extends ServiceModule {
             ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
         });
         if (!outcome.ok) return toolError(`${name}: ${outcome.message}`);
+
+        /**
+         * **A destructive call reached by an agent is parked, not refused.**
+         *
+         * This used to end here, with a message saying *"a person holding a session may call it"* —
+         * true, and a dead end: nothing carried the request to that person, and the agent's only
+         * move was to give up. `spec/mcp.md` §7 listed it as the thing to decide *before* serving a
+         * destructive contract, and we are serving them.
+         *
+         * So the flag that already marks the calls needing a person now routes them to one. No
+         * second concept: `destructive` is the whole condition, which is why the surface needs
+         * nothing new declared on it.
+         *
+         * **Parked after the gate, deliberately.** A caller who could not make this call at all gets
+         * a refusal, not a question — asking an operator to approve something the requester was
+         * never entitled to would launder a refusal into a decision. The gate says *may they*;
+         * this says *and does a person have to say so*.
+         *
+         * The pending answer is a **result, not an error**. An agent that reads waiting as failure
+         * abandons every approval, and `isError` is how a model decides it has failed.
+         */
+        if (call.destructive && caller?.agent !== undefined && (this.options.destructive ?? 'refuse') === 'refuse') {
+            return await this.#park(name, call, parsed.data, caller, outcome.scope, host);
+        }
 
         /**
          * Who is asking, carried across the broker — identical to the api's.
@@ -439,6 +491,89 @@ export class McpService extends ServiceModule {
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             structuredContent: isRecord(result) ? result : { value: result },
         };
+    }
+
+    /**
+     * Park a call and tell the agent how to hear the answer.
+     *
+     * The reply is shaped for a model to act on rather than for a log to record: it says what
+     * happened, who has to decide, and the exact call to make next. A pending answer that does not
+     * name `approval_check` leaves the agent to guess, and a guessing agent polls the wrong thing.
+     *
+     * **`isError` is not set.** Waiting is not failing, and `isError` is how a model decides it has
+     * failed. Marking this an error would make every approval a dead end again, just a politer one.
+     */
+    async #park(
+        name: string,
+        call: DescribedCall,
+        input: unknown,
+        caller: Caller,
+        scope: string | undefined,
+        host: string,
+    ): Promise<unknown> {
+        /**
+         * `role:operator` until a site says otherwise.
+         *
+         * The narrowest thing that is always true: an operator exists on every deployment. The
+         * site's `authorize` hook naming its own approver is the next step and is where this
+         * belongs — only a site knows what an organization means, which is the same reason the gate
+         * takes a permission string rather than an enum.
+         */
+        const approver = DEFAULT_APPROVER;
+
+        try {
+            const parked = await this.#call('approval.request', {
+                call: call.key,
+                host,
+                input: isRecord(input) ? input : { value: input },
+                requestedBy: {
+                    userId: caller.userId,
+                    ...(caller.agent === undefined ? {} : { agent: caller.agent }),
+                    roles: [...caller.roles],
+                },
+                approver,
+            }, {
+                meta: {
+                    user: { id: caller.userId, tenant_id: scope ?? '', roles: [...caller.roles] },
+                    ...(scope === undefined ? {} : { tenant_id: scope }),
+                },
+            }) as { approvalId: string; expiresAt: string };
+
+            return {
+                content: [{
+                    type: 'text',
+                    text:
+                        `${name} needs a person to approve it. It has not run.\n\n`
+                        + `approvalId: ${parked.approvalId}\n`
+                        + `waiting on: ${approver}\n`
+                        + `expires: ${parked.expiresAt}\n\n`
+                        + `Call approval_check with this approvalId to see the decision. `
+                        + `If it is approved the call runs with the input you sent, and the result comes back there — `
+                        + `do not send ${name} again.`,
+                }],
+                structuredContent: {
+                    status: 'pending',
+                    approvalId: parked.approvalId,
+                    approver,
+                    expiresAt: parked.expiresAt,
+                },
+            };
+        } catch (error) {
+            /**
+             * **A surface that cannot park has to refuse, and say which it did.**
+             *
+             * With no `ApprovalService` in the process, `approval.request` is not a tool and this
+             * throws. Answering "needs approval" with no id would leave the agent polling nothing.
+             * So it falls back to the old refusal — and names the reason, because "this node cannot
+             * take approvals" is an operator's problem and not the agent's.
+             */
+            const why = error instanceof Error ? error.message : String(error);
+            return toolError(
+                `${name} changes state, and "${caller.agent}" is an API token rather than a person. `
+                + `It could not be parked for approval on this node (${why}), so it was refused. `
+                + `A person holding a session may call it.`,
+            );
+        }
     }
 
     /**

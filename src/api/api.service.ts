@@ -757,11 +757,28 @@ export class ApiService extends ServiceModule {
             }
         }
 
+        /**
+         * The approval routes, on every site, without the site asking.
+         *
+         * Same rule as the MCP surface's `approval_check`: **the platform raises the question, so
+         * the platform owes the way to answer it.** A site that had to grant `approval.decide`
+         * would, the first time somebody forgot, collect parked calls that no person could ever act
+         * on — and the agent would poll them until they expired.
+         *
+         * Their keys join `requires` as well, because `routeTable` routes only what the composed
+         * release requires. These are required by the platform rather than by a part, which is a
+         * distinction the filter has no way to express and does not need to.
+         */
+        const surface = this.surfaceContracts(site.mesh);
+        const requires = activeRelease?.requires === undefined
+            ? undefined
+            : [...activeRelease.requires, ...surface.flatMap((d) => d.contracts.map((c) => c.key))];
+
         const built = routeTable(
-            site.mesh,
+            [...site.mesh, ...surface],
             this.lookup(),
             (value) => digestOf(canonical(value)),
-            activeRelease?.requires,
+            requires,
         );
         if (built.unknown.length > 0) {
             // Reported and served around. A site naming one contract nothing provides should serve
@@ -774,6 +791,32 @@ export class ApiService extends ServiceModule {
 
         this.tables.set(key, built);
         return built;
+    }
+
+    /**
+     * Contracts every site serves whether it granted them or not.
+     *
+     * Only `approval` today, and the bar for adding to this list should stay high: a call here is
+     * one a site cannot decline, which is defensible exactly when the platform is the thing that
+     * created the need for it. Approvals qualify — the agent surface parks a call and hands out an
+     * id, and somebody has to be able to redeem it.
+     *
+     * Returns nothing when no `ApprovalService` is in the process, so a node that cannot take
+     * approvals serves no routes for them rather than advertising ones that 404. Skips anything the
+     * site already exposes, so a site that grants them deliberately keeps its own gate.
+     */
+    private surfaceContracts(mesh: Site['mesh']): readonly Site['mesh'][number][] {
+        const granted = new Set(mesh.flatMap((d) => d.contracts.map((c) => c.key)));
+        const lookup = this.lookup();
+        const contracts = (['approval.check', 'approval.decide', 'approval.list'] as const)
+            .filter((key) => !granted.has(key) && lookup(key) !== undefined)
+            .map((key) => ({ key, auth: 'user' as const }));
+
+        return contracts.length === 0
+            ? []
+            // `events: []` — an approval announces itself on the site's own event stream, which is
+            // the site's to declare. This adds routes, not subscriptions.
+            : [{ package: '@flybyme/mesh-serve', version: '0.0.0', contracts, events: [] }];
     }
 
     /**
@@ -827,6 +870,18 @@ export class ApiService extends ServiceModule {
                 } else {
                     entries.push({ contract, permission: exposed.permission });
                 }
+            }
+        }
+
+        // The same three the route table adds, so `/_describe` and a generated client agree with
+        // what is actually served.
+        for (const dependency of this.surfaceContracts(site.mesh)) {
+            for (const exposed of dependency.contracts) {
+                if (seen.has(exposed.key)) continue;
+                const contract = lookup(exposed.key);
+                if (contract === undefined) continue;
+                seen.add(exposed.key);
+                entries.push({ contract, auth: 'user' });
             }
         }
 

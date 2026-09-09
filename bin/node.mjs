@@ -341,6 +341,17 @@ const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
 /**
+ * Approvals: a call an agent asked to make, parked until a person decides (`spec/mcp.md` §7).
+ *
+ * Registered unconditionally rather than behind `--mcp`, because the *deciding* half is HTTP — a
+ * person approves from a board or the CLI, on a node that may serve no agent surface at all. A node
+ * without this still serves; `McpService` finds no `approval.check` to offer and falls back to
+ * refusing destructive calls, which is what it did before any of this existed.
+ */
+const { ApprovalService } = await import('../dist/approval/index.js');
+await app.registerModule(new ApprovalService());
+
+/**
  * **`--service <path>` — load a module this node did not ship with.**
  *
  * A site's contracts have to *exist in a process* before the api can serve them. `describeExposure`
