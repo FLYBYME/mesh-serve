@@ -591,7 +591,26 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
  * a dependency on it. So it is granted up front, exactly like signing in: a capability the page
  * needs in order for the rest of the page to be diagnosable at all.
  */
-export function grantsFor(requires: readonly string[]): {
+export function grantsFor(
+    requires: readonly string[],
+    /**
+     * The release's agent role map, if it composed one.
+     *
+     * Read here because **a gate the role holder cannot pass makes the role map decorative.**
+     * `gateFor` ends in `return 'operator'`, which is the right default for a guess — a gate
+     * stricter than the handler is safe and the reverse is a promise the platform will not keep. But
+     * an agent role is by definition held by somebody who is *not* an operator, so every write named
+     * in a role was granted at a gate its own callers could never reach. Found the first time a real
+     * worker token asked: it was offered nothing but its approval poll.
+     *
+     * So a contract a role names is gated at `user`, never looser than `gateFor` would have it. The
+     * two halves then say different things and both are needed: the site says *a signed-in caller
+     * may reach this*, and the role map says *and only these roles see it over MCP*. A contract no
+     * role names — `worktree.dispatch`, `worktree.merge` — keeps the operator gate, which is how a
+     * gate stays a person's decision.
+     */
+    agentRoles?: Readonly<Record<string, readonly string[]>>,
+): {
     contracts: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
     events: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
 } {
@@ -601,7 +620,17 @@ export function grantsFor(requires: readonly string[]): {
         'identity.ticket_issue',
         'telem.ingest',
     ]);
-    const contracts = [...keys].sort().map((key) => ({ key, auth: gateFor(key) }));
+
+    const named = new Set(Object.values(agentRoles ?? {}).flat());
+    const contracts = [...keys].sort().map((key) => {
+        const gate = gateFor(key);
+        // Never loosen below what `gateFor` decided: `public` stays public, and `user` is already
+        // what this would set. Only an `operator`/`admin` guess on a role-named contract moves.
+        return {
+            key,
+            auth: named.has(key) && (gate === 'operator' || gate === 'admin') ? 'user' as const : gate,
+        };
+    });
 
     /**
      * Every exposed collection streams its own CRUD events, at the gate its `find` has.
@@ -644,7 +673,7 @@ export async function composeRelease(
         name?: string;
         rolling?: boolean;
     },
-): Promise<{ hash: string; requires: readonly string[] } | undefined> {
+): Promise<{ hash: string; requires: readonly string[]; agentRoles?: Readonly<Record<string, readonly string[]>> } | undefined> {
     await ctx.waitFor('cdn.compose');
 
     const composed = await ctx.broker.call('cdn.compose', {
@@ -668,9 +697,14 @@ export async function composeRelease(
         `${composed.existed ? ' (existed)' : ''}`,
     );
 
-    // The row carries the union of what its parts call, which is exactly what the site must grant.
+    // The row carries the union of what its parts call, which is exactly what the site must grant —
+    // and the role map, which decides the gate some of those grants get.
     const release = await ctx.broker.call('release.find_one', { query: { hash: composed.hash } }, as);
-    return { hash: composed.hash, requires: release?.requires ?? [] };
+    return {
+        hash: composed.hash,
+        requires: release?.requires ?? [],
+        ...(release?.agentRoles === undefined ? {} : { agentRoles: release.agentRoles }),
+    };
 }
 
 /** The site, with grants covering exactly what the release calls. */
@@ -683,10 +717,11 @@ export async function ensureSite(
         application: string;
         tenantId: string;
         requires: readonly string[];
+        agentRoles?: Readonly<Record<string, readonly string[]>>;
         title?: string;
     },
 ): Promise<string> {
-    const { contracts, events } = grantsFor(options.requires);
+    const { contracts, events } = grantsFor(options.requires, options.agentRoles);
     const mesh = [{
         package: '@flybyme/mesh-serve',
         version: '^0.1.0',
@@ -1061,6 +1096,9 @@ export async function main(): Promise<void> {
             application,
             tenantId: orgId,
             requires: composed.requires,
+            // Decides the gate on the contracts a role names — see `grantsFor`. Without it every
+            // write an agent role offers is granted at `operator`, which no role holder is.
+            ...(composed.agentRoles === undefined ? {} : { agentRoles: composed.agentRoles }),
             title: flag('title', application === 'console'
                 ? 'Console'
                 : application.charAt(0).toUpperCase() + application.slice(1)),

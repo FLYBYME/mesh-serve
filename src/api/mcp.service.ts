@@ -313,7 +313,7 @@ export class McpService extends ServiceModule {
         const tools: unknown[] = [];
         const offered = offeredTo(descriptor, caller);
 
-        for (const call of [...descriptor.calls, ...this.#surfaceCalls()]) {
+        for (const call of [...descriptor.calls, ...this.#surfaceCalls(descriptor)]) {
             if (call.stream) continue;   // a stream is not a tool result; see spec/mcp.md §7
             if (offered !== undefined && !offered.has(call.key)) continue;
             if (!await this.#permitted(call, caller, scope)) continue;
@@ -344,7 +344,11 @@ export class McpService extends ServiceModule {
      * requester or an approver. Listed only when the contract is actually in the process — a node
      * running no `ApprovalService` offers nothing rather than offering a tool that 404s.
      */
-    #surfaceCalls(): readonly DescribedCall[] {
+    #surfaceCalls(descriptor: ExposureDescriptor): readonly DescribedCall[] {
+        // The site exposes these too — `ApiService.surfaceContracts` puts them on every site — so
+        // without this the tool list carried `approval_check` twice, once from each source.
+        if (descriptor.calls.some((call) => call.key === APPROVAL_CHECK)) return [];
+
         const contract = this.lookup(APPROVAL_CHECK);
         if (contract === undefined) return [];
 
@@ -408,7 +412,7 @@ export class McpService extends ServiceModule {
         const args = isRecord(params['arguments']) ? params['arguments'] : {};
 
         const offered = offeredTo(descriptor, caller);
-        const call = [...descriptor.calls, ...this.#surfaceCalls()]
+        const call = [...descriptor.calls, ...this.#surfaceCalls(descriptor)]
             // The same narrowing `tools/list` applies. A tool that is not offered is not callable —
             // listing and calling reading one rule is what stops a stale list from being a way in.
             .filter((c) => offered === undefined || offered.has(c.key))

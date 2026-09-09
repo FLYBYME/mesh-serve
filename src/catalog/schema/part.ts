@@ -356,8 +356,14 @@ export const PartVersionSchema = z.object({
      *
      * Absent on an `agent` version, which has no source: it records a declaration at a commit rather
      * than bytes built from one. `build_start` refuses that kind before it could read this.
+     *
+     * **`null` is read as absent**, because the database stores an `undefined` field that way and
+     * `z.string().optional()` accepts an absent field while rejecting a null one. The first agent
+     * part published fine and then failed its own schema on the next release — *"Expected string,
+     * received null"*, pointing at a field nobody had set. `publish` no longer writes it; this makes
+     * the rows that already exist readable.
      */
-    entry: z.string().min(1).optional(),
+    entry: z.preprocess((value) => value ?? undefined, z.string().min(1).optional()),
 
     /**
      * An `agent` version's role map: which contracts each role may call over MCP.

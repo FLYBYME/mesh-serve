@@ -71,7 +71,11 @@ export async function catalog_publish(
          * this row's `artifactDigest` describes bytes the row no longer claims to be, which is
          * exactly the silent-mismatch the digest exists to make impossible.
          */
-        if (existing.entry !== input.entry || existing.subdirectory !== input.subdirectory) {
+        // `?? undefined` on both sides: a row stored before this field was optional, or written by
+        // anything that set it to `undefined`, reads back as `null`, and `null !== undefined` would
+        // refuse a re-publish of an agent part that never had an entry to change.
+        if ((existing.entry ?? undefined) !== (input.entry ?? undefined)
+            || existing.subdirectory !== input.subdirectory) {
             throw new ClientError(
                 `${input.name} is already published at commit ${input.commit.slice(0, 12)} from ` +
                 `entry ${existing.entry}, and this publishes ${input.entry} from the same commit. ` +
@@ -134,7 +138,17 @@ export async function catalog_publish(
         // together. `part.repository` can move afterwards; this cannot.
         repository: input.repository,
         ...(input.changelog === undefined ? {} : { changelog: input.changelog }),
-        entry: input.entry,
+        /**
+         * Omitted rather than written as `undefined`, which the database stores as `null`.
+         *
+         * `z.string().optional()` accepts an absent field and rejects a null one, so a version row
+         * written with `entry: undefined` reads back as `entry: null` and fails its own schema on
+         * the next release. That is what happened to the first agent part: it published, and the
+         * second seed refused it with *"Expected string, received null"* pointing at a field nobody
+         * had set.
+         */
+        ...(input.entry === undefined ? {} : { entry: input.entry }),
+        ...(input.roles === undefined ? {} : { roles: input.roles }),
         ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
         ...(input.kernel === undefined ? {} : { kernel: input.kernel }),
         requires: input.requires ?? [],
