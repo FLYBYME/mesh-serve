@@ -149,6 +149,31 @@ export async function builder_release_part(
     });
 
     /**
+     * **A build that failed is a release that failed, and it says so here.**
+     *
+     * This tolerated `state: 'failed'` silently: the version row stayed `declared`, the release
+     * answered success naming a version with no artifact, and the seed printed
+     * `flowboard@0.1.2` like every other line. The failure surfaced two steps later, from the cdn,
+     * as `published but has no artifact. Build it first.` — which says what is missing and not what
+     * went wrong, and points at the wrong command.
+     *
+     * The real error was already recorded on the build row and logged at **warn** in the builder's
+     * own process, so it went to the node's terminal while the person was reading the seed's. It
+     * was `Could not resolve "@flybyme/mesh-core"` — three lines naming three files, which would
+     * have ended it immediately. It cost three builds and an hour instead.
+     *
+     * So: it is read back and thrown, with the message attached. A release is *pull, mint, publish,
+     * build*; the fourth step failing is not a release.
+     */
+    if (built.state === 'failed') {
+        const row = await ctx.call('build.find_one', { query: { id: built.buildId } });
+        throw new ClientError(
+            `${input.part}@${version} did not build.\n\n${row?.error ?? 'The builder recorded no reason.'}`,
+            'build_failed', 422,
+        );
+    }
+
+    /**
      * **The event rolling releases wait for.**
      *
      * Not `builder.artifact_published`, which fires only when the bytes are new — identical source
