@@ -129,11 +129,40 @@ callers against one site.
 
 ## 7. Open
 
-- **What confirmation means for an agent.** A `destructive` contract asks a person in a browser
-  (`spec/ui/rules.md` §7). An agent has no person. Options: refuse `destructive` unless the caller
-  holds an explicit grant; require a two-call protocol; or carry the browser's `requiresUser` idea
-  across, so some writes are simply not agent-reachable. **Decide before serving a `destructive`
-  contract, not after.**
+- **What confirmation means for an agent — proposed 2026-09-09, not yet built.** Raised as a
+  requirement rather than an option: *"approvals need to be built in. who and how you notify."*
+
+  The rule: **a `destructive` call reached by an agent raises an approval instead of being refused.**
+  `destructive` already marks the calls that need a person, which is why the surface refuses them
+  today — so the flag is reused rather than joined by a second concept. The current refusal
+  (*"a person holding a session may call it"*) is true and is a dead end; this makes it a workflow.
+
+  - **Who** — the site's `authorize` hook already answers *may this caller, and in what scope*, and
+    is the only thing that knows what an organization means. Its refusal grows a
+    `{ code: 'needs_approval', approver: 'role:operator' }`. A **role**, never an account, so
+    approvers are not enumerated. Resolved at request time and frozen on the record: who could
+    approve this must not change while it is pending.
+  - **How they are told** — `approval.requested` on the existing SSE channel, scoped to the
+    approver. `decideDelivery` already scopes per subscriber from memberships, so a connected board
+    lights up with no new delivery path. Anything beyond a browser is a **sink**, in the mould of
+    `telem` — pluggable, absent by default. With one difference from telemetry: **an approval nobody
+    sees is worse than a refusal**, because the agent waits rather than failing, so an unanswered
+    approval must expire loudly and visibly.
+  - **How the agent learns the answer** — a two-call protocol, forced by the transport.
+    `#handle` is POST-only and answers GET with 405 because *nothing here initiates anything*, so
+    **there is no server push and the agent cannot be told.** `tools/call` returns
+    `{ status: 'pending', approvalId, expiresAt }` as a *result*, not an error, and one universal
+    tool — `approval_check` — is held by every role. Polling, because the alternative is holding an
+    HTTP connection open for something a person may answer tomorrow.
+  - **Where it lives** — mesh-serve. flowboard's `gate` record is this idea already
+    (`{ cardId, kind, status, approvedBy, approvedAt, rejectionReason }`) built for one app; every
+    app with an agent surface needs it, so flowboard's gates become a specialisation rather than the
+    original.
+
+  **Open inside the proposal:** an approval carries the **frozen input** of the call, which is
+  necessary — approving `card_create` in the abstract approves nothing — and means the record holds
+  whatever the agent was about to write, readable by every approver in the role. Storage and
+  retention want deciding before the first sensitive payload, not after.
 - **Whether the MCP port is the api's port.** One process is one less thing to be half-running;
   separate ports are one less thing to get wrong in a proxy. flowboard just folded three processes
   into one and has an opinion.
