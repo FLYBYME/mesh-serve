@@ -642,9 +642,25 @@ Nothing resolves until this exists. Every version a site names is a row here.
       what will be refused, so the failure lands on the person deploying rather than on the person
       wondering why a list is stale. **S**
 
-- [ ] **D10 ★★ `ApiService` and `McpService` are two entry paths over one exposure, and they have
+- [ ] **D11 ★★ `ApiService` and `McpService` are two entry paths over one exposure, and they have
       already drifted.** Raised 2026-09-09: *"i'm starting to think there might be two entry paths
       that now have to stay in sync."* They do, and they don't.
+      **Renumbered from D10, which was already taken** — two entries carried that number for a few
+      hours, which is exactly the kind of thing that makes a cross-reference wrong later.
+
+      **The credential half is fixed** *(2026-09-09)*. `resolveCaller` in `api/methods/caller.ts` is
+      one function both services read, and every `ApiService` door goes through it: requests,
+      `/_describe`, and the event stream at both subscribe and heartbeat. Verified with a real token
+      — `whoami`, a gated read and an operator-gated read all answer over HTTP where they were
+      anonymous before. The stream re-resolves on the heartbeat rather than per event, so a token
+      costs one broker call every few seconds per connection.
+
+      **The ordering half stands, and is a decision rather than a task.** HTTP is coerce → gate →
+      parse; MCP is coerce → parse → gate, so a site's `authorize` hook is handed unvalidated input
+      on one path and validated input on the other. Both orders have a real argument: gate-first
+      keeps an anonymous caller from learning the input schema, parse-first hands the hook data it
+      can trust. Picking one is a behaviour change in a security-adjacent path and wants deciding out
+      loud, not folded into a refactor.
 
       Both read the same `ExposureDescriptor` and share `methods/{gate,input,errors,routes,tickets}`,
       so the *shapes* cannot disagree. What is duplicated is the **sequence**, written out by hand in
