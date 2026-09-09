@@ -38,6 +38,7 @@ import { describeContract } from './contracts/api.contract.js';
 import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
 import { executeGate, isOperator, SCOPE_HEADER, type Caller } from './methods/gate.js';
+import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { eventTable, type EventTable } from './methods/events.js';
 import { matchRoute, routeTable, type ContractLookup, type RouteTable } from './methods/routes.js';
@@ -315,10 +316,19 @@ export class ApiService extends ServiceModule {
                 return send(res, 404, headers, { error: 'NO_ROUTE', message: 'Not found' });
             }
 
-            // The ticket, from the one place it is ever read. An invalid one makes the caller
-            // *anonymous*, not refused — the gate decides whether anonymous is good enough, and a
-            // public contract is reachable without one.
-            const caller: Caller | undefined = await this.tickets?.resolve(bearer(req));
+            /**
+             * The credential, from the one place it is ever read — **a ticket or an API token.**
+             *
+             * This resolved tickets only, which made the agent/person distinction true of the MCP
+             * door and false of this one: the same token authenticated over MCP and was **anonymous
+             * over HTTP**, so the CLI could not use the credential the platform issues to programs
+             * (roadmap D10). Two entry paths over one exposure, drifting in the way that is hardest
+             * to notice — everything worked, on one of the doors.
+             *
+             * An invalid credential makes the caller *anonymous*, not refused: the gate decides
+             * whether anonymous is good enough, and a public contract is reachable without one.
+             */
+            const caller: Caller | undefined = await this.resolve(bearer(req));
 
             const input = coerceToSchema(found.route.contract.inputSchema, {
                 ...parseQuery(req.url ?? ''),
@@ -428,7 +438,7 @@ export class ApiService extends ServiceModule {
         }
 
         const ticket = bearer(req);
-        const caller = await this.tickets?.resolve(ticket);
+        const caller = await this.resolve(ticket);
         const requestedScope = header(req, SCOPE_HEADER);
 
         /**
@@ -459,7 +469,12 @@ export class ApiService extends ServiceModule {
         }
 
         const scopeOf = async (): Promise<Subscriber | undefined> => {
-            const current = ticket === undefined ? undefined : await this.tickets?.resolve(ticket);
+            /**
+             * Re-resolved rather than reused, which is the point of `recheck`: a connection outlives
+             * its authorisation. Costs a broker round trip for a token, and this runs on the
+             * heartbeat rather than per event, so it is one call every few seconds per connection.
+             */
+            const current = ticket === undefined ? undefined : await this.resolve(ticket);
             if (ticket !== undefined && current === undefined) return undefined;
 
             const outcome = await executeGate({
@@ -551,7 +566,7 @@ export class ApiService extends ServiceModule {
             });
         }
 
-        const caller: Caller | undefined = await this.tickets?.resolve(bearer(req));
+        const caller: Caller | undefined = await this.resolve(bearer(req));
 
         const outcome = await executeGate({
             gate: { kind: 'auth', level: 'public' },
@@ -982,6 +997,23 @@ export class ApiService extends ServiceModule {
      */
     private lookup(): ContractLookup {
         return (key) => globalContractRegistry.get(key);
+    }
+
+    /**
+     * Who is calling — **a ticket or an API token**, resolved the same way MCP resolves one.
+     *
+     * Every door in this service goes through here: requests, `/_describe`, and the event stream at
+     * both subscribe and heartbeat. It resolved tickets only, which made the agent/person
+     * distinction true of the MCP door and false of every one of these — the same token
+     * authenticated over MCP and was anonymous here, so the CLI could not use the credential the
+     * platform issues to programs (roadmap D10).
+     */
+    private async resolve(credential: string | undefined): Promise<Caller | undefined> {
+        return await resolveCaller(credential, {
+            ...(this.tickets === undefined ? {} : { tickets: this.tickets }),
+            call: (tool: string, params: unknown, options: { meta: Record<string, unknown> }) =>
+                this.call<unknown>(tool, params, options),
+        });
     }
 
     private async call<T>(tool: string, params: unknown, options?: unknown): Promise<T> {

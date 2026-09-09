@@ -51,6 +51,7 @@ import { MeshError, ServiceModule, type IServiceBroker } from '@flybyme/mesh';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import { executeGate, SCOPE_HEADER, type AuthorizeHook, type Caller } from './methods/gate.js';
+import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { toHttpError } from './methods/errors.js';
 import type { ContractLookup } from './methods/routes.js';
@@ -289,32 +290,10 @@ export class McpService extends ServiceModule {
      * its own.
      */
     async #resolve(credential: string | undefined): Promise<Caller | undefined> {
-        if (credential === undefined) return undefined;
-
-        const asTicket = await this.options.tickets?.resolve(credential);
-        if (asTicket !== undefined) return asTicket;
-
-        try {
-            const answer = await this.#call(
-                'identity.api_token_validate',
-                { token: credential },
-                { meta: { unauthenticated: true } },
-            ) as { valid?: boolean; userId?: string; roles?: string[]; name?: string };
-
-            if (answer.valid !== true || answer.userId === undefined) return undefined;
-
-            return {
-                userId: answer.userId,
-                roles: answer.roles ?? [],
-                // Named, so a refusal and an audit line can both say which agent. A token with no
-                // name is still an agent — the fallback is a label, never an absence.
-                agent: answer.name ?? 'an api token',
-            };
-        } catch {
-            // A token this cluster cannot validate is not a caller. Anonymous, not an error: an
-            // expired token should read the same as no token, which is what a client can act on.
-            return undefined;
-        }
+        return await resolveCaller(credential, {
+            ...(this.options.tickets === undefined ? {} : { tickets: this.options.tickets }),
+            call: (tool, params, options) => this.#call(tool, params, options),
+        });
     }
 
     // ------------------------------------------------------------------ tools/list
