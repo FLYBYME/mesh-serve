@@ -612,7 +612,9 @@ export class ApiService extends ServiceModule {
         const held = this.eventTables.get(key);
         if (held !== undefined) return held;
 
-        const built = eventTable(site.mesh);
+        // The surface's own events ride along with the site's, for the same reason its routes do:
+        // an approval that announces itself to nobody leaves the agent waiting on silence.
+        const built = eventTable([...site.mesh, ...this.surfaceContracts(site.mesh)]);
         if (built.refused.length > 0) {
             this.broker?.logger.warn(
                 `[api] ${site.host} exposes events that cannot be streamed: ` +
@@ -812,11 +814,34 @@ export class ApiService extends ServiceModule {
             .filter((key) => !granted.has(key) && lookup(key) !== undefined)
             .map((key) => ({ key, auth: 'user' as const }));
 
+        /**
+         * **The notification, and it is not a new event.**
+         *
+         * `defineCrud` already fires `approval.created` and `approval.updated`, and a CRUD event's
+         * delivery scope *is* its collection's `scopedBy` — `tenantId` here — so these are narrowed
+         * to the organization without anything being declared twice. Inventing an
+         * `approval.requested` beside them would have been a second name for a write that already
+         * announces itself, and a second `scopedBy` to keep in step.
+         *
+         * Carried on the surface for the same reason the routes are: **an approval nobody sees is
+         * worse than a refusal**, because the agent waits rather than failing. A site that had to
+         * remember to expose the event would, the first time it forgot, park calls silently.
+         *
+         * **Gated at `operator`, which is coarser than the record.** `decideDelivery` narrows to an
+         * organization, not to an approver, so an event gated at `user` would put the frozen input
+         * of a parked call in front of every member of the organization — including the ones who
+         * cannot decide it. `operator` matches `DEFAULT_APPROVER` and fails closed. A site naming a
+         * different approver role gets no stream rather than the wrong one, which is the safe half
+         * of that trade and is worth fixing when `approver` becomes the site's to choose.
+         */
+        const events = contracts.length === 0 ? [] : ([
+            { key: 'approval.created', auth: 'operator' as const },
+            { key: 'approval.updated', auth: 'operator' as const },
+        ]);
+
         return contracts.length === 0
             ? []
-            // `events: []` — an approval announces itself on the site's own event stream, which is
-            // the site's to declare. This adds routes, not subscriptions.
-            : [{ package: '@flybyme/mesh-serve', version: '0.0.0', contracts, events: [] }];
+            : [{ package: '@flybyme/mesh-serve', version: '0.0.0', contracts, events }];
     }
 
     /**
