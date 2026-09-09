@@ -103,6 +103,11 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'site.find', auth: 'operator' },
     { key: 'site.get', auth: 'operator' },
     { key: 'site.create', auth: 'operator' },
+    /**
+     * The whole pipeline in one call, so a browser and a CLI seed a site the same way rather than
+     * the CLI owning an orchestration a console would have to reimplement.
+     */
+    { key: 'site.seed', auth: 'operator' },
 
     // The machines.
     { key: 'node.status', auth: 'operator' },

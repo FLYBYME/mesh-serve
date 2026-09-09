@@ -35,6 +35,8 @@ import type { Artifact } from '../builder/schema/artifact.js';
 import { callWithPlacement } from '../builder/methods/placement.js';
 import { edgeCrud, type Edge } from './contracts/edge.contract.js';
 import { CONTROL_CONTRACTS, DEFAULT_CONTROL_HOST, ensureControlSite } from './methods/control.js';
+import { seedContract } from './contracts/seed.contract.js';
+import { site_seed } from './tools/seed.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
@@ -100,6 +102,16 @@ export class CdnService extends ServiceModule {
     /** The control-site ensure, retrying in the background until identity registers. */
     private control: Promise<void> | undefined;
     private stopping = false;
+
+    /**
+     * Where a seeded site sends its calls, when the caller does not say.
+     *
+     * The node chose the api's port and published it here; the cdn knows its own origin and not the
+     * api's, because they are deliberately separate ports.
+     */
+    public controlApi(): string | undefined {
+        return this.options.controlApi ?? process.env['MESH_CONTROL_API'];
+    }
     /** The bound server, so a test can address it without guessing a port. */
     public listener: Server | undefined;
     public port: number | undefined;
@@ -137,6 +149,7 @@ export class CdnService extends ServiceModule {
         this.mountTool(deployContract, cdn_deploy);
         this.mountTool(resolveSiteContract, cdn_resolve_site);
         this.mountTool(siteEditContract, cdn_site_edit);
+        this.mountTool(seedContract, site_seed);
 
         // Every node drops the hostname it was told about, including the one that published it —
         // which costs a single lookup and means there is no "was it me?" branch to get wrong.
