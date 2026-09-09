@@ -583,9 +583,20 @@ Nothing resolves until this exists. Every version a site names is a row here.
       The fix is a door, and which door is the decision: a public `identity.api_token_issue` gated at
       `user` and scoped to the caller's own principal (a person mints a token for their own agent),
       or a `mesh-serve token` CLI command over the bootstrap socket (operators only, no site
-      exposure). The first is what a console needs; the second is what tonight needs. Until one
-      exists, the agent path is designed and undeliverable, and every MCP client is a person. **S** ·
+      exposure). The first is what a console needs; the second is what tonight needs. **S** ·
       [mcp.md §7](./mcp.md)
+
+      **Corrected 2026-09-09: there is a door, and it is the bootstrap socket.**
+      `npx mesh identity api_token_issue --bootstrap ws://127.0.0.1:4001 --name … --userId … --roles …`
+      mints one — the framework CLI reaches an internal contract over the mesh, which is exactly what
+      *internal* means and not what this entry assumed. So the token path is reachable today, and
+      approvals were verified end to end on one.
+      What is actually missing is narrower and still worth doing: it needs the node's socket rather
+      than the site, so it is an operator's laptop and not a console; it prints through the
+      contract's `print`, which deliberately omits the secret, so the token has to be read some other
+      way; and there is no revoke or list beside it. **The HTTP half of the divergence stands** —
+      `ApiService` resolves tickets only, so a token that works over MCP is anonymous over HTTP and
+      the CLI cannot use it (D10).
 
 - [x] **D10 ★★★ No collection outside this repository could ever stream an event.** *(fixed 2026-09-09)*
       Found asking why flowboard's board did not notice rows created through its own API.
