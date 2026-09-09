@@ -27,6 +27,10 @@
 
 import { ClientError, z } from '@flybyme/mesh';
 
+// One definition of a role map, shared with the catalog's, so a manifest and the row it becomes
+// cannot disagree about what a role is — including that `//`-prefixed keys are comments.
+import { AgentRolesSchema } from '../../catalog/schema/part.js';
+
 /** What the file is called in a repository. */
 export const DESCRIPTOR_FILE = 'mesh.json';
 
@@ -95,13 +99,30 @@ export type RequiredPart = z.infer<typeof RequiredPartSchema>;
  * quietly turns the grant check into a formality, which is the one thing it must not become.
  */
 export const DescribedPartSchema = z.object({
-    kind: z.enum(['kernel', 'application', 'extension']),
+    kind: z.enum(['kernel', 'application', 'extension', 'agent']),
     /** A site's composition names this. Stable across builds. */
     id: z.string().min(1),
     /** What this build publishes as. The catalog resolves a site's range against it. */
     version: z.string().min(1),
-    /** The **source** entry — `src/app.ts`. esbuild reads types; it does not check them. */
-    entry: innerPath,
+    /**
+     * The **source** entry — `src/app.ts`. esbuild reads types; it does not check them.
+     *
+     * Absent on an `agent` part, which has no source: it declares which contracts each role may call
+     * and is never built. `catalog.declare` refuses the mismatched combinations in both directions.
+     */
+    entry: innerPath.optional(),
+
+    /**
+     * An `agent` part's role map — role name → the contract keys that role may call over MCP.
+     *
+     * **Role names are open-ended**, because a deployment names its own and the platform has no
+     * business enumerating them. Ten worker accounts hold `worker`; nothing lists the accounts.
+     *
+     * A key here still has to be exposed by the site: a role names what it *may* call, the site's
+     * `mesh` block decides what is reachable at all, and a tool appears only when both agree. This
+     * is not a second grant — it is a narrowing of one.
+     */
+    roles: AgentRolesSchema.optional(),
 
     /**
      * The packages this part was written against, name → range.

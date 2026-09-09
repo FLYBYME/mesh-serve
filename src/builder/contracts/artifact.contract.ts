@@ -183,7 +183,8 @@ export const importRepoContract = defineContract({
         parts: z.array(z.object({
             name: z.string(),
             kind: z.string(),
-            entry: z.string(),
+            /** Absent on an `agent` part, which declares a surface and has no source. */
+            entry: z.string().optional(),
             /** False when this import created the part. */
             existed: z.boolean(),
             /**

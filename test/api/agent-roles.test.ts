@@ -33,6 +33,23 @@ describe('agent is a kind', () => {
         expect(AgentRolesSchema.safeParse({ worker: [] }).success).toBe(false);
         expect(AgentRolesSchema.safeParse({ '': ['x.y'] }).success).toBe(false);
     });
+
+    /**
+     * `mesh.json` has no comment syntax, so this repository writes `//key` members and every schema
+     * that reads one ignores unknown keys. A `z.record` types *every* key, so the same habit here
+     * would produce a role named `//worker` whose value is a string — and the manifest would fail to
+     * parse with a message about the wrong thing.
+     *
+     * Not hypothetical: the first agent part anybody wrote had one, put there by following the
+     * file's own convention.
+     */
+    it('drops // comment keys rather than reading them as roles', () => {
+        const parsed = AgentRolesSchema.parse({
+            '//worker': 'Task-agnostic on purpose.',
+            worker: ['task.claim'],
+        });
+        expect(parsed).toEqual({ worker: ['task.claim'] });
+    });
 });
 
 // ---------------------------------------------------------------------------- the hash

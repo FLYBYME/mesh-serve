@@ -59,7 +59,12 @@ export async function bundlePart(
      * whether this is the kernel. Deliberately *not* a whole descriptor — the catalog is what a
      * build reads now, and a parameter that accepted a descriptor would invite reading one.
      */
-    part: Pick<DescribedPart, 'kind' | 'id' | 'entry'>,
+    /**
+     * `entry` is stated here rather than borrowed from `DescribedPart`, where it became optional for
+     * the `agent` kind. A bundler without an entry point is not a case to handle — it is a call that
+     * should not have been made, and saying so in the type is better than a guard.
+     */
+    part: Pick<DescribedPart, 'kind' | 'id'> & { readonly entry: string },
     maxBytes: number = DEFAULT_MAX_BYTES,
 ): Promise<Bundled> {
     const outdir = join(root, '.mesh-out');

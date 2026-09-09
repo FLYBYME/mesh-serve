@@ -83,7 +83,10 @@ export async function builder_import_repo(
              * are minted by `release_part` from what is actually published.
              */
             const declaration = {
-                entry: part.entry,
+                // Absent on an agent part, which has no source. `catalog.declare` refuses an agent
+                // that carries one and a buildable kind that does not.
+                ...(part.entry === undefined ? {} : { entry: part.entry }),
+                ...(part.roles === undefined ? {} : { roles: part.roles }),
                 branch: input.ref,
                 ...(input.subdirectory === undefined ? {} : { subdirectory: input.subdirectory }),
                 // A kernel has no kernel. Everything else carries the range it is written against,

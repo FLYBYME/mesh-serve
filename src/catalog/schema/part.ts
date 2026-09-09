@@ -59,7 +59,27 @@ export type PartKind = z.infer<typeof PartKindSchema>;
  * never silently widen what a model can reach. The same principle as `auth` having no default: an
  * omission must not mean *open*.
  */
-export const AgentRolesSchema = z.record(z.string().min(1), z.array(z.string().min(1)).min(1));
+export const AgentRolesSchema = z.preprocess(
+    /**
+     * **`//`-prefixed keys are comments, and they are dropped here.**
+     *
+     * `mesh.json` has no comment syntax, so this repository writes them as `//key` members —
+     * `//mesh`, `//dependencies`, `//requiredParts` all over the manifests. Every schema that reads
+     * one ignores unknown keys and it works by accident. A `z.record` types *every* key, so the same
+     * habit inside `roles` produces a role named `//worker` whose value is a string, and the
+     * manifest fails to parse with a message about the wrong thing.
+     *
+     * Written the moment it happened: the first agent part anybody wrote — this one — had a comment
+     * in it, put there by following the file's own convention.
+     */
+    (value) => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+        return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).filter(([key]) => !key.startsWith('//')),
+        );
+    },
+    z.record(z.string().min(1), z.array(z.string().min(1)).min(1)),
+);
 export type AgentRoles = z.infer<typeof AgentRolesSchema>;
 
 /**

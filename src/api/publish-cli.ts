@@ -88,13 +88,14 @@ export function parseArgs(argv: readonly string[]): PublishArgs {
  * site needs to check against its grants is the flat list.
  */
 export function versionFrom(part: DescribedPart, commit: string, kernel: string | undefined): {
-    version: string; commit: string; entry: string; kernel?: string;
+    version: string; commit: string; entry?: string; roles?: DescribedPart['roles']; kernel?: string;
     requires: string[]; requiredParts: DescribedPart['requiredParts'];
 } {
     return {
         version: part.version,
         commit,
-        entry: part.entry,
+        ...(part.entry === undefined ? {} : { entry: part.entry }),
+        ...(part.roles === undefined ? {} : { roles: part.roles }),
         // A kernel has no kernel. Everything else carries the range it was written against, which is
         // the only thing standing between a stale part and a browser.
         ...(part.kind === 'kernel' || kernel === undefined ? {} : { kernel }),

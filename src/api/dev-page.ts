@@ -77,6 +77,10 @@ export async function writeDevPage(root: string, descriptor: Descriptor): Promis
     }
 
     for (const part of descriptor.parts) {
+        // An agent part has no source — it declares which contracts each role may call over MCP and
+        // contributes nothing to a page. Nothing to bundle, and nothing missing.
+        if (part.entry === undefined) continue;
+
         const built = await esbuild({
             entryPoints: [join(root, part.entry)],
             bundle: true, format: 'esm', platform: 'browser', target: 'es2022',
