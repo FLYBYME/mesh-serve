@@ -34,6 +34,7 @@ import { fileBlobStore } from '../builder/blobs.js';
 import type { Artifact } from '../builder/schema/artifact.js';
 import { callWithPlacement } from '../builder/methods/placement.js';
 import { edgeCrud, type Edge } from './contracts/edge.contract.js';
+import { CONTROL_CONTRACTS, DEFAULT_CONTROL_HOST, ensureControlSite } from './methods/control.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
@@ -66,6 +67,15 @@ export interface CdnServiceOptions {
     readonly blobRoot?: string;
     readonly blobs?: BlobStore;
     /**
+     * The hostname this node answers to as itself, so a cluster with no sites is still reachable.
+     *
+     * Defaults to `127.0.0.1` — true before DNS, before a certificate, and before anybody has
+     * decided what the deployment is called. See `methods/control.ts`.
+     */
+    readonly controlHost?: string;
+    /** Where the control site's own api is, if it is not this origin. Usually empty. */
+    readonly controlApi?: string;
+    /**
      * Take the hostname from `x-forwarded-host`.
      *
      * **Off by default, and it has to be a decision.** Behind the surfdns proxy the header is
@@ -87,6 +97,9 @@ export class CdnService extends ServiceModule {
     public readonly domain = 'cdn';
 
     public blobs!: BlobStore;
+    /** The control-site ensure, retrying in the background until identity registers. */
+    private control: Promise<void> | undefined;
+    private stopping = false;
     /** The bound server, so a test can address it without guessing a port. */
     public listener: Server | undefined;
     public port: number | undefined;
@@ -202,9 +215,65 @@ export class CdnService extends ServiceModule {
 
         const registered = await broker.call('edge.create', { url: this.url });
         this.edgeId = registered.id;
+
+        /**
+         * **The site this node serves for itself**, so a cluster with no sites can still be reached.
+         *
+         * Here rather than in the api because the site collection is this service's, and because a
+         * node with no cdn assigned cannot resolve any site anyway — so a control site it could not
+         * read would be a row with nothing to serve it.
+         *
+         * Caught, for the reason the identity module's bootstrap operator is caught: *a node that
+         * starts without an operator is inconvenient; a node that will not start is an outage.* A
+         * failure here leaves the cluster unreachable by the CLI, which is bad and is not worse than
+         * refusing to serve the sites that already work.
+         */
+        /**
+         * **Started, not awaited — because waiting here blocks what it is waiting for.**
+         *
+         * A node registers its modules in sequence, and the cdn comes before identity. Awaiting a
+         * wait for `organization.find_one` inside `onStart` therefore holds up the registration that
+         * would satisfy it: the first version waited five seconds, gave up, and identity registered
+         * **fourteen milliseconds later**. The log said *no identity reachable* on a node whose
+         * whole job includes identity.
+         *
+         * So this returns immediately and the ensure retries in the background until identity
+         * arrives. Nothing depends on it having finished — the site it creates is read per request,
+         * so a control site that appears a second into a boot is a control site.
+         */
+        this.control = ensureControlSite(broker, {
+            host: this.options.controlHost ?? process.env['MESH_CONTROL_HOST'] ?? DEFAULT_CONTROL_HOST,
+            api: this.options.controlApi ?? process.env['MESH_CONTROL_API'] ?? '',
+            stopped: () => this.stopping,
+        }).then((control) => {
+            if (control === undefined) {
+                // Ordinary on a node dedicated to serving, and said out loud rather than at `debug`
+                // — the first time this happened it was a bug, and the silence is what hid it.
+                broker.logger.info('[cdn] no identity reachable, so no control site on this node');
+                return;
+            }
+            broker.logger.info(
+                `[cdn] control site "${control.host}" ${control.created ? 'created' : 'updated'} — `
+                + `${String(CONTROL_CONTRACTS.length)} contract(s) for an operator`,
+            );
+        }, (error: unknown) => {
+            broker.logger.warn(
+                `[cdn] could not ensure the control site, so this cluster is reachable only by a `
+                + `hostname that already serves one: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        });
     }
 
     async onStop(): Promise<void> {
+        /**
+         * Told to stop, so the control-site retry stops looking for an identity that is not coming.
+         * Awaited below rather than abandoned: a background loop still calling the broker while the
+         * module unregisters is how a test leaks into the next one.
+         */
+        this.stopping = true;
+        await this.control?.catch(() => undefined);
+        this.control = undefined;
+
         const edgeId = this.edgeId;
         this.edgeId = undefined;
 

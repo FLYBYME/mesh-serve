@@ -397,7 +397,26 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     const ok = await verifyPassword(password, found?.value.passwordHash ?? DUMMY_HASH);
 
                     if (found === undefined || !ok || found.value.suspendedAt !== undefined) {
-                        throw new Error('Those credentials are not valid.');
+                        /**
+                         * **401, not 500.** A plain `Error` is an *unexpected* one, and
+                         * `toHttpError` maps it to `INTERNAL_ERROR` — so mistyping a password
+                         * answered *"Internal server error"*, which says the platform is broken when
+                         * the platform is working exactly as designed.
+                         *
+                         * Unnoticed until now because signing in over HTTP needed a site, and the
+                         * first site anyone had was one they seeded *after* signing in some other
+                         * way. The control site made the first sign-in on a cluster reachable, and
+                         * this is the first thing a person does on it.
+                         *
+                         * One message for every reason — no account, wrong password, suspended —
+                         * for the same reason the dummy hash above exists: which of the three it was
+                         * is information about somebody else's account.
+                         */
+                        throw new MeshError({
+                            code: 'INVALID_CREDENTIALS',
+                            status: 401,
+                            message: 'Those credentials are not valid.',
+                        });
                     }
 
                     const issued = now();
@@ -475,6 +494,27 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         // password still on it.
                         ...(claimed ? { provisional: false } : {}),
                     });
+
+                    /**
+                     * **Setting a password ends every session it was set from.**
+                     *
+                     * The ordinary security property — a password change is how somebody responds to
+                     * a credential they think is known, and leaving the old sessions alive is exactly
+                     * the case where that response does nothing.
+                     *
+                     * It is also what makes claiming a provisional account *work*. The api caches a
+                     * resolved caller for two minutes (`methods/tickets.ts`), so a person who claimed
+                     * their account was still refused everywhere for up to two minutes afterwards —
+                     * with the message telling them to do the thing they had just done. The comment
+                     * on `ticket_validate` says clearing the flag *"takes effect on the next call"*,
+                     * and it did not: it took effect on the next cache expiry. Revoking is what makes
+                     * that sentence true, using the machinery sign-out already relies on.
+                     *
+                     * The caller's own ticket dies too, which is the honest outcome: the credential
+                     * they authenticated with is the one that just stopped being valid. They sign in
+                     * again with the password they chose.
+                     */
+                    await revoke('principal', userId, claimed ? 'account claimed' : 'password changed');
 
                     if (claimed) {
                         broker?.logger.warn(`[identity] provisional account ${held.value.email} claimed`);

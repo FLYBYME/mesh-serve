@@ -109,6 +109,21 @@ const wsHost = flag('ws-host', '127.0.0.1');
 const cdnPort = Number(flag('cdn', '8080'));
 const cdnUrl = flag('cdn-url', process.env.CDN_URL ?? `http://127.0.0.1:${String(cdnPort)}`);
 const apiPort = Number(flag('api', '5005'));
+
+/**
+ * Where the control site sends its own requests.
+ *
+ * The cdn creates that site (`cdn/methods/control.ts`) and knows its own origin but not the api's —
+ * they are deliberately separate ports — and `site.api` must be a real origin rather than empty. The
+ * node chose both numbers, so the node is what says so.
+ *
+ * **Set here, beside the flag, and not where `ApiService` is constructed.** That is two hundred
+ * lines further down and *after* the Supervisor starts the switchable services, so the cdn had
+ * already read an unset variable by the time it was assigned. The value was right and it arrived
+ * late, which reads in the log as a validation error about an empty string.
+ */
+process.env.MESH_CONTROL_API ??= `http://127.0.0.1:${String(apiPort)}`;
+
 const mongo = flag('mongo', process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
 const dbName = flag('db', 'mesh-serve');
 const blobRoot = flag('artifacts', process.env.MESH_BLOB_ROOT ?? './.artifacts');

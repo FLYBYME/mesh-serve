@@ -534,6 +534,27 @@ export function mongoStore(database: Database | Db): IdentityStore {
                 roles: [...user.roles],
                 ...(user.suspendedAt !== undefined ? { suspendedAt: user.suspendedAt } : {}),
                 ...(user.suspendedReason !== undefined ? { suspendedReason: user.suspendedReason } : {}),
+                /**
+                 * **This was missing, and it turned the first-boot wall into a doorway.**
+                 *
+                 * `ensureFirstOperator` creates one account holding `operator`, prints its password
+                 * to stdout once, and marks it `provisional` — which the gate refuses above `public`
+                 * everywhere except `identity.set_password`. That flag is the only thing standing
+                 * between *a credential in a log file* and *a full operator*.
+                 *
+                 * This insert names its fields one at a time and did not name that one, so mongo
+                 * dropped it. The account was created provisional and stored ordinary: the wall was
+                 * built, and in production it was not there.
+                 *
+                 * **The in-memory store keeps the whole object** (`users.set(key, user)`), so every
+                 * test of this behaviour passed — the flag survived in the only implementation the
+                 * tests ran against. It could not be seen until a real cluster was signed into over
+                 * HTTP, which was impossible until the control site existed.
+                 *
+                 * The lesson is the pattern, not the field: an insert that lists its fields drops
+                 * every field somebody adds later, silently, in one implementation of two.
+                 */
+                ...(user.provisional === true ? { provisional: true } : {}),
                 createdAt: now,
                 updatedAt: now,
             });

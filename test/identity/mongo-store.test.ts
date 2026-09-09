@@ -76,6 +76,36 @@ describe('mongoStore', () => {
             expect(byId).toBeDefined();
             expect(byId?.id).toBe(created.id);
 
+            /**
+             * **`provisional` survives a round trip, and once it did not.**
+             *
+             * `ensureFirstOperator` creates one account holding `operator`, prints its password to
+             * stdout, and marks it provisional — the flag the gate refuses above `public`
+             * everywhere except `identity.set_password`. It is the only thing between *a credential
+             * in a log file* and *a full operator*.
+             *
+             * This store's insert names its fields one at a time and did not name that one, so the
+             * account was created provisional and stored ordinary. **The wall was built and in
+             * production it was not there.** `memoryStore` keeps the whole object, so every test of
+             * the behaviour passed against the implementation that could not fail — and nothing
+             * could reach a fresh cluster over HTTP to notice, until the control site existed.
+             *
+             * Asserted here rather than in the module's tests because the bug was never in the
+             * module: it wrote the flag correctly and this dropped it.
+             */
+            const provisional = await store.createUser({
+                email: 'provisional@node.invalid',
+                displayName: 'First operator',
+                passwordHash: 'hash-456',
+                roles: [],
+                provisional: true,
+            });
+            expect((await store.getUser(provisional.id))?.value.provisional).toBe(true);
+
+            // And clearing it is what claiming an account does, so that has to survive too.
+            await store.updateUser(provisional.id, { provisional: false });
+            expect((await store.getUser(provisional.id))?.value.provisional).toBe(false);
+
             await store.updateUser(created.id, { displayName: 'Updated User' });
             const updated = await store.getUser(created.id);
             expect(updated?.value.displayName).toBe('Updated User');
