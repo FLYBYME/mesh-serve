@@ -1275,6 +1275,34 @@ task** — each is a decision about the platform's own surface that blocks any U
       — and a rule nothing checks is precisely how four call sites got wired and a fifth did not.
       Verified by removing one `siteScope` and watching it fail. **S**
 
+      **Verified live 2026-09-10** on the two-tenant cluster, and this is the observation that
+      matters: the operator owns *both* organizations, and `card_find` over MCP on
+      `flowboard.localhost` returned Flowboard Inc's card with no header anywhere. If the site's
+      scope were not consulted, `resolveScope` would answer *authorized, no scope*, `meta` would
+      carry no `organizationId`, and the now-scoped collection would refuse it. Returning the row
+      **is** the proof.
+
+- [ ] **F24 ★ Seeding another organization's site from the control site fails with "No such part."**
+      *(found 2026-09-10, running flowboard's B1 migration.)*
+
+      `seed` posts to the control site, so F22 now resolves the caller's scope to **Platform** —
+      correctly, that is whose hostname it is. `ensureOrganization` then takes that scope when the
+      call names no organization, and every catalog write runs as Platform. `catalog.declare` refuses
+      a part whose `publisher` is somebody else, deliberately and with a deliberately unhelpful
+      message: *"Not found, not forbidden: which organization publishes a part is not something an
+      unrelated caller gets to confirm by probing."*
+
+      **The refusal is right and the message is aimed at the wrong thing.** Three attempts read as a
+      broken catalog — naming all three repositories, then only flowboard's, then guessing — when the
+      answer was `--org-slug flowboard`. Before F22 the same mistake produced
+      `organization_unknown`: *"A site belongs to an organization and this caller resolved none. Name
+      one."* That message was correct and is now unreachable, because a scope always resolves.
+
+      The fix is not to loosen `declare`. It is that `site.seed` knows the host it was given, and a
+      host that already exists names its tenant — so seeding an existing site from another
+      organization's control plane should say *"flowboard.localhost belongs to Flowboard Inc; pass
+      --org-slug flowboard"* before it clones anything. **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
