@@ -848,6 +848,40 @@ task** — each is a decision about the platform's own surface that blocks any U
       `OrganizationSchema.ownerId` from `min(1)` to `default('')`, which silently un-answered
       surfdns#29 — an organization with no owner became constructible again.
       `test/identity/principals.test.ts` caught it. **S**
+- [x] **F11 An operator could sign in to a fresh cluster and read nothing.** *(found and fixed
+      2026-09-09, bringing the console up)* `identity`'s `beforeCrud` narrowed every organization
+      read to the caller's **memberships**, and the first operator on a cluster holds none —
+      deliberately. `ensureControlSite` says so in as many words: *an operator holds a cluster-scoped
+      role, which grants everywhere and lives on the user rather than in a membership … a caller who
+      needs one will be told so by the gate.* They were told, and there was no way to answer.
+
+      Three different messages for one cause, none of them naming it:
+
+      - `organization.find` answered `[]` on a cluster whose `platform` organization the operator
+        **owns** — `ownerId` is on the row and the gate never looked at it.
+      - `site.seed --org-slug platform` failed with *Duplicate value "platform" for unique field
+        "slug"*: its own `find_one` came back empty, so it created what already existed.
+      - `site.find` refused outright — *Scoped collection "site" requires a resolved "tenantId"
+        scope* — because the operator resolved to no tenant, and the only route to one was a
+        membership in an organization they could not see.
+
+      Fixed by not narrowing for a caller holding the cluster-scoped `operator` role, which is what
+      cluster-scoped already means everywhere else (F3). The roles come from the validated ticket,
+      never from anything the request said about itself. **S**
+- [x] **F12 The api gave a contract ten seconds and returned 500 for work that succeeded.**
+      *(found and fixed 2026-09-09)* `api.service.ts` dispatched every route through the broker's
+      default timeout. `site.seed` clones every repository named and bundles every part in them —
+      about forty seconds here — so the caller got `500 Internal server error` while the node logged
+      `seeded 127.0.0.1 → sha256:89dd6ee3…` a second later. **The run failed and the work
+      succeeded**, which is the most confusing pair of outcomes available and is the exact failure
+      `site.seed`'s own doc comment already warned about.
+
+      What made it hard to see: `site.seed` raises the timeout on every call it makes *internally*,
+      so every step inside it had fifteen minutes and the one dispatching it had ten seconds.
+
+      Fixed with a generous ceiling rather than a per-contract table — mesh is frozen, so a contract
+      cannot declare how long it takes, and a hand-kept list of slow ones is wrong the first time
+      somebody adds work to a handler. The socket is the real bound. **S**
 
 ## Track E — Fleet
 

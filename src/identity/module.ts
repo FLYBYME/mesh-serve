@@ -191,6 +191,42 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         return input;
                     }
 
+                    /**
+                     * **An operator sees every organization, because `operator` is cluster-scoped.**
+                     *
+                     * Everything below narrows to organizations the caller holds a *membership* in,
+                     * and the first operator on a cluster holds none — deliberately.
+                     * `ensureControlSite` says so in as many words: *an operator holds a
+                     * cluster-scoped role, which grants everywhere and lives on the user rather than
+                     * in a membership … a caller who needs one will be told so by the gate.*
+                     *
+                     * They were told, and there was no way to answer. The failure is worth writing
+                     * down because none of it names organizations:
+                     *
+                     *   - `organization.find` answered `[]` on a cluster whose `platform`
+                     *     organization the operator **owns** — `ownerId` is on the row and this gate
+                     *     never looked at it.
+                     *   - `site.seed --org-slug platform` then failed with *Duplicate value
+                     *     "platform" for unique field "slug"*: its `find_one` came back empty, so it
+                     *     created what already existed.
+                     *   - `site.find` refused outright — *Scoped collection "site" requires a
+                     *     resolved "tenantId" scope* — because the operator resolved to no tenant,
+                     *     and the only way to get one is a membership in an organization they could
+                     *     not see.
+                     *
+                     * Three different messages for one cause, and a cluster an operator can sign in
+                     * to and read nothing on.
+                     *
+                     * The roles come from the validated ticket (`api.service.ts` builds
+                     * `meta.user.roles` from `caller.roles`), not from anything the request said
+                     * about itself. An internal broker call carries no `user` at all and is already
+                     * unnarrowed by the branch above.
+                     */
+                    const roles = isRecord(meta?.['user']) ? meta['user']['roles'] : undefined;
+                    if (Array.isArray(roles) && roles.includes(FIRST_OPERATOR_ROLE)) {
+                        return input;
+                    }
+
                     const memberships = await store.membershipsOf(userId);
                     const allowedOrgIds = memberships.map((m) => m.organizationId);
 

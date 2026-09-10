@@ -54,6 +54,12 @@ import { getDefaultTelemSink } from '../telem/sinks/default.js';
 export const EXPOSURE_HEADER = 'x-exposure';
 export const SHAPE_HEADER = 'x-exposure-shape';
 
+/**
+ * How long the api waits for a contract it dispatched. See the call site for why it is not ten
+ * seconds — a request a person is waiting on is not a question between two services.
+ */
+export const API_CALL_TIMEOUT_MS = 15 * 60 * 1000;
+
 /** Where a browser subscribes. One path per site, not one per event: a stream carries them all. */
 export const EVENTS_PATH = '/events';
 
@@ -370,6 +376,28 @@ export class ApiService extends ServiceModule {
              * than a requested one, and the two are different in exactly the case that matters.
              */
             const result = await this.call(found.route.key, parsed.data, {
+                /**
+                 * **The api must not give up before its own client does.**
+                 *
+                 * The broker's default is ten seconds, which is right for a question between two
+                 * services and wrong for a request a person is holding a browser tab open for.
+                 * `site.seed` clones every repository named and bundles every part in them; on this
+                 * machine that is around forty seconds, and it produced the worst pair of outcomes
+                 * available: the caller got `500 Internal server error` while the node logged
+                 * `seeded 127.0.0.1 → sha256:89dd6ee3…` a second later. **The run failed and the
+                 * work succeeded.**
+                 *
+                 * `site.seed` already raises the timeout on every call it makes *internally*, which
+                 * is what made this so hard to see — every step inside it was allowed fifteen
+                 * minutes, and the one dispatching it was allowed ten seconds.
+                 *
+                 * A generous ceiling rather than a per-contract table: mesh is frozen, so a contract
+                 * cannot declare how long it takes, and a hand-kept list of slow ones is a list that
+                 * is wrong the first time somebody adds work to a handler. The socket is the real
+                 * bound — a client that stops waiting closes it — and this only has to be longer
+                 * than that.
+                 */
+                timeout: API_CALL_TIMEOUT_MS,
                 meta: {
                     ...(caller === undefined
                         /**
