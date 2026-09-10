@@ -1536,6 +1536,33 @@ should not.
 
       **M** · surfdns freeze gate V16, with F27.
 
+      **Stage 1 landed 2026-09-10**: `inherits` on `RoleSchema`, `expandInheritance`,
+      `inheritanceProblem`, and `identity.role_upsert` to call them. Both rules are refused at write
+      time and honoured again at read time — a row can predate a rule, and the read path must not
+      escalate on one. `permits`/`surfaceOf` now take a named `RoleWorld` rather than positional
+      lists, so the role table cannot be left out: an optional one would have made inheritance
+      forgettable, and a caller that forgot would get an answer wrong only for roles that inherit,
+      silently. 24 tests in `roles.test.ts` (was 13). Stages 2 (seed grants from the manifest) and 3
+      (the `gateFor` flip) are what remain, in that order — flipping first would refuse everything on
+      a site seeded before stage 2 ran, which is flowboard B1's two-deploy shape for the same reason.
+
+- [ ] **F31 ★ `npm run typecheck` is red on master, and `npm test` does not run it.** *(found
+      2026-09-10 while landing F30's stage 1.)*
+
+      Two errors, neither new and neither mine: `test/cdn/control-site.test.ts:105` reads `.auth` off
+      `ExposedContract`, which is a union that may instead carry `permission`; `test/cdn/page.test.ts:23`
+      builds a release literal without `agentRoles`, which is required. Both are in test files, which
+      is why they are invisible: `npm test` is `vitest run`, and **vitest transpiles without
+      typechecking**. So the suite is green and the compiler is not, and the two disagree silently.
+
+      The gap is not the two errors. It is that `tsconfig.json` covers `src/**` only and the config
+      that covers `test/**` is a *second* file (`tsconfig.check.json`) run by a *different* npm
+      script. Anyone who reaches for `npx tsc --noEmit` — the obvious thing — typechecks half the
+      repository and is told it is clean. I did exactly that today and had a signature change break
+      seven tests at run time that the real check had already caught.
+
+      **Wanted:** `npm test` runs the typecheck, or CI does, so red is red. Then fix the two. **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item

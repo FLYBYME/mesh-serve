@@ -137,6 +137,7 @@ describe('mongoStore', () => {
                 name: 'Org Admin',
                 scope: 'organization',
                 builtin: false,
+                inherits: [],
             };
             await store.upsertRole(orgRole);
 
@@ -203,6 +204,7 @@ describe('mongoStore', () => {
                 name: 'Member Role',
                 scope: 'organization',
                 builtin: false,
+                inherits: [],
             };
             await store.upsertRole(role);
 
@@ -236,6 +238,7 @@ describe('mongoStore', () => {
                 scope: 'cluster',
                 description: 'A test custom role',
                 builtin: false,
+                inherits: [],
             };
 
             await store.upsertRole(role);
@@ -259,6 +262,7 @@ describe('mongoStore', () => {
                 name: 'Public',
                 scope: 'cluster',
                 builtin: true,
+                inherits: [],
             };
             await store.upsertRole(builtinRole);
             await expect(store.deleteRole('public')).rejects.toThrow();

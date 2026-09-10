@@ -493,6 +493,31 @@ export const grantRoleContract = defineContract({
  * lets a deployment define `author` and `compliance` without either the API or the framework
  * knowing those words.
  */
+/**
+ * **Define a role, or change one — the only write that may set `inherits`.**
+ *
+ * `roleCrud`'s `create`/`update`/`replace` are `internal`, deliberately: a role is not an ordinary
+ * row, because a generated write would store whatever it was handed and the two rules on `inherits`
+ * are not expressible as a zod refinement — both need the rest of the role table to decide, and a
+ * schema sees one document.
+ *
+ * So the rules live in `inheritanceProblem` and this is what calls it. Without a contract they would
+ * have been a pure function nothing reached, which is F30's shape exactly, and writing them without
+ * writing this would have repeated it in the same file that documents it.
+ */
+export const roleUpsertContract = defineContract({
+    domain: 'identity',
+    action: 'role_upsert',
+    description: 'Define a role, or change one. Refuses an inheritance edge that cycles or crosses scope.',
+    inputSchema: RoleSchema,
+    outputSchema: z.object({
+        key: z.string(),
+        created: z.boolean().describe('False when this replaced a role that already existed'),
+    }),
+    rest: { method: 'POST', path: '/identity/roles/define' },
+    print: (o) => `${o.key} ${o.created ? 'defined' : 'updated'}`,
+});
+
 export const permitsContract = defineContract({
     domain: 'identity',
     action: 'permits',
@@ -592,6 +617,7 @@ export const identityContracts: readonly ToolContract[] = [
     whoamiContract,
     registerContract,
     grantRoleContract,
+    roleUpsertContract,
     permitsContract,
     apiTokenValidateContract,
     apiTokenIssueContract,

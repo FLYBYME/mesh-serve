@@ -264,7 +264,15 @@ export function memoryStore(): IdentityStore {
 
         async listRoles() { return [...roles.values()]; },
         async getRole(key) { return roles.get(key); },
-        async upsertRole(role) { roles.set(role.key, role); },
+        /**
+         * Parsed on the way in, which the mongo store gets for free by parsing on the way out.
+         *
+         * Without it the two stores disagree about what a `Role` is: mongo's `RoleSchema.parse` fills
+         * `inherits` from its `.default([])`, and this one handed back whatever object it was given —
+         * so a caller that built a role literal without the field got `undefined` here and a `[]`
+         * there. Same interface, two shapes, and only one of them iterable.
+         */
+        async upsertRole(role) { roles.set(role.key, RoleSchema.parse(role)); },
         async deleteRole(key) {
             const role = roles.get(key);
             if (role === undefined) {
@@ -359,6 +367,9 @@ interface RoleDoc {
     scope: RoleScope;
     description?: string;
     builtin: boolean;
+    /** Optional on the document because rows written before inheritance existed do not carry it;
+     *  `RoleSchema`'s `.default([])` is what makes reading one safe. */
+    inherits?: string[];
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -762,10 +773,13 @@ export function mongoStore(database: Database | Db): IdentityStore {
             return fetchRole(key);
         },
 
-        async upsertRole(role) {
+        async upsertRole(input) {
             await ensureReady();
             const cols = getCollections();
             const now = new Date();
+            // Parsed on the way in as well as on the way out, so both stores normalise a role
+            // identically — see `memoryStore.upsertRole` for what disagreeing about it cost.
+            const role = RoleSchema.parse(input);
             await cols.roles.replaceOne(
                 { key: role.key },
                 {
@@ -774,6 +788,10 @@ export function mongoStore(database: Database | Db): IdentityStore {
                     scope: role.scope,
                     ...(role.description !== undefined ? { description: role.description } : {}),
                     builtin: role.builtin,
+                    // Written explicitly rather than spread: this document is built field by field,
+                    // so a field the list forgets is a field that silently never persists. That is
+                    // how `inherits` would have round-tripped as `[]` on every read.
+                    inherits: [...role.inherits],
                     createdAt: now,
                     updatedAt: now,
                 },

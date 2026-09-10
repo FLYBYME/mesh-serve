@@ -254,7 +254,7 @@ describe('a ticket is identity, not authority', () => {
         const userId = await register(node);
         const token = await signIn(node);
 
-        await node.store.upsertRole({ key: 'operator', name: 'Operator', scope: 'cluster', builtin: false });
+        await node.store.upsertRole({ key: 'operator', name: 'Operator', scope: 'cluster', builtin: false, inherits: [] });
         await node.store.updateUser(userId, { roles: ['operator'] });
 
         // The ticket says who you are. What you may do is looked up now — otherwise granting or
@@ -275,7 +275,7 @@ describe('a ticket is identity, not authority', () => {
 
     it('answers whether a set of roles permits a contract', async () => {
         const node = await boot();
-        await node.store.upsertRole({ key: 'author', name: 'Author', scope: 'cluster', builtin: false });
+        await node.store.upsertRole({ key: 'author', name: 'Author', scope: 'cluster', builtin: false, inherits: [] });
         await node.store.addGrant({ roleKey: 'author', contract: 'post.*' });
 
         expect((await node.call<{ permitted: boolean }>('identity.permits', { roles: ['author'], contract: 'post.list' })).permitted).toBe(true);
@@ -302,7 +302,7 @@ describe('whoami', () => {
         const node = await boot();
         const userId = await register(node);
 
-        await node.store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false });
+        await node.store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false, inherits: [] });
         const org = await node.store.createOrganization({ slug: 'acme', name: 'Acme', ownerId: userId });
         await node.store.createMembership({
             userId, organizationId: org.id, roleKey: 'owner', joinedAt: Date.now(),

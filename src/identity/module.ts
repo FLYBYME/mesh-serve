@@ -11,7 +11,7 @@
  * calls keeps this a plain object with no inherited lifecycle to reason about.
  */
 
-import { MeshError, type IServiceBroker, type IServiceContext, type IServiceModule, type ToolContract, type z } from '@flybyme/mesh';
+import { ClientError, MeshError, type IServiceBroker, type IServiceContext, type IServiceModule, type ToolContract, type z } from '@flybyme/mesh';
 import { createHash, randomBytes } from 'node:crypto';
 
 import {
@@ -21,7 +21,9 @@ import {
 } from './contracts/identity.contract.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from './methods/password.js';
 import { type ApiToken } from './schema/principals.js';
-import { BUILTIN_ROLES, permits, PUBLIC_ROLE, type Role } from './schema/roles.js';
+import {
+    BUILTIN_ROLES, inheritanceProblem, permits, PUBLIC_ROLE, RoleSchema, type Role,
+} from './schema/roles.js';
 import { DEFAULT_TICKET_LIFETIME_MS, isLive, mintToken, type Validation } from './schema/tickets.js';
 import { memoryStore, type IdentityStore } from './store.js';
 
@@ -700,6 +702,28 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     return { userId: found.id, roles: after, changed };
                 }
 
+                case 'identity.role_upsert': {
+                    const role = RoleSchema.parse(input);
+
+                    /**
+                     * **Judged against the world this write is creating, not the one it replaces.**
+                     *
+                     * The existing table minus this key, plus this role — so re-parenting a role is
+                     * checked on its new edges rather than its old ones, and a role that already
+                     * exists does not get to be its own parent by accident of being in the list
+                     * twice.
+                     */
+                    const existing = await store.listRoles();
+                    const problem = inheritanceProblem(role, existing);
+                    if (problem !== undefined) {
+                        throw new ClientError(problem, 'INVALID_ROLE_INHERITANCE', 400);
+                    }
+
+                    const created = !existing.some((r) => r.key === role.key);
+                    await store.upsertRole(role);
+                    return { key: role.key, created };
+                }
+
                 case 'identity.permits': {
                     const { roles, contract, organizationId } = input as {
                         roles: string[];
@@ -712,8 +736,10 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         .filter((r): r is Role => r !== undefined);
                     return {
                         permitted: permits(
-                            resolvedRoles,
-                            await store.listGrants(),
+                            // `all` is the whole table rather than the roles the caller holds:
+                            // inheritance follows edges by key, so a role the caller does *not* hold
+                            // still has to be resolvable to be inherited from.
+                            { held: resolvedRoles, all: allRoles, grants: await store.listGrants() },
                             contract,
                             organizationId,
                         ),

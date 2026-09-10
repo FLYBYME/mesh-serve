@@ -103,7 +103,7 @@ describe.skipIf(!reachable)('F6: publish CLI credential and scope derivation end
 
         broker = app.getProvider<IServiceBroker>('broker');
 
-        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false });
+        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false, inherits: [] });
 
         // Seed Org Alpha & Token Alpha
         const userAlpha = await store.createUser({ email: 'alpha@example.com', displayName: 'Alpha User', roles: [] });

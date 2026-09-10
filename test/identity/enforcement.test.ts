@@ -25,6 +25,7 @@ describe('F3: Role.scope enforcement', () => {
         name: 'Operator',
         scope: 'cluster',
         builtin: false,
+        inherits: [],
     };
 
     const orgRole: Role = {
@@ -32,6 +33,7 @@ describe('F3: Role.scope enforcement', () => {
         name: 'Editor',
         scope: 'organization',
         builtin: false,
+        inherits: [],
     };
 
     const grants: readonly Grant[] = [
@@ -39,16 +41,20 @@ describe('F3: Role.scope enforcement', () => {
         { roleKey: 'editor', contract: 'post.edit' },
     ];
 
+    /** The role table `permits` resolves inheritance against; neither role here inherits anything. */
+    const all = (held: readonly Role[]): { held: readonly Role[]; all: readonly Role[]; grants: readonly Grant[] } =>
+        ({ held, all: [clusterRole, orgRole], grants });
+
     it('cluster role grants everywhere, including without organization', () => {
-        expect(permits([clusterRole], grants, 'system.reboot')).toBe(true);
-        expect(permits([clusterRole], grants, 'system.reboot', 'org-1')).toBe(true);
+        expect(permits(all([clusterRole]), 'system.reboot')).toBe(true);
+        expect(permits(all([clusterRole]), 'system.reboot', 'org-1')).toBe(true);
     });
 
     it('organization role does not grant outside an organization', () => {
         // Without an organization scope, an organization-scoped role must not grant
-        expect(permits([orgRole], grants, 'post.edit')).toBe(false);
+        expect(permits(all([orgRole]), 'post.edit')).toBe(false);
         // With an organization scope, it grants
-        expect(permits([orgRole], grants, 'post.edit', 'org-1')).toBe(true);
+        expect(permits(all([orgRole]), 'post.edit', 'org-1')).toBe(true);
     });
 
     it('refuses organization-scoped role in user.roles at creation', async () => {
@@ -138,6 +144,7 @@ describe('F8a: roles.builtin enforcement', () => {
             name: 'Custom',
             scope: 'cluster',
             builtin: false,
+            inherits: [],
         });
 
         await store.deleteRole('custom');
@@ -149,7 +156,7 @@ describe('F8a: roles.builtin enforcement', () => {
 describe('F8b: principals.ownerId enforcement (surfdns #29)', () => {
     it('an organization cannot be left unadministerable when the last owner leaves', async () => {
         const store = memoryStore();
-        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false });
+        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false, inherits: [] });
 
         const alice = await store.createUser({ email: 'alice@example.com', displayName: 'Alice', roles: [] });
         const bob = await store.createUser({ email: 'bob@example.com', displayName: 'Bob', roles: [] });
@@ -178,7 +185,7 @@ describe('F8b: principals.ownerId enforcement (surfdns #29)', () => {
 
     it('transferring ownership is the only way ownerId changes', async () => {
         const store = memoryStore();
-        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false });
+        await store.upsertRole({ key: 'owner', name: 'Owner', scope: 'organization', builtin: false, inherits: [] });
 
         const alice = await store.createUser({ email: 'alice@example.com', displayName: 'Alice', roles: [] });
         const bob = await store.createUser({ email: 'bob@example.com', displayName: 'Bob', roles: [] });

@@ -48,6 +48,32 @@ export const RoleSchema = z.object({
      * Deletion of a builtin role is refused with a ClientError.
      */
     builtin: z.boolean().default(false),
+    /**
+     * Roles this one is defined as *including*.
+     *
+     * **Why this is needed and holding two roles is not the answer.** `permits` takes an array, so a
+     * person could hold `viewer` and `editor` — except a **membership carries one `roleKey`**. Inside
+     * an organization you hold exactly one role, so without this there is no way to say *`owner` is
+     * `editor` plus these two*, and every shared grant is copied into every role that wants it. The
+     * copy is what drifts: adding a contract then means editing N roles and missing one.
+     *
+     * **Still purely additive**, so the file's own rule survives — *"a system where a role could
+     * remove a permission is one where nobody can answer what can this person do without evaluating
+     * order."* The union of a graph is the union whatever order it is walked in, so inheritance adds
+     * a shape to traverse and no order to get wrong.
+     *
+     * **Two rules, both enforced when a role is written rather than when one is read** — see
+     * `inheritanceProblem`:
+     *
+     * 1. **No cycles.** A cycle guarded at read time lives in the database for ever and every
+     *    request pays to step around it. Refuse the edge that closes it, naming the path.
+     * 2. **Same scope only.** If cluster-scoped `operator` could inherit organization-scoped
+     *    `editor`, `permits` would find `editor`'s grants on the cluster path and honour them
+     *    *everywhere* — privilege escalation performed by editing a row. This is F3's rule one level
+     *    up, and surfdns issue #26 is what it looks like when the two scopes are allowed to blur.
+     */
+    inherits: z.array(z.string()).default([])
+        .describe('Roles this one includes. Same scope only, and never cyclic.'),
 });
 
 export type Role = z.infer<typeof RoleSchema>;
@@ -90,6 +116,7 @@ export const BUILTIN_ROLES: readonly Role[] = [
         scope: 'cluster',
         description: 'Held by every caller, including one with no ticket.',
         builtin: true,
+        inherits: [],
     },
     {
         key: 'authenticated',
@@ -97,6 +124,7 @@ export const BUILTIN_ROLES: readonly Role[] = [
         scope: 'cluster',
         description: 'Held by every caller with a valid ticket. Grants nothing on its own.',
         builtin: false,
+        inherits: [],
     },
     /**
      * **The role the platform itself checks for, which did not exist as a record.**
@@ -122,6 +150,7 @@ export const BUILTIN_ROLES: readonly Role[] = [
             'Runs the platform: assigns services to machines, composes and deploys releases, and '
             + 'grants this role to others. Not an organization role.',
         builtin: false,
+        inherits: [],
     },
 ];
 
@@ -142,19 +171,153 @@ export function grantCovers(pattern: string, contract: string): boolean {
 }
 
 /**
- * Helper to resolve Role records from Role objects or builtin string keys.
+ * How deep an inheritance chain may go.
+ *
+ * A belt beside `expandInheritance`'s visited set rather than instead of it: the visited set is what
+ * makes a cycle terminate, and this is what stops a *legitimate* chain from becoming something
+ * nobody can reason about. Eight is far past any real hierarchy — if a deployment needs nine levels
+ * of role, the answer is not a bigger number.
  */
-function resolveRoles(roles: readonly (Role | string)[]): readonly Role[] {
+export const MAX_INHERITANCE_DEPTH = 8;
+
+/**
+ * **The three things an authorization answer depends on, in one argument so none can be left out.**
+ *
+ * `permits` and `surfaceOf` took `(roles, grants, …)`. Inheritance needs a third — the deployment's
+ * role table, to follow an edge by key — and adding it as an optional parameter would have made the
+ * expansion **forgettable**: a caller that omitted it would get an answer that was wrong only for
+ * roles that inherit, silently, and denials read as policy rather than as a bug.
+ *
+ * That is the exact failure this repository has now produced five times (F25, F29, F30 among them):
+ * a mechanism that exists and is not reached. So the parameter is required, and it is named, because
+ * three positional collections of strings is its own kind of mistake.
+ */
+export interface RoleWorld {
+    /** What the caller holds: the principal's cluster roles, plus the membership role for the scope. */
+    readonly held: readonly (Role | string)[];
+    /** Every role the deployment defines. Inheritance is resolved against this. */
+    readonly all: readonly Role[];
+    /** Every grant. Filtered by role inside; deny by default means an empty list denies everything. */
+    readonly grants: readonly Grant[];
+}
+
+/**
+ * Helper to resolve Role records from Role objects or string keys.
+ *
+ * `all` is the deployment's role table. It used to be only `BUILTIN_ROLES`, which meant a string key
+ * naming any role a deployment had defined resolved to **nothing** — silently, and a silently empty
+ * role set denies rather than errors, so it reads as policy.
+ */
+function resolveRoles(roles: readonly (Role | string)[], all: readonly Role[]): readonly Role[] {
+    const table = [...all, ...BUILTIN_ROLES.filter((b) => !all.some((r) => r.key === b.key))];
     const resolved: Role[] = [];
     for (const r of roles) {
         if (typeof r === 'string') {
-            const builtin = BUILTIN_ROLES.find((b) => b.key === r);
-            if (builtin) resolved.push(builtin);
+            const found = table.find((b) => b.key === r);
+            if (found) resolved.push(found);
         } else {
             resolved.push(r);
         }
     }
     return resolved;
+}
+
+/**
+ * **Every role these roles include, transitively.**
+ *
+ * Pure, and it is where the same-scope rule is *honoured* — `inheritanceProblem` is where it is
+ * enforced. Belt and braces on purpose: a row written before the rule existed, or by a migration, or
+ * by a direct database edit, must not escalate on the read path. So a cross-scope edge is skipped
+ * here rather than trusted to have been refused earlier.
+ *
+ * The visited set makes a cycle terminate rather than recurse. It is deliberately keyed on the role
+ * key, not on the object, because two reads of the same role are two objects.
+ */
+export function expandInheritance(
+    held: readonly (Role | string)[],
+    all: readonly Role[],
+): readonly Role[] {
+    const start = resolveRoles(held, all);
+    const byKey = new Map(all.map((r) => [r.key, r]));
+    for (const builtin of BUILTIN_ROLES) if (!byKey.has(builtin.key)) byKey.set(builtin.key, builtin);
+
+    const seen = new Set<string>();
+    const out: Role[] = [];
+
+    const walk = (role: Role, depth: number): void => {
+        if (seen.has(role.key) || depth > MAX_INHERITANCE_DEPTH) return;
+        seen.add(role.key);
+        out.push(role);
+
+        for (const key of role.inherits) {
+            const next = byKey.get(key);
+            // An edge naming a role that does not exist is skipped, not thrown: a deleted role must
+            // not take every role that mentioned it out of service.
+            if (next === undefined) continue;
+            // The read-path half of the same-scope rule. See the doc on `inherits`.
+            if (next.scope !== role.scope) continue;
+            walk(next, depth + 1);
+        }
+    };
+
+    for (const role of start) walk(role, 0);
+    return out;
+}
+
+/**
+ * **May this role be written?** Returns the reason it may not, or `undefined`.
+ *
+ * Called before a role is stored, so the two rules on `inherits` are refused at the point somebody
+ * can still fix them — with the offending path in the message, because *"role graph is invalid"*
+ * sends a person reading rows one at a time.
+ *
+ * `all` is the role table **as it will be after this write**, minus this role; the caller supplies
+ * it that way so a role being renamed or re-parented is judged on the world it is creating.
+ */
+export function inheritanceProblem(role: Role, all: readonly Role[]): string | undefined {
+    const byKey = new Map(all.filter((r) => r.key !== role.key).map((r) => [r.key, r]));
+    byKey.set(role.key, role);
+
+    for (const key of role.inherits) {
+        const parent = byKey.get(key);
+        if (parent === undefined) {
+            return `Role "${role.key}" inherits "${key}", which does not exist.`;
+        }
+        if (parent.scope !== role.scope) {
+            return `Role "${role.key}" is ${role.scope}-scoped and cannot inherit "${key}", which is `
+                + `${parent.scope}-scoped. A ${parent.scope} role inherited by a ${role.scope} one would `
+                + `grant everywhere it does, which is an escalation performed by editing a row.`;
+        }
+    }
+
+    // Depth-first from this role, carrying the path, so the cycle can be printed rather than named.
+    const path: string[] = [];
+    const onPath = new Set<string>();
+
+    const visit = (current: Role): string | undefined => {
+        if (onPath.has(current.key)) {
+            return `Role "${role.key}" cannot inherit "${path[path.length - 1] ?? ''}": it would close `
+                + `the cycle ${[...path, current.key].join(' -> ')}.`;
+        }
+        if (path.length > MAX_INHERITANCE_DEPTH) {
+            return `Role "${role.key}" inherits more than ${String(MAX_INHERITANCE_DEPTH)} levels `
+                + `deep (${[...path, current.key].join(' -> ')}).`;
+        }
+
+        onPath.add(current.key);
+        path.push(current.key);
+        for (const key of current.inherits) {
+            const next = byKey.get(key);
+            if (next === undefined) continue;
+            const problem = visit(next);
+            if (problem !== undefined) return problem;
+        }
+        path.pop();
+        onPath.delete(current.key);
+        return undefined;
+    };
+
+    return visit(role);
 }
 
 /**
@@ -166,11 +329,11 @@ function resolveRoles(roles: readonly (Role | string)[]): readonly Role[] {
  * Cluster roles grant everywhere; organization roles grant only when acting in an organization.
  */
 export function surfaceOf(
-    roles: readonly (Role | string)[],
-    grants: readonly Grant[],
+    world: RoleWorld,
     organizationId?: string,
 ): ReadonlySet<string> {
-    const resolved = resolveRoles(roles);
+    const { grants } = world;
+    const resolved = expandInheritance(world.held, world.all);
     const out = new Set<string>();
     for (const grant of grants) {
         const matchingRole = resolved.find((r) => r.key === grant.roleKey);
@@ -198,12 +361,12 @@ export function surfaceOf(
  *   If no organization is provided (e.g. an unscoped caller), organization grants are refused.
  */
 export function permits(
-    roles: readonly (Role | string)[],
-    grants: readonly Grant[],
+    world: RoleWorld,
     contract: string,
     organizationId?: string,
 ): boolean {
-    const resolved = resolveRoles(roles);
+    const { grants } = world;
+    const resolved = expandInheritance(world.held, world.all);
     return grants.some((grant) => {
         if (!grantCovers(grant.contract, contract)) return false;
         const matchingRole = resolved.find((r) => r.key === grant.roleKey);
