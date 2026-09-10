@@ -14,6 +14,7 @@ import { ClientError, type IServiceContext, type z } from '@flybyme/mesh';
 
 import type { CdnService } from '../cdn.service.js';
 import type { seedContract } from '../contracts/seed.contract.js';
+import { grantsToInstall } from '../methods/ceiling.js';
 import { grantsFor } from '../methods/grants.js';
 
 type Input = z.infer<typeof seedContract['inputSchema']>;
@@ -348,8 +349,18 @@ export async function site_seed(
 
     await call('cdn.deploy', { host: input.host, release: composed.hash }, as);
 
+    /**
+     * **The roles the application declares, installed as grants.** F30 stage 2.
+     *
+     * After the deploy, because the ceiling is what this site *serves* and that is only settled once
+     * the release is on it. `contracts` above is that set, already computed — passing it here rather
+     * than recomputing keeps one answer to *what does this site serve*.
+     */
+    const granted = await installGrants(call, as, contracts.map((c) => c.key), release?.agentRoles ?? {});
+
     ctx.logger.info(
-        `[cdn] seeded ${input.host} → ${composed.hash} (${String(composing.length)} part(s), by ${userId})`,
+        `[cdn] seeded ${input.host} → ${composed.hash} (${String(composing.length)} part(s), `
+        + `${String(granted)} new grant(s), by ${userId})`,
     );
 
     return { host: input.host, siteId, organizationId, release: composed.hash, parts, problems };
@@ -363,6 +374,41 @@ export async function site_seed(
  * organizations and names neither is asking this call to pick a tenant for a hostname, which is not
  * a decision a default should make.
  */
+/**
+ * **Install the grants this site's roles should carry, and return how many were new.**
+ *
+ * Additive and idempotent, because `site.seed` is documented idempotent and re-running it is the
+ * ordinary way to redeploy. Existing rows are read first rather than written and letting the unique
+ * index refuse: `grant` is unique on `(roleKey, contract)`, so a blind create would throw `CONFLICT`
+ * on every reseed and a `catch` around it would swallow the conflicts that mean something else.
+ *
+ * **It never removes one.** A grant withdrawn because a part stopped declaring it is a different
+ * decision from a grant added because one did — silently revoking access on a redeploy is the kind
+ * of thing that is discovered by a person who can no longer do their job. Recorded on F30 as the
+ * next question rather than answered here by omission.
+ */
+export async function installGrants(
+    call: Call,
+    as: unknown,
+    exposed: readonly string[],
+    declaredRoles: Readonly<Record<string, readonly string[]>>,
+): Promise<number> {
+    const wanted = grantsToInstall(exposed, declaredRoles);
+    if (wanted.length === 0) return 0;
+
+    const existing = await call('grant.find', { query: {} }, as) as
+        readonly { roleKey?: string; contract?: string }[] | undefined;
+    const have = new Set((existing ?? []).map((g) => `${g.roleKey ?? ''} ${g.contract ?? ''}`));
+
+    let added = 0;
+    for (const grant of wanted) {
+        if (have.has(`${grant.roleKey} ${grant.contract}`)) continue;
+        await call('grant.create', grant, as);
+        added += 1;
+    }
+    return added;
+}
+
 async function ensureOrganization(
     call: Call,
     input: Input,
