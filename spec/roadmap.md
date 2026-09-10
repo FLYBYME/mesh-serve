@@ -883,8 +883,8 @@ task** — each is a decision about the platform's own surface that blocks any U
       cannot declare how long it takes, and a hand-kept list of slow ones is wrong the first time
       somebody adds work to a handler. The socket is the real bound. **S**
 
-- [ ] **F13 A console cannot list people, because `user` carries the password hash.** *(found
-      2026-09-10, starting the console's `people` view)* Every action on `userCrud` is `internal`,
+- [x] **F13 A console cannot list people, because `user` carries the password hash.**
+      *(found and fixed 2026-09-10, starting the console's `people` view)* Every action on `userCrud` is `internal`,
       and rightly: `passwordHash` is a field of `UserSchema`, so a generated `find` returns it. There
       is no visibility setting that omits a field, which means **`user.find` can never be exposed**
       and the obvious read for a people screen does not exist. `organization`, `membership` and
@@ -896,10 +896,22 @@ task** — each is a decision about the platform's own surface that blocks any U
       `provisional`, and nothing else. A contract that does not have the field cannot be talked into
       returning it, which is the argument `site.contract.ts` already makes about `releaseHash`.
 
-      Blocks stage 4 of the UI plan. **S**
+      **`identity.people` is that contract.** Operator-gated and checked in the handler rather than
+      trusted from the site record — it is an unbounded read of every account on the deployment, and
+      a gate is configuration. `search`, `role` and a bounded `limit` that reports `truncated`; a
+      new `store.listUsers` on both implementations.
 
-- [ ] **F14 An operator console shows one organization's sites, not the cluster's.** *(found
-      2026-09-10, verifying stage 3)* `site` is `scopedBy: 'tenantId'` and mesh is frozen, so a
+      `suspendedAt` and `provisional` are in the projection deliberately: they are the two facts that
+      explain a person being unable to do anything, and a list without them shows a working account
+      and a locked one identically. The first-boot operator is the case that proves it — it holds
+      `operator` and is refused everywhere until claimed.
+
+      7 tests. The one that matters asserts on the **keys** of a returned person, not on the absence
+      of `passwordHash` by name, because the defect this prevents is a credential arriving in a field
+      nobody thought to look at. **S**
+
+- [x] **F14 An operator console shows one organization's sites, not the cluster's.**
+      *(found and fixed 2026-09-10, verifying stage 3)* `site` is `scopedBy: 'tenantId'` and mesh is frozen, so a
       caller resolves to exactly one organization and `site.find` answers within it. The operator now
       resolves to `platform` (F11), so the console works — and on a cluster with one organization
       *the platform's hostnames* and *the cluster's hostnames* are the same set, which is why the
@@ -910,8 +922,19 @@ task** — each is a decision about the platform's own surface that blocks any U
       cluster is a third operation and wants a third contract — `operator`-gated, unscoped, on the
       cdn, reading the collection directly the way the serving path does.
 
-      Until then the console is an *organization* console pointed at the platform's own organization.
-      Written up in `mesh-operator/HANDOVER.md`. **S**
+      **`cdn.all_sites` is that contract**, and `tools/all_sites.ts` is the second confined bypass of
+      scoped CRUD in the service — `resolve_site` being the first, and its doc the standard this one
+      had to meet. The invariant here is not *cannot enumerate*, since enumerating is the point. It
+      is: the operator role is checked **before the read**, the query is built from three named
+      fields so nothing a caller sends reaches the repository as structure, and the result is bounded
+      and says when it was cut short.
+
+      `SiteRepo`'s doc named exactly one permitted holder; it now names two, which is the only honest
+      way to widen a stated invariant.
+
+      7 tests, on a **two-organization** fixture. That is the whole design of the test file: on a
+      single-tenant fixture every assertion passes against a scoped read, which is precisely how the
+      bug shipped looking correct. **S**
 
 ## Track E — Fleet
 

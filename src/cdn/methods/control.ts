@@ -72,6 +72,13 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
 
     // Who may do what.
     { key: 'identity.grant_role', auth: 'operator' },
+    /**
+     * The accounts, without credentials.
+     *
+     * `user.find` is not here and cannot be: `passwordHash` is a field of `UserSchema`, so a
+     * generated find returns it and no gate changes that (roadmap F13).
+     */
+    { key: 'identity.people', auth: 'operator' },
     { key: 'organization.find', auth: 'operator' },
     { key: 'organization.get', auth: 'operator' },
     { key: 'organization.create', auth: 'operator' },
@@ -103,6 +110,14 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'site.find', auth: 'operator' },
     { key: 'site.get', auth: 'operator' },
     { key: 'site.create', auth: 'operator' },
+    /**
+     * Every site on the cluster, not just this organization's.
+     *
+     * `site.find` above is scoped to the caller's tenant, which for an operator is whichever
+     * organization they happen to hold a membership in — the platform's own. A control site's list
+     * is meant to be the deployment (roadmap F14).
+     */
+    { key: 'cdn.all_sites', auth: 'operator' },
     /**
      * The whole pipeline in one call, so a browser and a CLI seed a site the same way rather than
      * the CLI owning an orchestration a console would have to reimplement.

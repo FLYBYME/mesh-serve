@@ -165,7 +165,11 @@ export type Site = z.infer<typeof siteCrud.outputSchema>;
  * | | who | what it can do |
  * | --- | --- | --- |
  * | `cdn.resolve_site` | anyone, including a browser | one site, by exact hostname |
- * | `site.find` | a signed-in caller, scoped | their own sites, never exposed |
+ * | `site.find` | a signed-in caller, scoped | their own sites |
+ * | `cdn.all_sites` | a cluster operator | every site on the deployment |
+ *
+ * The third row was added on 2026-09-10 (roadmap F14) and is the same argument a third time:
+ * **administering a cluster is not managing your own sites.** See `allSitesContract` below.
  *
  * `public` because it must be callable with no ticket, and it discloses only what the hostname
  * already serves to anyone who visits it.
@@ -181,6 +185,65 @@ export const resolveSiteContract = defineContract({
     rest: { method: 'GET', path: '/sites/:host' },
     visibility: 'public',
     print: (o) => `${o.host} → ${o.releaseHash ?? 'not deployed'}`,
+});
+
+/**
+ * **Every site on the cluster, for an operator.**
+ *
+ * ## Why `site.find` is not this
+ *
+ * `site` is `scopedBy: 'tenantId'`, so a `find` answers within the caller's *one* organization —
+ * that is the mechanism, it is right, and mesh is frozen so it is not changing. A cluster operator
+ * belongs to no organization by design (`operator` is cluster-scoped, F3), and giving them a
+ * membership somewhere so the scope resolves does not produce an operator's view: it produces
+ * *that organization's* view wearing an operator's badge.
+ *
+ * The console found this the hard way (roadmap F14). It listed the platform organization's
+ * hostnames under a header reading **"What this cluster serves"** and looked completely correct,
+ * because the only cluster anyone had tested on had one organization. A screen that is right by
+ * coincidence is the failure mode this whole file is written against.
+ *
+ * ## The third door
+ *
+ * `resolve_site`'s doc argues that *"resolving a hostname for serving is a different operation from
+ * listing my sites"*. Listing **everyone's** is a third operation with a third invariant, and it
+ * gets a third door rather than a flag on one of the others — a parameter that widens a scoped read
+ * is one missing check away from being this contract anyway, and then the check lives in a handler
+ * instead of in a name.
+ *
+ * What makes it safe is not the query, it is the gate: **cluster-scoped `operator`, verified by the
+ * handler itself** and not merely by the site record that exposes it. That is the same choice
+ * `identity.grant_role` and `identity.people` make, and for the same reason — a contract that
+ * enumerates the platform is the last place to trust that a site was configured correctly.
+ *
+ * ## Deliberately not a general find
+ *
+ * No arbitrary `query`. A hostname substring, an optional tenant filter, and a limit — enough for an
+ * operator console's list and its search box, and not a database cursor pointed at the platform.
+ * `site.find` remains the way to ask a *structured* question, within a scope.
+ */
+export const allSitesContract = defineContract({
+    domain: 'cdn',
+    action: 'all_sites',
+    description: 'Every site on the cluster. Operators only.',
+    inputSchema: z.object({
+        /** Case-insensitive substring of the hostname. Absent lists everything. */
+        search: z.string().min(1).optional(),
+        /** One organization's sites, for an operator looking at a specific tenant. */
+        tenantId: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(500).default(200),
+    }),
+    outputSchema: z.object({
+        sites: z.array(siteCrud.get.outputSchema),
+        /** True when `limit` cut it short, so a console can say so rather than imply completeness. */
+        truncated: z.boolean(),
+    }),
+    rest: { method: 'GET', path: '/cluster/sites' },
+    /** Exposable, and a site that exposes it must gate it at `operator`. The handler checks too. */
+    visibility: 'public',
+    print: (o) => o.sites
+        .map((s) => `${s.host} → ${s.releaseHash ?? 'not deployed'}`)
+        .join('\n') || 'no sites',
 });
 
 /**
