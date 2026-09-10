@@ -332,10 +332,38 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                         }
                     }
 
-                    if (action === 'create' && isRecord(output) && typeof output['id'] === 'string' && userId) {
+                    /**
+                     * **The owner on the row, when there is no caller to read one from.**
+                     *
+                     * This required `userId` — `meta.user.id` — so an organization created by a
+                     * *service* got no membership at all. `ensureControlSite` creates the platform
+                     * organization during the cdn's own boot, in-process, with no caller and no
+                     * request to attribute, and passes the operator's id as `ownerId`. So the
+                     * platform organization had an owner recorded and nobody in it.
+                     *
+                     * That is the state `ownerId` exists to make repairable — `principals.ts` says
+                     * it in as many words: *the user recorded in `ownerId` can always re-own it
+                     * (`reownOrganization`)*. It was only ever read when somebody asked; now it is
+                     * read when nobody can.
+                     *
+                     * What it cost: the first operator resolved to no tenant, so every
+                     * `scopedBy: 'tenantId'` collection refused them — *Scoped collection "site"
+                     * requires a resolved "tenantId" scope* — on a cluster whose only organization
+                     * they owned. The console listed nothing and said *Could not reach the server*.
+                     *
+                     * The caller still wins where there is one. `beforeCrud` overwrites `ownerId`
+                     * with the caller on create, so for a request these two are the same value, and
+                     * preferring `userId` keeps that the single source of truth.
+                     */
+                    const owner = userId
+                        ?? (isRecord(output) && typeof output['ownerId'] === 'string' && output['ownerId'].length > 0
+                            ? output['ownerId']
+                            : undefined);
+
+                    if (action === 'create' && isRecord(output) && typeof output['id'] === 'string' && owner) {
                         const orgId = output['id'];
                         try {
-                            await store.reownOrganization(orgId, userId);
+                            await store.reownOrganization(orgId, owner);
                         } catch {
                             // Ignore if reown fails or already member
                         }

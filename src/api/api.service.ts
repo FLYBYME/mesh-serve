@@ -249,6 +249,12 @@ export class ApiService extends ServiceModule {
             });
         });
 
+        /**
+         * Hoisted out of the `try` so the `catch` can answer with the same allowance the success
+         * path would have. See the `catch` for why an error without one is worse than the error.
+         */
+        let site: Site | undefined;
+
         try {
             /**
              * The preflight resolves the site too, and it has to.
@@ -266,7 +272,7 @@ export class ApiService extends ServiceModule {
                 return send(res, 204, this.cors(origin, preflight), '');
             }
 
-            const site = await this.siteFor(host);
+            site = await this.siteFor(host);
             if (site === undefined) {
                 return send(res, 404, this.cors(origin), {
                     error: 'NO_SITE', message: 'No site is configured for this hostname.',
@@ -426,7 +432,25 @@ export class ApiService extends ServiceModule {
         } catch (error) {
             const { status, body } = toHttpError(error);
             if (status >= 500) this.broker?.logger.error(`[api] ${host}${path ?? ''}`, error);
-            send(res, status, this.cors(origin), body);
+            /**
+             * **`site`, not nothing — an error a browser cannot read is worse than the error.**
+             *
+             * This called `this.cors(origin)` with no site, so an allowance that depends on *which
+             * site is asking* was never granted on any failure. The browser then refuses the
+             * response before any JavaScript sees it, and reports the only thing it knows: *No
+             * 'Access-Control-Allow-Origin' header is present.*
+             *
+             * So a 401 saying exactly what standing is missing arrived as a CORS complaint, and the
+             * page rendered *Could not reach the server* over an api that had answered in
+             * milliseconds. Found bringing up the operator console, where the real message —
+             * *Scoped collection "site" requires a resolved "tenantId" scope* — was sitting in a
+             * response nobody could open.
+             *
+             * A cross-origin page is the ordinary case here, not an edge one: the cdn serves on one
+             * port and the api answers on another, so every deployment is cross-origin until
+             * something puts them behind one name.
+             */
+            send(res, status, this.cors(origin, site), body);
         }
     }
 

@@ -228,13 +228,24 @@ describe('identity on defineCrud', () => {
                 ownerId: reg.userId,
             });
 
-            // Add membership for Dave in the organization
-            await broker.call('membership.create', {
-                userId: reg.userId,
-                organizationId: org.id,
-                roleKey: 'owner',
-                joinedAt: Date.now(),
-            }, { meta: { organizationId: org.id } });
+            /**
+             * **No `membership.create` here, and its absence is the assertion.**
+             *
+             * This used to add Dave's membership by hand. It cannot any more: creating an
+             * organization writes the owner's membership, and a second write is a `CONFLICT` on the
+             * compound key `(organizationId, userId)`.
+             *
+             * What changed is *which* owner it reads. `afterCrud` reowned from `meta.user.id`
+             * alone, so an organization created by a **service** — no caller, no request to
+             * attribute — got no membership at all. `ensureControlSite` does exactly that during
+             * the cdn's boot, which left the platform organization with an owner recorded and
+             * nobody in it, and the first operator resolving to no tenant on a cluster whose only
+             * organization they owned.
+             *
+             * This call is the same shape: `ownerId` supplied, no caller. So it is the regression
+             * test, and it reads better than the version it replaces — the membership being there
+             * without anybody writing it is the behaviour.
+             */
 
             // Call whoami with user context only (no organizationId on meta)
             const identity = await broker.call('identity.whoami', {}, {
@@ -315,20 +326,17 @@ describe('identity on defineCrud', () => {
                 ownerId: userOrg2Id,
             });
 
-            // Create memberships connecting user1 -> org1, user2 -> org2
-            await broker.call('membership.create', {
-                userId: userOrg1Id,
-                organizationId: org1.id,
-                roleKey: 'member',
-                joinedAt: Date.now(),
-            }, { meta: { organizationId: org1.id } });
-
-            await broker.call('membership.create', {
-                userId: userOrg2Id,
-                organizationId: org2.id,
-                roleKey: 'member',
-                joinedAt: Date.now(),
-            }, { meta: { organizationId: org2.id } });
+            /**
+             * The memberships connecting user1 → org1 and user2 → org2 are already there.
+             *
+             * Creating an organization writes its owner's membership, and it now reads the owner
+             * from `ownerId` on the row when there is no caller to read one from — which is exactly
+             * how both organizations above were made. Writing them again is a `CONFLICT` on the
+             * compound key.
+             *
+             * Nothing below asserts a role key, only that each user resolves to their own
+             * organization and to no other. `owner` and `member` are equally that.
+             */
         });
 
         it('confines organization.find to caller memberships', async () => {
