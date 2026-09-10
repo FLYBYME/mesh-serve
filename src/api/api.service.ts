@@ -38,6 +38,7 @@ import { describeContract } from './contracts/api.contract.js';
 import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
 import { callerMeta, executeGate, isOperator, SCOPE_HEADER, type Caller, type Denied } from './methods/gate.js';
+import { isUnresolvedScope, ORGANIZATION_REQUIRED } from './methods/scope.js';
 import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { eventTable, type EventTable } from './methods/events.js';
@@ -360,6 +361,9 @@ export class ApiService extends ServiceModule {
                 contract: found.route.contract,
                 caller,
                 requestedScope: header(req, SCOPE_HEADER),
+                // Whose site this is, so a caller in several organizations acting on it can mean
+                // this one without a header (roadmap F22). Read from the record, never the request.
+                siteScope: site.tenantId,
                 input,
                 ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
             });
@@ -434,6 +438,22 @@ export class ApiService extends ServiceModule {
 
             send(res, successStatus(found.route.method, found.route.contract.action), headers, result);
         } catch (error) {
+            /**
+             * **A scoped read with no scope, for a caller who is signed in, is not a 401.**
+             *
+             * mesh raises it as `UNAUTHORIZED` from its database middleware, and a browser's transport
+             * turns every 401 into *"You need to sign in"* — which the console showed to a signed-in
+             * operator on every list, from the moment they belonged to two organizations (roadmap
+             * F22). Re-worded here, for an authenticated caller only: an anonymous one reaching a
+             * scoped read really does need to sign in, and keeps the 401.
+             */
+            if (isUnresolvedScope(error) && (await this.resolve(bearer(req))) !== undefined) {
+                send(res, ORGANIZATION_REQUIRED.status, this.cors(origin, site), {
+                    error: ORGANIZATION_REQUIRED.code, message: ORGANIZATION_REQUIRED.message,
+                });
+                return;
+            }
+
             const { status, body } = toHttpError(error);
             if (status >= 500) this.broker?.logger.error(`[api] ${host}${path ?? ''}`, error);
             /**
@@ -523,6 +543,7 @@ export class ApiService extends ServiceModule {
                 contract: streamPseudoContract(event.name),
                 caller,
                 requestedScope,
+                siteScope: site.tenantId,
                 input: {},
                 ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
             });
@@ -566,6 +587,7 @@ export class ApiService extends ServiceModule {
                 contract: streamPseudoContract(recheckEvent.name),
                 caller: current,
                 requestedScope,
+                siteScope: site.tenantId,
                 input: {},
                 ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
             });
@@ -661,6 +683,7 @@ export class ApiService extends ServiceModule {
             contract: describePseudoContract(),
             caller,
             requestedScope: header(req, SCOPE_HEADER),
+            siteScope: site.tenantId,
             input: {},
             ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
         });

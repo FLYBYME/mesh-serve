@@ -328,26 +328,19 @@ for (const name of switchable) {
  * checks the caller is actually a member before honouring it, and refuses rather than falling back
  * to a different organization — silently acting in the wrong scope is the failure that matters.
  */
-const authorize = async ({ caller, requestedScope }) => {
+const { resolveScope } = await import('../dist/api/methods/scope.js');
+
+/**
+ * The rule itself is `resolveScope` (`src/api/methods/scope.ts`), where it is tested. It lived here
+ * inline, untested, and the case where a caller belongs to several organizations had never been run:
+ * the first cluster with two tenants found every scoped read answering 401 for its operator (F22).
+ * This hook's only job now is to fetch the caller's memberships.
+ */
+const authorize = async ({ caller, requestedScope, siteScope }) => {
     if (caller === undefined) return { authorized: true };
 
     const me = await app.call('identity.whoami', {}, { meta: { user: { id: caller.userId } } });
-    const memberships = me?.organizations ?? [];
-
-    if (requestedScope !== undefined) {
-        const member = memberships.some((m) => m.organizationId === requestedScope);
-        return member
-            ? { authorized: true, resolvedScope: requestedScope }
-            : { authorized: false, status: 404, code: 'no_such_organization',
-                // 404, not 403: whether an organization exists is not something an unrelated caller
-                // gets to confirm by probing. Same reasoning as `build_start`'s publisher check.
-                message: 'No such organization.' };
-    }
-
-    // Exactly one membership is the ordinary case and needs no header. More than one is ambiguous,
-    // and guessing which is how a request reads the wrong organization's data.
-    if (memberships.length === 1) return { authorized: true, resolvedScope: memberships[0].organizationId };
-    return { authorized: true };
+    return resolveScope({ memberships: me?.organizations ?? [], requestedScope, siteScope });
 };
 
 const api = new ApiService({ port: apiPort, authorize });

@@ -9,6 +9,10 @@
  * See `spec/cli.md` §2.
  */
 
+// The one header the api reads to choose an organization. Imported, not retyped: two spellings of a
+// security-relevant name is how a client and a server quietly stop agreeing.
+import { SCOPE_HEADER } from '../api/methods/gate.js';
+
 /** One call, as `/_describe` reports it. A subset: what a command needs and nothing more. */
 export interface Call {
     readonly key: string;
@@ -179,6 +183,8 @@ export async function callContract(
     call: Call,
     input: Record<string, unknown>,
     ticket?: string,
+    /** Which of the caller's organizations to act in. See `--in-organization` in `run.ts`. */
+    organization?: string,
 ): Promise<{ status: number; body: unknown }> {
     const rest = { ...input };
     const path = call.path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_match, name: string) => {
@@ -211,6 +217,7 @@ export async function callContract(
             host,
             'content-type': 'application/json',
             ...(ticket === undefined ? {} : { authorization: `Bearer ${ticket}` }),
+            ...(organization === undefined ? {} : { [SCOPE_HEADER]: organization }),
         },
         ...(hasBody ? { body: JSON.stringify(rest) } : {}),
     });

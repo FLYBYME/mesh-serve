@@ -1220,7 +1220,16 @@ task** — each is a decision about the platform's own surface that blocks any U
       the platform's surface events stop being operator-only on tenant sites. **M** · surfdns freeze
       gate V15
 
-- [ ] **F22 ★★ A caller in two organizations reads as signed out.** *(found 2026-09-10, same cluster)*
+- [x] **F22 ★★ A caller in two organizations reads as signed out.** *(found 2026-09-10, same cluster.
+      **Fixed the same day**, in three parts. **The mechanism:** a request arrives on a hostname whose
+      site belongs to an organization, and when the caller is a member of it that is what they mean —
+      so the scope resolves to the site's organization without a header. It chooses among the caller's
+      own memberships and cannot add one. The rule moved out of `bin/node.mjs`, where it had never been
+      tested, into `api/methods/scope.ts`. **The copy:** a scoped read with no scope, for a signed-in
+      caller, is re-worded from mesh's 401 into `400 ORGANIZATION_REQUIRED`, which a browser shows as
+      a bad request naming the header instead of *"You need to sign in"*. An anonymous caller keeps
+      the 401. **The CLI:** `--in-organization <id>` sends the header, for acting in an organization
+      other than the site's.)*
 
       Seeding a second tenant made the operator an owner of both organizations (the caller becomes the
       owner — freeze gate V8b). From then on, every scoped read the console makes with no

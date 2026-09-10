@@ -87,6 +87,14 @@ export interface AuthorizeInput {
     readonly caller: Caller | undefined;
     /** What the caller *asked* for. A request, not a grant — the hook decides. */
     readonly requestedScope: string | undefined;
+    /**
+     * The organization that owns the site this request arrived on.
+     *
+     * Not the caller's claim — the api read it from the site record for the `Host` it resolved. A
+     * hook may use it to choose among the caller's **own** memberships, and must not use it to grant
+     * one. See `methods/scope.ts` (roadmap F22).
+     */
+    readonly siteScope?: string | undefined;
     readonly permission: string | undefined;
     readonly gate: Gate;
     readonly contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny>;
@@ -118,6 +126,8 @@ export interface GateRequest {
     readonly contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny>;
     readonly caller: Caller | undefined;
     readonly requestedScope: string | undefined;
+    /** The organization owning the site the request arrived on. Passed to the hook; see `AuthorizeInput`. */
+    readonly siteScope?: string | undefined;
     readonly input: Readonly<Record<string, unknown>>;
     readonly authorize?: AuthorizeHook;
 }
@@ -209,6 +219,7 @@ export async function executeGate(request: GateRequest): Promise<GateOutcome> {
     const result = await request.authorize({
         caller: request.caller,
         requestedScope: request.requestedScope,
+        siteScope: request.siteScope,
         permission,
         gate: request.gate,
         contract: request.contract,

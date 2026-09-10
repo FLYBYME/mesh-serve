@@ -35,7 +35,19 @@ export interface Io {
 export async function run(argv: readonly string[], io: Io): Promise<number> {
     // `--host` wins, then the host `login` remembered. Explicit beats remembered, always.
     const host = valueOf(argv, '--host') ?? currentHost();
-    const rest = withoutFlag(argv, '--host');
+    /**
+     * `--in-organization <id>` — which of your organizations a call acts in. Sent as `x-organization`.
+     *
+     * The api reads that header and nothing else for it, and until 2026-09-10 **nothing could send
+     * it** — so a person in two organizations could not say which one they meant, from here or from
+     * a browser (roadmap F22). A site now defaults to its own organization when you belong to it, so
+     * this is for the case that cannot: acting in an organization other than the site's.
+     *
+     * Not `--organization` or `--organization-id`: `site.seed` takes an `organization` and
+     * `membership.create` an `organizationId`, and a global flag must not swallow a contract's input.
+     */
+    const organization = valueOf(argv, '--in-organization');
+    const rest = withoutFlag(withoutFlag(argv, '--host'), '--in-organization');
     const asJson = rest.includes('--json');
     const words = rest.filter((a) => !a.startsWith('--'));
     const [first, second] = words;
@@ -60,7 +72,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         const call = descriptor.calls.find((c) => c.domain === first && c.action === second);
         if (call === undefined) return await unknown(descriptor, first, second, io);
 
-        return await invoke(site, descriptor, call, rest, ticket, asJson, io);
+        return await invoke(site, descriptor, call, rest, ticket, asJson, io, organization);
     } catch (error) {
         if (error instanceof CliError) {
             io.err(error.message);
@@ -82,6 +94,7 @@ async function invoke(
     ticket: string | undefined,
     asJson: boolean,
     io: Io,
+    organization?: string,
 ): Promise<number> {
     const schema = call.input as Schema | undefined;
     const input = parseArgs(argv, schema);
@@ -94,7 +107,7 @@ async function invoke(
         return 2;
     }
 
-    const { status, body } = await callContract(host, descriptor, call, input, ticket);
+    const { status, body } = await callContract(host, descriptor, call, input, ticket, organization);
 
     if (status >= 400) {
         /**
@@ -112,6 +125,9 @@ async function invoke(
                 : `\nSigned in as ${emailFor(host) ?? 'somebody'}, and this call needs more than that account has.`);
         }
         if (status === 403) io.err(`\n${call.gate?.level ?? 'A higher'} standing is required for ${call.key}.`);
+        if (isRecord(body) && body['error'] === 'ORGANIZATION_REQUIRED') {
+            io.err(`\nName one: mesh-serve --host ${host} --in-organization <id> ${call.domain} ${call.action}`);
+        }
         return 1;
     }
 
