@@ -51,7 +51,7 @@ describe('public is a role like any other', () => {
         expect(permits(world([publicRole]), 'identity.whoami')).toBe(false);
     });
 
-    it('ships with identity, and so do exactly two other roles', () => {
+    it('ships with identity, and so do exactly three other roles', () => {
         /**
          * A framework that shipped `editor` would be guessing at a blog, and one that shipped
          * `admin` would repeat the ambiguity in surfdns #26. That rule holds, and `operator` is
@@ -66,12 +66,21 @@ describe('public is a role like any other', () => {
          *
          * So the test is not relaxed. The list is still exactly the roles the platform itself
          * needs, and anything a deployment means by `author` or `compliance` is still its own.
+         *
+         * **`owner` joined on the same test, for the same reason, on 2026-09-10 (F32).** It is
+         * written as a `roleKey` by `transferOwnership` and `reownOrganization` in both stores —
+         * seven places — and was never a record, so every organization owner on the platform held a
+         * role that did not exist. It is this repository's own string, not a guess about somebody's
+         * product, which is exactly the line this test draws.
          */
-        expect(BUILTIN_ROLES.map((r) => r.key)).toEqual([PUBLIC_ROLE, 'authenticated', 'operator']);
+        expect(BUILTIN_ROLES.map((r) => r.key)).toEqual([PUBLIC_ROLE, 'authenticated', 'operator', 'owner']);
 
         // Cluster-scoped: standing across the deployment, not inside one organization. An
         // organization admin is not a platform operator (`gate.ts`, ADMIN_ROLE / OPERATOR_ROLE).
         expect(BUILTIN_ROLES.find((r) => r.key === 'operator')?.scope).toBe('cluster');
+        // And `owner` is the other half of that sentence: a fact about one organization, never
+        // standing across the deployment. Getting this backwards is surfdns #26.
+        expect(BUILTIN_ROLES.find((r) => r.key === 'owner')?.scope).toBe('organization');
         // Only public is builtin (not deletable) — see roles.builtin comment and F8a
         expect(BUILTIN_ROLES.find((r) => r.key === PUBLIC_ROLE)?.builtin).toBe(true);
         expect(BUILTIN_ROLES.find((r) => r.key === 'authenticated')?.builtin).toBe(false);
@@ -323,5 +332,48 @@ describe('a role that would break the graph is refused', () => {
         // that is refused — the role would appear to work and quietly carry less than intended.
         const typo: Role = { key: 'editor', name: 'Editor', scope: 'organization', builtin: false, inherits: ['veiwer'] };
         expect(inheritanceProblem(typo, [viewer])).toContain('does not exist');
+    });
+});
+
+/**
+ * **F32: the role every organization owner holds, which was not a record.**
+ *
+ * `roleKey: 'owner'` is written by `transferOwnership` and `reownOrganization` in both stores, and
+ * nothing created the role. It hid twice over: those two write the membership document directly, so
+ * `createMembership`'s validation — which refuses a roleKey that does not exist — never ran on the
+ * path that mattered; and the read side is lenient by design, skipping a key it cannot resolve so
+ * that deleting a role does not take every membership naming it out of service.
+ *
+ * Lenient is right, and it is what made this silent: an owner resolved to no role at all and was
+ * denied, and a denial for want of a record is indistinguishable from a denial by policy.
+ */
+describe('an organization owner holds a role that exists', () => {
+    const all = BUILTIN_ROLES;
+
+    it('resolves the roleKey both stores actually write', () => {
+        // The probe that found it: an explicit grant to `owner`, and `permits` answering false
+        // because there was no `owner` to hold it.
+        const held = ['authenticated', 'owner'];
+        const grants: readonly Grant[] = [{ roleKey: 'owner', contract: 'card.update' }];
+
+        expect(permits({ held, all, grants }, 'card.update', 'org-1')).toBe(true);
+    });
+
+    it('is organization-scoped, so it grants nothing outside an organization', () => {
+        // The other half of #26. Ownership is a fact about one organization; if this were
+        // cluster-scoped, an owner of any organization would hold their grants everywhere.
+        const held = ['owner'];
+        const grants: readonly Grant[] = [{ roleKey: 'owner', contract: 'card.update' }];
+
+        expect(permits({ held, all, grants }, 'card.update')).toBe(false);
+        expect(permits({ held, all, grants }, 'card.update', 'org-1')).toBe(true);
+    });
+
+    it('may be a membership roleKey, which a cluster role may not', () => {
+        // `createMembership` refuses a cluster-scoped key. Before F32 it would have refused `owner`
+        // too — for the different and worse reason that the role did not exist.
+        const owner = BUILTIN_ROLES.find((r) => r.key === 'owner');
+        expect(owner?.scope).toBe('organization');
+        expect(BUILTIN_ROLES.find((r) => r.key === 'operator')?.scope).toBe('cluster');
     });
 });

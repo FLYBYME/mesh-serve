@@ -292,8 +292,12 @@ describe('a ticket is identity, not authority', () => {
         // checks for that exact key (`gate.ts`, `requireOperator`), so a deployment without the row
         // has a role its own code requires and nothing can create. Granting it threw out of
         // `onStart` and crash-looped the node.
+        // `owner` joined on 2026-09-10 for a third instance of the same reason (F32): both stores
+        // write `roleKey: 'owner'` when ownership moves, and no code path created the role. The
+        // `whoami` test below had to `upsertRole` one by hand to make its scenario work — a test
+        // creating the missing row while production never did.
         expect((await node.store.listRoles()).map((r) => r.key).sort())
-            .toEqual(['authenticated', 'operator', 'public']);
+            .toEqual(['authenticated', 'operator', 'owner', 'public']);
     }, 30_000);
 });
 

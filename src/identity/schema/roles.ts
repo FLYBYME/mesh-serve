@@ -152,6 +152,38 @@ export const BUILTIN_ROLES: readonly Role[] = [
         builtin: false,
         inherits: [],
     },
+    /**
+     * **The same omission as `operator`, one row down, found the same way.**
+     *
+     * `roleKey: 'owner'` is written by `transferOwnership` and `reownOrganization` in both stores —
+     * seven places — and **nothing ever created the role.** So every organization owner on the
+     * platform holds a role that is not a record.
+     *
+     * It hid because those two write the membership document directly. `createMembership` validates
+     * that the roleKey exists and is organization-scoped, which would have caught it on the first
+     * call; the ownership paths do not go through it.
+     *
+     * It stayed hidden because the read side is *lenient by design*: `resolveRoles` skips a key it
+     * cannot resolve, so that deleting a role does not take every membership naming it out of
+     * service. Correct, and it means an owner resolved to no role and was denied — a denial
+     * indistinguishable from policy. Measured: with an explicit grant of `card.update` to `owner`,
+     * `permits` answered **false**, because there was no `owner` to hold it.
+     *
+     * Organization-scoped, which is the half `operator` is not: ownership is a fact about a person's
+     * place in one organization, not standing across the deployment.
+     *
+     * Roadmap **F32**, and the reason F30's stage 2 could not have worked without it.
+     */
+    {
+        key: 'owner',
+        name: 'Owner',
+        scope: 'organization',
+        description:
+            'Owns one organization: its sites, its releases, and who else belongs to it. Not '
+            + 'platform standing — an organization owner is not an operator.',
+        builtin: false,
+        inherits: [],
+    },
 ];
 
 /**

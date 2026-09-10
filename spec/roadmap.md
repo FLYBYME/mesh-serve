@@ -1546,6 +1546,39 @@ should not.
       (the `gateFor` flip) are what remain, in that order — flipping first would refuse everything on
       a site seeded before stage 2 ran, which is flowboard B1's two-deploy shape for the same reason.
 
+- [x] **F32 ★★★ Every organization owner held a role that was not a record.** *(found and fixed
+      2026-09-10, starting F30's stage 2. The third instance of one omission, and the file that
+      documents the first two is the file it was missing from.)*
+
+      `roleKey: 'owner'` is written by `transferOwnership` and `reownOrganization` — **seven call
+      sites across both stores** — and nothing ever created the `owner` role. `BUILTIN_ROLES` was
+      `public`, `authenticated`, `operator`. So the role every tenant owner holds did not exist.
+
+      **Why it hid, twice over.** `createMembership` validates that a `roleKey` exists and is
+      organization-scoped, and would have caught it on the first call — but the ownership paths write
+      the membership document directly and never go through it. And the read side is **lenient by
+      design**: `resolveRoles` skips a key it cannot resolve, so that deleting a role does not take
+      every membership naming it out of service. That leniency is right, and it is what made this
+      silent — an owner resolved to *no role at all* and was denied, and a denial for want of a
+      record is indistinguishable from a denial by policy.
+
+      Measured before the fix, which is the whole finding: with an explicit grant of `card.update` to
+      `owner`, `permits` answered **false**.
+
+      **And it was already worked around in a test.** `test/identity/module.test.ts`'s `whoami` case
+      calls `store.upsertRole({ key: 'owner', … })` by hand, because its scenario does not work
+      otherwise — a test creating the missing row while nothing in production did. Same shape as F25,
+      where a test asserted the broken value.
+
+      Fixed by adding `owner` to `BUILTIN_ROLES`, **organization-scoped** — the half `operator` is
+      not, because ownership is a fact about a person's place in one organization rather than
+      standing across the deployment. Getting that backwards is surfdns #26.
+
+      **This is why F30's stage 2 could not have worked.** The gate hook resolves a caller's
+      organization role from the membership and hands it to `permits`; for every owner that string
+      was `owner`, and `permits` would have dropped it. Any grant seeded against `owner` would have
+      done nothing, and the seeding would have looked correct. **S**
+
 - [ ] **F31 ★ `npm run typecheck` is red on master, and `npm test` does not run it.** *(found
       2026-09-10 while landing F30's stage 1.)*
 
