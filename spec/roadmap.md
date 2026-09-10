@@ -883,6 +883,36 @@ task** — each is a decision about the platform's own surface that blocks any U
       cannot declare how long it takes, and a hand-kept list of slow ones is wrong the first time
       somebody adds work to a handler. The socket is the real bound. **S**
 
+- [ ] **F13 A console cannot list people, because `user` carries the password hash.** *(found
+      2026-09-10, starting the console's `people` view)* Every action on `userCrud` is `internal`,
+      and rightly: `passwordHash` is a field of `UserSchema`, so a generated `find` returns it. There
+      is no visibility setting that omits a field, which means **`user.find` can never be exposed**
+      and the obvious read for a people screen does not exist. `organization`, `membership` and
+      `role` are all exposable and already on the control site; the accounts themselves are the hole.
+
+      The same shape as F10 and as `cdn.site_edit`: a generated action carries a field it must not,
+      so the answer is **a purpose-built contract rather than a visibility flag** — an
+      `operator`-gated `identity.people` returning id, email, displayName, roles, `suspendedAt` and
+      `provisional`, and nothing else. A contract that does not have the field cannot be talked into
+      returning it, which is the argument `site.contract.ts` already makes about `releaseHash`.
+
+      Blocks stage 4 of the UI plan. **S**
+
+- [ ] **F14 An operator console shows one organization's sites, not the cluster's.** *(found
+      2026-09-10, verifying stage 3)* `site` is `scopedBy: 'tenantId'` and mesh is frozen, so a
+      caller resolves to exactly one organization and `site.find` answers within it. The operator now
+      resolves to `platform` (F11), so the console works — and on a cluster with one organization
+      *the platform's hostnames* and *the cluster's hostnames* are the same set, which is why the
+      screen looks right and the header is already lying. It says **"What this cluster serves"**.
+
+      Two doors again, and `cdn.resolve_site` has already made this argument twice: serving is not
+      managing, and managing your own is not administering everyone's. Listing every site on the
+      cluster is a third operation and wants a third contract — `operator`-gated, unscoped, on the
+      cdn, reading the collection directly the way the serving path does.
+
+      Until then the console is an *organization* console pointed at the platform's own organization.
+      Written up in `mesh-operator/HANDOVER.md`. **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
