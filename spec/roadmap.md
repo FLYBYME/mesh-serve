@@ -1404,25 +1404,28 @@ should not.
       is partial — `flowboard-agent`'s `planner` names `card.create` and nothing names `card.update`,
       so with the agent part composed a tenant may create a card and still not move it.
 
-      **The shape of the answer, not yet chosen.** `gateFor` is handed a key and nothing else, so it
-      cannot tell `cdn.deploy` from `card.update` except by knowing the platform's own domains. Three
-      candidates, and the third is probably right:
+      **The shape of the answer — settled 2026-09-10, and it was already in the repository.** Three
+      candidates were written here (a domain-based default; per-contract gates in the site record; an
+      application declaring the gate it wants). All three are workarounds for a question `gateFor`
+      cannot answer, and the reason it cannot is that **it is handed a key and nothing else**. It has
+      to guess what a contract does from how the string is spelled.
 
-      1. *A contract whose domain this repository does not define defaults to `user`.* One line, and
-         it makes a hosted application usable by its own members. But it reads as *a stranger's
-         writes are less dangerous than ours*, which is not a principle.
-      2. *A site's record names per-contract gates.* Already representable — `site.mesh[].contracts`
-         carries `auth` per key — so this is a seed-time flag rather than a platform change. Correct
-         and unusable: it is a flag per contract, per site, typed by hand.
-      3. **An application declares the gate its own contracts want, and the site owner's policy may
-         only tighten it.** The mirror of the agent role map, which already does exactly this for
-         agents and is the piece that proves the mechanism works. A part must never *choose* its own
-         gate — `grants.ts` opens by saying so — but declaring a *request* that a site may refuse is
-         a different act, and it is the one that carries the knowledge to where it lives.
+      There is no need to guess, because **the permission name and the contract key are the same
+      string**. `permits(roles, grants, 'card.update')` asks a question that needs no classification
+      table: does any role this caller holds carry a grant covering `card.update`? A contract nobody
+      has granted is refused — fail-closed, without knowing what it does. That is `gateFor`'s
+      instinct with the guesswork removed.
 
-      Whichever it is, `gateFor`'s default must stay `operator` for this repository's own domains.
-      **M** · surfdns freeze gate: this decides what a site's `auth` level means, so it belongs in
-      the freeze rather than after it.
+      **The evaluator exists.** `identity/schema/roles.ts` is a full role-and-grant system: roles as
+      records, grants as rows, `grantCovers` patterns, `cluster` vs `organization` scope, deny by
+      default. It is not a sketch — it opens by naming this exact mistake (*"surfdns compiled `public
+      | user | admin` into its source"*) and it has its own test file. Nothing in the request path
+      calls it. See **F30**, which is this item's real cause; F27 closes when F30 does.
+
+      `gateFor`'s default must stay `operator` for this repository's own domains, and under F30 it
+      does — by an operator role that holds those grants, rather than by a fallthrough.
+      **M** · surfdns freeze gate V16: this decides what a site's `auth` level means, so it belongs
+      in the freeze rather than after it.
 
 - [x] **F29 ★★★ Changing a password did not end a single session, and nothing consumed a revocation
       at all.** *(found and fixed 2026-09-10, writing the fixture F27 said was missing.)*
@@ -1464,6 +1467,74 @@ should not.
       sign you out", and that was wrong — the probe sent `{}` to a contract whose `token` is
       required, so nothing was revoked and the 400 was correct. Sign-out always worked. Changing a
       password never did.*
+
+- [ ] **F30 ★★★ The authorization system is built, tested and unreachable: nothing in the request
+      path calls `permits`.** *(found 2026-09-10, tracing what a `permission` gate would actually
+      evaluate. The parent of F27, and the fifth instance of this repository's recurring shape.)*
+
+      **What exists.** `identity/schema/roles.ts` is a complete role-and-grant model, and it is not a
+      sketch — it is 200 lines of decided design with reasons attached:
+
+      - `RoleSchema` — a role is a **row**: key, name, scope, description, builtin.
+      - `GrantSchema` — a row per (role, contract), *"because the interesting queries run the other
+        way — who can call this — and because two administrators editing different roles must not
+        write the same document."*
+      - `grantCovers(pattern, contract)` — `post.*` covers `post.list` and not `postal.list`.
+        Deliberately no `*`: *"a role that can call everything is one nobody has to think about, and
+        thinking about it is the point."*
+      - `RoleScopeSchema` — `cluster` vs `organization`, **required and enforced**, because `admin`
+        meaning two different things is surfdns issue #26 (F3).
+      - `permits()` and `surfaceOf()` — deny by default, grants only ever add, *"a system where a
+        role could remove a permission is one where nobody can answer what can this person do
+        without evaluating order."*
+      - `BUILTIN_ROLES` — `public`, `authenticated`, `operator`, with `operator` added because the
+        platform had checked for a role that was never a record.
+
+      Its opening line names the mistake it was written to end: *"Roles are records, not an enum —
+      mesh-web spec/auth.md §5, decided. **surfdns compiled `public | user | admin` into its
+      source.** That cannot survive identity being a base for other projects, because every
+      project's roles are different."*
+
+      **What calls it.** In `src/`, `permits()` has exactly one caller: the handler of
+      `identity.permits`, at `identity/module.ts:714`. `identity.permits` has **zero callers** in
+      `src/`, `test/` or `bin/`, and is not in `CONTROL_CONTRACTS`, so it is not exposed to be
+      called. `test/identity/roles.test.ts` exercises `permits` directly, in isolation, and passes.
+
+      **What the request path does instead.** `checkCoarse` (`api/methods/gate.ts:249`) switches on
+      the four-value enum the file above was written to replace, and `isOperator` is
+      `caller.roles.includes('operator')` — a raw string compare, not a grant lookup. So the enum
+      mesh-serve's own schema calls a mistake is still the thing that decides every request.
+
+      **And the seam meant to bridge them is unevaluated.** `Gate` has two kinds; `permission` takes
+      an arbitrary key (`dns.write`, `identity.invite`) that *"the site's `authorize` hook evaluates
+      in the caller's scope"*. The hook actually installed, `membershipAuthorize`, destructures
+      `{ caller, requestedScope, siteScope }` and never reads `permission`, then returns
+      `resolveScope(...)` — so a permission-gated contract passes the coarse gate on *is anyone
+      signed in* and is waved through. **`permission: 'dns.write'` behaves exactly like
+      `auth: 'user'`.** Not currently reachable, because no site declares a permission entry and
+      `grantsFor` only ever emits `auth` levels. The irony is that the *no-hook* path fails closed
+      and loudly (`NO_AUTHORIZE_HOOK`, *"a misconfigured deployment must fail closed"*); it is the
+      configured path that does not check.
+
+      **The fix**, and it is a wiring job rather than a design one: `executeGate` resolves a
+      `permission` gate by asking identity, `membershipAuthorize` evaluates it with the caller's
+      roles and scope, and `gateFor`'s fallthrough stops being a guess about a string. F27 falls out
+      of this: `card.update` is refused because no role grants it, not because the key did not match
+      a regex.
+
+      **Two things to decide while wiring, neither yet chosen:**
+
+      1. **Role inheritance.** `roles.ts` has none. Without it `admin` cannot be *`user` plus these*
+         and every shared grant is copied. paas's v1 `roles` service had `inherits` with recursive
+         resolution — worth porting, and if it is, it needs the cycle guard that version lacked: A
+         inherits B inherits A recurses without a visited set.
+      2. **Where grants are stored and who may write them.** A grant is data, and data is editable by
+         whoever can write the collection. A tenant granting themselves `**` ends the isolation V15
+         measured. The write path must be scoped and subset-checked — *a role may only grant what its
+         organization already holds* — which is the "may only tighten" rule from F27's third
+         candidate, applied to grants instead of contracts.
+
+      **M** · surfdns freeze gate V16, with F27.
 
 ## Track E — Fleet
 
