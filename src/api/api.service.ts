@@ -996,7 +996,25 @@ export class ApiService extends ServiceModule {
                 const contract = lookup(exposed.key);
                 if (contract === undefined) continue;
                 seen.add(exposed.key);
-                entries.push({ contract, auth: 'user' });
+                /**
+                 * **The gate the surface declares, not `user`.**
+                 *
+                 * This pushed `auth: 'user'` for every surface contract, while the route table
+                 * enforces what `surfaceContracts` declares — `operator` for `approval.find` and
+                 * `approval.get`, deliberately, because a queue row carries the frozen input of an
+                 * agent's parked call. So `/_describe` advertised the queue to every member and the
+                 * route refused them: flowboard, signed in as its own tenant owner, called
+                 * `GET /api/approvals` because the descriptor said it could, and got 403. Found by
+                 * the V9 sweep and confirmed on the first two-tenant cluster.
+                 *
+                 * A descriptor that disagrees with its routes is the one thing it must not be. It is
+                 * what a generated client is built from.
+                 */
+                if ('auth' in exposed) {
+                    entries.push({ contract, auth: exposed.auth });
+                } else {
+                    entries.push({ contract, permission: exposed.permission });
+                }
             }
         }
 

@@ -56,17 +56,20 @@ export const PLATFORM_SLUG = 'platform';
  *
  * The gates are deliberate rather than uniform:
  *
- * - `ticket_issue` and `set_password` are **public**, because signing in and claiming a provisional
- *   account are what somebody with no session does. `set_password` takes no `userId` — the caller
- *   *is* the subject — which is what makes public safe.
- * - `register` is **absent**. On a tenant site it is how people join; on the platform's own control
- *   surface it would be a way to mint accounts on a machine you have not signed in to.
+ * - `ticket_issue` is **public**, because signing in is what somebody with no session does.
+ * - `set_password` is **user**. It was public, on the argument that claiming a provisional account is
+ *   something done with no session. It is not: the claim is *sign in with the printed password, then
+ *   set your own*, so a session always exists. The contract's own comment already said *"`user`, not
+ *   `public` … public would let anybody set anybody's"*, the handler already refused an anonymous
+ *   caller, and the gate was the one place saying otherwise (roadmap **F18**). The gate still admits a
+ *   provisional caller here and nowhere else — that is `checkCoarse`, and it runs before the level.
+ * - `register` is **operator**. Absent until 2026-09-10; see its entry below for why it had to exist.
  * - everything else is **operator**, because it changes what the platform runs.
  */
 export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     // Signing in, and the one thing a provisional account may do.
     { key: 'identity.ticket_issue', auth: 'public' },
-    { key: 'identity.set_password', auth: 'public' },
+    { key: 'identity.set_password', auth: 'user' },
     { key: 'identity.whoami', auth: 'user' },
     { key: 'identity.sign_out', auth: 'user' },
 
@@ -140,7 +143,19 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
      */
     { key: 'site.find', auth: 'operator' },
     { key: 'site.get', auth: 'operator' },
-    { key: 'site.create', auth: 'operator' },
+    /**
+     * **`site.create` is deliberately not here.** Removed 2026-09-10 (roadmap **F17**).
+     *
+     * Its generated input is the whole stored record, so it carries `mesh` — the site's exposed
+     * contract list *and the gate on each* — and `releaseHash`. A caller who could create a site could
+     * choose the platform's authorization for that hostname and point it at any release, with none of
+     * `cdn.deploy`'s checks. `releaseHash` is the exact field `cdn.site_edit` exists to keep out of an
+     * exposed `site.update`; this was the same field through a different door.
+     *
+     * Nothing outside the process ever called it. `site.seed` creates sites, in-process, with the
+     * checks, and is the door. If a bare create is ever needed it is a purpose-built contract taking
+     * a hostname and an application and nothing else.
+     */
     /**
      * The whole pipeline in one call, so a browser and a CLI seed a site the same way rather than
      * the CLI owning an orchestration a console would have to reimplement.

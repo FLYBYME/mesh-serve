@@ -1083,9 +1083,11 @@ task** — each is a decision about the platform's own surface that blocks any U
       *why is this safe to expose?* — cannot even be answered for these 23, because **they are not
       exposed**, and the file that lists them says they are. **M** · surfdns freeze gate V9
 
-- [ ] **F17 ★★★ `site.create` is exposed, and its generated input carries `mesh` — so a caller
+- [x] **F17 ★★★ `site.create` is exposed, and its generated input carries `mesh` — so a caller
       defines a hostname's entire exposure surface and every gate on it.** *(found 2026-09-10 by the
-      V9 sweep; verified against the live descriptor rather than read off the schema)*
+      V9 sweep; verified against the live descriptor rather than read off the schema. **Fixed the
+      same day:** removed from `CONTROL_CONTRACTS`, with a test that it stays out. Nothing outside the
+      process had ever called it — `site.seed` creates sites in-process, with the checks.)*
 
       What `/_describe` actually advertises for `site.create` on a control site:
 
@@ -1125,8 +1127,11 @@ task** — each is a decision about the platform's own surface that blocks any U
       purpose-built contract taking `host` and `application` and nothing else. **S** ·
       surfdns freeze gate V9, V2
 
-- [ ] **F18 ★★ `identity.set_password` is exposed `public` and its own contract says it must not be.**
-      *(found 2026-09-10 by the V9 sweep)*
+- [x] **F18 ★★ `identity.set_password` is exposed `public` and its own contract says it must not be.**
+      *(found 2026-09-10 by the V9 sweep. **Fixed the same day:** gated `user`. Confirmed first that
+      the claim path always has a session — the bring-up signs in with the printed password and then
+      sets one — and that `checkCoarse` admits a provisional caller to this action before the level is
+      checked.)*
 
       Three statements, two of which disagree:
 
@@ -1145,6 +1150,46 @@ task** — each is a decision about the platform's own surface that blocks any U
       person doing that has the printed password, so they can sign in first — which the bring-up
       already does. Confirm that is the only path, then gate it `user` and delete the contradiction.
       **S**
+
+- [x] **F19 ★★★ A mounted service's query strings were never coerced, because it brings its own
+      zod.** *(found and fixed 2026-09-10, on the first two-tenant cluster)*
+
+      ```
+      GET /api/cards?limit=5      →  400  limit: Expected number, received string
+      GET /api/releases?limit=5   →  200                         (same node, same second)
+      ```
+
+      `coerceToSchema` recognised field types with `instanceof z.ZodNumber` against the zod this
+      repository imports. A service loaded with `--service` is built from **its own copy** —
+      flowboard's contracts come from `flowboard/node_modules/zod`, the same version and a different
+      module instance — so every `instanceof` was false for every field it declared, and nothing was
+      coerced. Its lists worked only because the browser never sends `limit`. **Pagination sends it on
+      every call (freeze gate V4)**, so this would have broken every external service's lists the day
+      paging landed.
+
+      Every test passed throughout, because every schema in them came from the one copy of zod the
+      tests import. The fix reads `_def.typeName` — the discriminant zod itself switches on, the same
+      string in every copy — through type predicates rather than casts. The regression test builds its
+      schemas from zod's CommonJS build, which is a genuinely separate class set, and first asserts
+      that it is, since a test using the same copy would prove nothing.
+
+      **Worth checking elsewhere:** any other `instanceof z.*` in this repository that can see a
+      schema a mounted service built. **S**
+
+- [x] **F20 ★★ `/_describe` advertised every surface contract at `user`, and the route enforced
+      something else.** *(found by the V9 sweep, confirmed and fixed 2026-09-10)*
+
+      `surfaceContracts` declares `approval.find` and `approval.get` at `operator`, deliberately — a
+      queue row carries the frozen input of an agent's parked call. The route table enforced that. The
+      descriptor pushed `auth: 'user'` for all four. So flowboard, signed in as its own tenant owner,
+      called `GET /api/approvals` because its descriptor said it could, and got **403**. A descriptor
+      that disagrees with its routes is the one thing it must not be: it is what a generated client is
+      built from.
+
+      Now the descriptor uses the gate the surface declares. Note what it does **not** settle:
+      flowboard's queue view still cannot be read by a tenant member, now honestly. Whether an
+      organization's own members should see its own approval queue is a product question for flowboard,
+      and the answer is not to loosen the gate on every site. **S**
 
 ## Track E — Fleet
 

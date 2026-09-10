@@ -10,15 +10,52 @@
  * Anything the schema does not describe as a number, boolean or array passes through untouched.
  *
  * Carried forward from `archive/pre-rewrite`, which got this right.
+ *
+ * ## Types are recognised by name, not by class — and a tenant is why
+ *
+ * This used `instanceof z.ZodNumber`, against the zod this repository imports. A service mounted
+ * with `--service` brings **its own copy** of zod — flowboard's contracts are built from
+ * `flowboard/node_modules/zod`, a different module instance of the same version — so every
+ * `instanceof` was false for every one of its fields, nothing was coerced, and
+ *
+ *     GET /api/cards?limit=5  →  400  limit: Expected number, received string
+ *
+ * while `GET /api/releases?limit=5` on the same node answered 200. Found the first time a second
+ * tenant's services ran on a cluster (freeze gate V15), and it is exactly the call pagination makes
+ * on every request (V4) — so it would have broken every external service's lists the day paging
+ * landed, and passed every test here, because every test schema is built from this repository's zod.
+ *
+ * `_def.typeName` is the discriminant zod itself switches on, and it is the same string in every
+ * copy. The predicates below narrow on it, so the methods called afterwards (`unwrap`, `shape`,
+ * `element`) are reached through a checked type rather than a cast.
  */
 
 import { z } from '@flybyme/mesh';
 
+/** zod's own discriminant for a schema, read without trusting which copy of zod built it. */
+function kindOf(schema: z.ZodTypeAny): string | undefined {
+    const def: unknown = schema._def;
+    if (typeof def !== 'object' || def === null || !('typeName' in def)) return undefined;
+    return typeof def.typeName === 'string' ? def.typeName : undefined;
+}
+
+const isObject = (s: z.ZodTypeAny): s is z.AnyZodObject => kindOf(s) === 'ZodObject';
+const isOptional = (s: z.ZodTypeAny): s is z.ZodOptional<z.ZodTypeAny> => kindOf(s) === 'ZodOptional';
+const isNullable = (s: z.ZodTypeAny): s is z.ZodNullable<z.ZodTypeAny> => kindOf(s) === 'ZodNullable';
+const isDefault = (s: z.ZodTypeAny): s is z.ZodDefault<z.ZodTypeAny> => kindOf(s) === 'ZodDefault';
+const isEffects = (s: z.ZodTypeAny): s is z.ZodEffects<z.ZodTypeAny> => kindOf(s) === 'ZodEffects';
+const isArray = (s: z.ZodTypeAny): s is z.ZodArray<z.ZodTypeAny> => kindOf(s) === 'ZodArray';
+const isNumber = (s: z.ZodTypeAny): boolean => kindOf(s) === 'ZodNumber';
+const isBoolean = (s: z.ZodTypeAny): boolean => kindOf(s) === 'ZodBoolean';
+const isRecordLike = (s: z.ZodTypeAny): boolean => {
+    const kind = kindOf(s);
+    return kind === 'ZodObject' || kind === 'ZodRecord';
+};
+
 /** The field map of an object schema, looking through optional, nullable and default wrappers. */
 function shapeOf(schema: z.ZodTypeAny): Record<string, z.ZodTypeAny> | undefined {
     const inner = unwrap(schema);
-    if (inner instanceof z.ZodObject) return inner.shape as Record<string, z.ZodTypeAny>;
-    return undefined;
+    return isObject(inner) ? inner.shape : undefined;
 }
 
 function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
@@ -26,16 +63,16 @@ function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
     // Bounded rather than `while (true)`: a self-referential schema would otherwise spin here, and
     // a request thread spinning is worse than a request failing.
     for (let i = 0; i < 10; i++) {
-        if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
-            current = current.unwrap() as z.ZodTypeAny;
+        if (isOptional(current) || isNullable(current)) {
+            current = current.unwrap();
             continue;
         }
-        if (current instanceof z.ZodDefault) {
-            current = current.removeDefault() as z.ZodTypeAny;
+        if (isDefault(current)) {
+            current = current.removeDefault();
             continue;
         }
-        if (current instanceof z.ZodEffects) {
-            current = current.innerType() as z.ZodTypeAny;
+        if (isEffects(current)) {
+            current = current.innerType();
             continue;
         }
         break;
@@ -60,23 +97,23 @@ export function coerceToSchema(
 }
 
 function coerce(field: z.ZodTypeAny, value: unknown): unknown {
-    if (field instanceof z.ZodArray) {
+    if (isArray(field)) {
         // `?tag=a&tag=b` arrives as an array; `?tag=a` arrives as a scalar. A contract asking for an
         // array should get one either way.
         const items = Array.isArray(value) ? value : [value];
-        return items.map((item) => coerce(unwrap(field.element as z.ZodTypeAny), item));
+        return items.map((item) => coerce(unwrap(field.element), item));
     }
 
     if (typeof value !== 'string') return value;
 
-    if (field instanceof z.ZodNumber) {
+    if (isNumber(field)) {
         // An empty string is not zero. Leave it and let the schema reject it with a real message.
         if (value.trim() === '') return value;
         const n = Number(value);
         return Number.isNaN(n) ? value : n;
     }
 
-    if (field instanceof z.ZodBoolean) {
+    if (isBoolean(field)) {
         if (value === 'true') return true;
         if (value === 'false') return false;
         return value;
@@ -100,7 +137,7 @@ function coerce(field: z.ZodTypeAny, value: unknown): unknown {
      * it with its own message. A coercion that throws would turn a bad query into a 500, and the
      * whole point of coercing at the boundary is that a bad request is a 400 naming the field.
      */
-    if (field instanceof z.ZodObject || field instanceof z.ZodRecord) {
+    if (isRecordLike(field)) {
         const text = value.trim();
         if (!text.startsWith('{') && !text.startsWith('[')) return value;
 

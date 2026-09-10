@@ -48,13 +48,26 @@ describe('the control contract list', () => {
     });
 
     /**
-     * Signing in and claiming a provisional account are what somebody with **no session** does, so
-     * they cannot need one. `set_password` takes no `userId` — the caller *is* the subject — which is
-     * what makes `public` safe here rather than merely convenient.
+     * **Signing in is the only thing a caller with no session may do here.**
+     *
+     * `set_password` used to be public too, on the argument that claiming a provisional account is
+     * done with no session. It is not — the claim is *sign in with the printed password, then set
+     * your own* — and the contract, the handler and the CLI all already required a session. The gate
+     * was the one place disagreeing (roadmap F18). The provisional caller still reaches it: that is
+     * `checkCoarse`, which runs before the level.
      */
-    it('lets an unauthenticated caller sign in and claim an account, and nothing else', () => {
+    it('lets an unauthenticated caller sign in, and nothing else', () => {
         const open = CONTROL_CONTRACTS.filter((c) => c.auth === 'public').map((c) => c.key).sort();
-        expect(open).toEqual(['identity.set_password', 'identity.ticket_issue']);
+        expect(open).toEqual(['identity.ticket_issue']);
+    });
+
+    /**
+     * **`site.create` is not exposed** (roadmap F17). Its generated input carries `mesh` — the site's
+     * contracts and the gate on each — and `releaseHash`, so a caller could choose a hostname's
+     * authorization and what it serves with none of `cdn.deploy`'s checks. `site.seed` is the door.
+     */
+    it('does not expose a bare site create', () => {
+        expect(CONTROL_CONTRACTS.map((c) => c.key)).not.toContain('site.create');
     });
 
     /**
@@ -95,7 +108,7 @@ describe('the control contract list', () => {
         // The four that are not operator are the session ones, and they are named rather than
         // counted so that adding a fifth has to be a decision somebody writes down.
         expect(weak).toEqual([
-            'identity.set_password@public',
+            'identity.set_password@user',
             'identity.sign_out@user',
             'identity.ticket_issue@public',
             'identity.whoami@user',

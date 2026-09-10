@@ -182,25 +182,59 @@ export async function site_seed(
 
     // ------------------------------------------------------------------ compose
 
+    /**
+     * **The kernel and the parts come from the catalog, not only from this call.**
+     *
+     * Seeding used to compose from exactly what the same call had just released, which assumes the
+     * caller publishes the whole world. True for the first tenant on a cluster and never for the
+     * second: a part name is one global namespace, so a second organization naming the framework
+     * repositories is refused *No such part* (they belong to `platform`), and naming only its own
+     * repository was refused *No kernel was released*. Two correct refusals with no path between
+     * them — found building the first two-tenant cluster (freeze gate V15).
+     *
+     * `cdn.compose` never needed this restriction. `catalog.resolve` finds the one kernel itself and
+     * resolves any part by name and range across publishers. So a part released here is pinned to
+     * the caret of what was just released, and a part only *named* — `--parts ui,auth,flowboard` with
+     * only flowboard's repository — resolves to the newest the catalog has.
+     */
     const kernelName = [...kinds].find(([, kind]) => kind === 'kernel')?.[0];
     const kernelVersion = kernelName === undefined ? undefined : versions.get(kernelName);
-    if (kernelVersion === undefined) {
-        throw new ClientError(
-            'No kernel was released, so there is nothing to compose against. The kernel repository '
-            + 'is the first one imported; check what it declared.',
-            'no_kernel', 422,
-        );
-    }
 
-    const composing = parts
+    const releasedHere = parts
         .filter((part) => part.name !== kernelName)
         .filter((part) => input.parts === undefined || input.parts.includes(part.name))
         .map((part) => ({
             kind: part.kind === 'application' ? 'application' as const : 'extension' as const,
             id: part.name,
             version: rangeFor(part.version),
-        }))
-        .sort((a, b) => (a.id < b.id ? -1 : 1));
+        }));
+
+    const fromCatalog: { kind: 'application' | 'extension'; id: string; version: string }[] = [];
+    for (const name of input.parts ?? []) {
+        if (releasedHere.some((part) => part.id === name)) continue;
+        const known = await call('part.find_one', { query: { name } }, as) as { kind?: string } | null | undefined;
+        if (known === null || known === undefined) {
+            problems.push(`${name} was named but nobody has published it, and it was not in any repository given.`);
+            continue;
+        }
+        if (known.kind === 'kernel') continue;
+        fromCatalog.push({
+            kind: known.kind === 'application' ? 'application' : 'extension',
+            id: name,
+            // Newest published. The compose step checks every part's kernel range and required
+            // parts, so a mismatch is a named problem rather than a silent pin.
+            version: '*',
+        });
+    }
+
+    if (problems.length > 0) {
+        throw new ClientError(
+            `${String(problems.length)} named part(s) could not be found:\n${problems.join('\n')}`,
+            'part_not_found', 422,
+        );
+    }
+
+    const composing = [...releasedHere, ...fromCatalog].sort((a, b) => (a.id < b.id ? -1 : 1));
 
     /**
      * The site is named after what it serves.
@@ -220,7 +254,10 @@ export async function site_seed(
         ?? 'console';
 
     const composed = await call('cdn.compose', {
-        kernel: input.kernelRange ?? rangeFor(kernelVersion),
+        // A kernel released in this call is pinned to its own caret. A seed that released none — the
+        // second tenant, composing against the platform's kernel — takes the newest the catalog has,
+        // and every part's declared kernel range is still checked by compose.
+        kernel: input.kernelRange ?? (kernelVersion === undefined ? '*' : rangeFor(kernelVersion)),
         parts: composing,
         name: input.releaseName ?? application,
         rolling: true,
