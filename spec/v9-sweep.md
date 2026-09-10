@@ -354,3 +354,77 @@ as an operator, would have found findings 1 and 5 and would find the next one.
   a generated client's exposure hash never matches a site's anyway; the verification at
   `api.service.ts:313` fires only when a client sends the header. The gate discrepancy between
   `/_describe` and the route table is not conditional and is the part I am confident about.
+
+---
+
+# The other half: what happened when they were run
+
+*Added 2026-09-10. Everything above is static — the header says so: **"Read-only. Nothing was run."**
+Its own summary line closed with **"exercised through the real HTTP gate by any test, anywhere: 3"**,
+and that number was the finding. This section is the rest.*
+
+The live two-tenant cluster, three accounts, every hostname:
+
+| account | roles | organizations |
+| --- | --- | --- |
+| `operator@node.invalid` | `operator` | Platform **and** Flowboard Inc, owner of both (V8b) |
+| `owner@flowboard.test` | none | Flowboard Inc |
+| `loner@nowhere.test` | none | **none** |
+
+Two passes. Every parameterless read (`find`, `whoami`, `check`, `status`, `resolve`) called for
+real, and every write **probed with an empty body** — which separates the two halves of a refusal
+without performing one: `403` means the gate refused, `400` means the gate *passed* and only the
+input was wrong. Nothing was created, changed or deleted by the sweep.
+
+## The isolation held, everywhere
+
+Worth stating first because it is the thing that would matter most if it were false, and three
+separate mechanisms were exercised at once — the coarse gate, the scoped read, and F22's
+site-scope resolution.
+
+- On `127.0.0.1`, the control site, **only the operator got through at all**. Both other accounts
+  are `403` on all twelve reads and on every write except the three that are `public` by design.
+- On `flowboard.localhost`, the tenant owner read the board and `loner@nowhere.test` got
+  `400 ORGANIZATION_REQUIRED` on all seven collections — and `404 no_such_organization` when it named
+  Flowboard Inc explicitly. It read a card in full that morning.
+- On `console.localhost`, Platform's own console, the tenant owner is **not** refused — they get
+  `200` on `site.find`, `release.find`, `membership.find` and `organization.find`, and see **only
+  their own rows**: one site, five releases, their own two memberships. That is the scoped read doing
+  exactly its job on a hostname somebody else owns. Whether Platform's console *should* answer a
+  tenant at all is a product question and not a leak.
+- The operator sees two sites on `console.localhost` and Flowboard's board on `flowboard.localhost`,
+  with no header either time. That is F22, and it is the same account both times.
+
+## What it found instead: three ways the platform refuses people it should not
+
+| | | |
+| --- | --- | --- |
+| **F26** ★★★ | every error a hosted service raises becomes `500 INTERNAL_ERROR` | fixed |
+| **F28** ★★ | nobody can change their own password on a seeded site | fixed |
+| **F27** ★★★ | a tenant cannot write to its own application at all | logged, not fixed |
+
+F26 and F28 are in `spec/roadmap.md` with their evidence. **F27 is the one this section exists for**,
+because it is invisible to every static reading — `gateFor` is correct about each contract it was
+written for, the site record is correct, the descriptor is correct, and the result is a board whose
+owner may read it and change nothing.
+
+```
+flowboard.localhost, signed in as the account that owns Flowboard Inc:
+
+  card.find      200      card.create    403
+  project.find   200      card.update    403
+  sprint.find    200      project.create 403
+  ...                     worktree.*     403  (all nine)
+```
+
+## The method is the point
+
+Each of F23, F25, F26, F27 and F28 was found by making a request, and none of them by reading the
+source — F25 in particular had a test in this repository **asserting the broken value**, under a
+comment explaining the failure it existed to prevent. The static sweep above is what said where to
+look; running it is what said what was wrong.
+
+The gap it names is still open: there is no fixture that boots a site and calls its exposed set as
+more than one kind of caller. `test/integration/api.test.ts` is the closest and touches four
+contracts on its own fixture sites. **A sweep is not a test** — this one ran once, by hand, against
+a cluster that will be torn down.
