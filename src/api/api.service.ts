@@ -37,7 +37,7 @@ import { hostOf } from '../cdn/methods/hostname.js';
 import { describeContract } from './contracts/api.contract.js';
 import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
-import { callerMeta, executeGate, isOperator, SCOPE_HEADER, type Caller } from './methods/gate.js';
+import { callerMeta, executeGate, isOperator, SCOPE_HEADER, type Caller, type Denied } from './methods/gate.js';
 import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { eventTable, type EventTable } from './methods/events.js';
@@ -63,6 +63,9 @@ export const API_CALL_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** Where a browser subscribes. One path per site, not one per event: a stream carries them all. */
 export const EVENTS_PATH = '/events';
+
+/** The events a subscription left out because the caller may not receive them, comma separated. */
+export const OMITTED_HEADER = 'x-events-omitted';
 
 /** Where a browser discovers the site's exposure descriptor. */
 export const DESCRIBE_PATH = '/_describe';
@@ -495,14 +498,25 @@ export class ApiService extends ServiceModule {
         const requestedScope = header(req, SCOPE_HEADER);
 
         /**
-         * One gate for the whole stream, at its strictest.
+         * **Each event at its own gate, and the caller subscribed to the ones they pass.**
          *
-         * A subscription carries several events with possibly different gates, and a connection is
-         * one thing that either exists or does not. So it is opened only if the caller passes **every**
-         * event's gate, and `offer` filters per event afterwards — which is the conservative order:
-         * a caller who could receive some events gets a refusal rather than a stream that silently
-         * omits the rest.
+         * This was one gate for the whole stream at its strictest: opened only if the caller passed
+         * **every** event's gate, on the argument that *"a caller who could receive some events gets a
+         * refusal rather than a stream that silently omits the rest."* The concern was silence, and it
+         * was answered with a refusal. It met `surfaceContracts`, which adds `approval.created |
+         * updated` at `operator` to every site — so no non-operator could subscribe to anything,
+         * anywhere, and no tenant had ever had a live update (roadmap F21). Nobody saw it, because
+         * until 2026-09-10 the only account that ever signed in was the operator.
+         *
+         * So the concern is answered by **saying so** instead. The stream carries the events this
+         * caller may receive and names the ones it left out — in `x-events-omitted` and as the first
+         * event — so an omission is never silent. A caller who passes **none** is still refused, with
+         * the first refusal's own status: an anonymous caller's 401 stays a 401.
          */
+        const admitted: (typeof table.events)[number][] = [];
+        const omitted: { name: string; reason: string }[] = [];
+        let firstRefusal: Denied | undefined;
+
         for (const event of table.events) {
             const outcome = await executeGate({
                 gate: event.gate,
@@ -513,12 +527,21 @@ export class ApiService extends ServiceModule {
                 ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
             });
 
-            if (!outcome.ok) {
-                return send(res, outcome.status, headers, {
-                    error: outcome.code,
-                    message: `${outcome.message} (subscribing to ${event.name})`,
-                });
+            if (outcome.ok) {
+                admitted.push(event);
+                continue;
             }
+            omitted.push({ name: event.name, reason: outcome.code });
+            firstRefusal ??= { ...outcome, message: `${outcome.message} (subscribing to ${event.name})` };
+        }
+
+        const recheckEvent = admitted[0];
+        if (recheckEvent === undefined) {
+            const refusal = firstRefusal ?? {
+                ok: false as const, status: 403 as const, code: 'FORBIDDEN',
+                message: 'No event on this site is available to this caller.',
+            };
+            return send(res, refusal.status, headers, { error: refusal.code, message: refusal.message });
         }
 
         const scopeOf = async (): Promise<Subscriber | undefined> => {
@@ -530,9 +553,17 @@ export class ApiService extends ServiceModule {
             const current = ticket === undefined ? undefined : await this.resolve(ticket);
             if (ticket !== undefined && current === undefined) return undefined;
 
+            /**
+             * **Re-checked against an event this caller was admitted to**, not the table's first.
+             *
+             * It used `table.events[0]`, which on a site carrying the platform's approval events is
+             * `approval.created` at `operator`. With every event at one gate that was harmless; with
+             * per-event admission it would have let a tenant subscribe and then cut them off at the
+             * first heartbeat, because the recheck asked a gate they were never meant to pass.
+             */
             const outcome = await executeGate({
-                gate: table.events[0]!.gate,
-                contract: streamPseudoContract(table.events[0]!.name),
+                gate: recheckEvent.gate,
+                contract: streamPseudoContract(recheckEvent.name),
                 caller: current,
                 requestedScope,
                 input: {},
@@ -570,7 +601,7 @@ export class ApiService extends ServiceModule {
          * misconfiguration, and it should be visible on the first subscription rather than as an
          * absence nobody can date.
          */
-        const needsScope = table.events.some((event) => event.scope !== 'global');
+        const needsScope = admitted.some((event) => event.scope !== 'global');
         if (needsScope && !subscriber.operator && subscriber.scope === undefined) {
             return send(res, 409, headers, {
                 error: 'NO_SCOPE',
@@ -582,10 +613,14 @@ export class ApiService extends ServiceModule {
         }
 
         for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+        // For a tool or a person with curl. A browser's EventSource cannot read headers, which is
+        // why the same list is also the stream's first event.
+        if (omitted.length > 0) res.setHeader(OMITTED_HEADER, omitted.map((o) => o.name).join(','));
 
         const stream = openStream({
             res,
-            events: table.events,
+            events: admitted,
+            omitted,
             subscriber,
             recheck: scopeOf,
             onClose: () => { this.streams.delete(stream); },

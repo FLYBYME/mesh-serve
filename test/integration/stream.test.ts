@@ -49,6 +49,8 @@ const orphanCreated = defineEvent('domains.orphan_created', z.object({ zone: z.s
 const ORG = 'org-a';
 const OTHER = 'org-b';
 const HOST = 'stream.test';
+/** A site streaming one event anyone signed in may receive, and one only an operator may. */
+const MIXED = 'mixed-gates.test';
 
 let app: MeshApp;
 let api: ApiService;
@@ -145,6 +147,25 @@ beforeAll(async () => {
         theme: {}, policy: {}, title: 'Stream test',
     });
 
+    /**
+     * The shape every real site now has: the platform adds operator-only events (the approval queue)
+     * beside a tenant's own. `cdn.site_deployed` stands in for them here because it is scoped and
+     * registered in this fixture, and the gate is what is under test, not the event.
+     */
+    await call('site.create', {
+        host: MIXED, application: 'test', tenantId: ORG, api: '/api',
+        mesh: [{
+            package: '@flybyme/surfdns-domains',
+            version: '^1.0',
+            contracts: [{ key: 'identity.whoami', auth: 'user' }],
+            events: [
+                { key: zoneCreated.name, auth: 'user' },
+                { key: 'cdn.site_deployed', auth: 'operator' },
+            ],
+        }],
+        theme: {}, policy: {}, title: 'Mixed gates',
+    });
+
     await call('identity.register', {
         email: 'alice@example.com', password: 'correct horse', displayName: 'Alice',
     });
@@ -178,6 +199,62 @@ describe.skipIf(!reachable)('opening a subscription', () => {
     it('404s a hostname nobody configured', async () => {
         const answer = await listen(port(), { host: 'nobody.test', ticket });
         expect(answer.status).toBe(404);
+    });
+});
+
+/**
+ * **A caller who may receive some of a site's events gets those, and is told about the rest.**
+ *
+ * Roadmap F21. The stream used to open only if the caller passed every event's gate, so that nobody
+ * got a stream silently missing something. It met the platform adding operator-only approval events
+ * to every site, and the product was that **no tenant member anywhere could subscribe to anything** —
+ * flowboard's own owner got `403 approval.created requires the operator role`. It had never been
+ * noticed, because the only account that ever signed in was the operator.
+ *
+ * These are about a non-operator on a site with mixed gates, which is the case that was broken.
+ */
+describe.skipIf(!reachable)('a subscription with events the caller may not receive', () => {
+    it('opens, rather than refusing the whole stream over one operator event', async () => {
+        const answer = await listen(port(), { host: MIXED, ticket, forMs: 150 });
+
+        expect(answer.status).toBe(200);
+        expect(answer.frames[0]).toContain(': open');
+    });
+
+    it('says which events it left out, first, so the omission is not silent', async () => {
+        const answer = await listen(port(), { host: MIXED, ticket, forMs: 150 });
+
+        const omitted = answer.frames.find((f) => f.includes('event: subscription.omitted'));
+        expect(omitted).toBeDefined();
+        expect(omitted).toContain('cdn.site_deployed');
+        // And only that one: the event this caller may receive is not reported as omitted.
+        expect(omitted).not.toContain(zoneCreated.name);
+    });
+
+    it('still delivers the event the caller may receive', async () => {
+        const answer = await listen(port(), {
+            host: MIXED,
+            ticket,
+            onOpen: () => { api.deliver(zoneCreated.name, { organizationId: ORG, zone: 'mixed.example' }); },
+        });
+
+        expect(answer.frames.some((f) => f.includes(`event: ${zoneCreated.name}`))).toBe(true);
+        expect(answer.frames.some((f) => f.includes('mixed.example'))).toBe(true);
+    });
+
+    it('never delivers the omitted one', async () => {
+        const answer = await listen(port(), {
+            host: MIXED,
+            ticket,
+            onOpen: () => { api.deliver('cdn.site_deployed', { tenantId: ORG, host: MIXED, release: 'sha256:x' }); },
+        });
+
+        expect(answer.frames.some((f) => f.includes('event: cdn.site_deployed'))).toBe(false);
+    });
+
+    it('still refuses a caller who may receive none of them', async () => {
+        const answer = await listen(port(), { host: MIXED });
+        expect(answer.status).toBe(401);
     });
 });
 

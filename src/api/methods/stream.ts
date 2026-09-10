@@ -48,6 +48,14 @@ export interface StreamOptions {
      */
     readonly recheck: () => Promise<Subscriber | undefined>;
     readonly onClose?: () => void;
+    /**
+     * Events the site streams that this caller may not receive, and why — written as the first event.
+     *
+     * A subscription used to be refused outright if the caller failed any one event's gate, so that
+     * nobody got a stream that silently left something out (roadmap F21). It now carries what the
+     * caller may receive, and this is what keeps that from being silent.
+     */
+    readonly omitted?: readonly { readonly name: string; readonly reason: string }[];
 }
 
 export function openStream(options: StreamOptions): Stream {
@@ -77,6 +85,11 @@ export function openStream(options: StreamOptions): Stream {
         if (closed) return;
         res.write(`id: ${eventId}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
+
+    // Before anything is delivered, so a client knows what it will never hear on this connection.
+    if (options.omitted !== undefined && options.omitted.length > 0) {
+        send('subscription.omitted', { events: options.omitted }, 'omitted');
+    }
 
     const close = (reason?: string): void => {
         if (closed) return;

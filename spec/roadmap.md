@@ -1191,8 +1191,14 @@ task** — each is a decision about the platform's own surface that blocks any U
       organization's own members should see its own approval queue is a product question for flowboard,
       and the answer is not to loosen the gate on every site. **S**
 
-- [ ] **F21 ★★★ No tenant member can open the event stream, so no tenant has ever had live
-      updates.** *(found 2026-09-10, signing in to flowboard as its own owner)*
+- [x] **F21 ★★★ No tenant member can open the event stream, so no tenant has ever had live
+      updates.** *(found 2026-09-10, signing in to flowboard as its own owner. **Fixed the same day**,
+      by the first of the two options below: each event is checked at its own gate, the stream carries
+      the ones the caller passes, and the rest are named in `x-events-omitted` and as a
+      `subscription.omitted` first event. A caller who passes none is still refused with that
+      refusal's status. Fixed with it: the heartbeat re-check used `table.events[0]`, which on a real
+      site is an operator-only approval event — so an admitted tenant would have been cut off at the
+      first heartbeat. It now re-checks against an event the caller was admitted to.)*
 
       ```
       GET /api/events  (flowboard.localhost, as owner@flowboard.test)
