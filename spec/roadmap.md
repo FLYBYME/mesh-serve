@@ -1083,6 +1083,69 @@ task** — each is a decision about the platform's own surface that blocks any U
       *why is this safe to expose?* — cannot even be answered for these 23, because **they are not
       exposed**, and the file that lists them says they are. **M** · surfdns freeze gate V9
 
+- [ ] **F17 ★★★ `site.create` is exposed, and its generated input carries `mesh` — so a caller
+      defines a hostname's entire exposure surface and every gate on it.** *(found 2026-09-10 by the
+      V9 sweep; verified against the live descriptor rather than read off the schema)*
+
+      What `/_describe` actually advertises for `site.create` on a control site:
+
+      ```
+      host  application  tenantId  api  releaseHash  mesh  theme  policy
+      title  description  canonical  image  indexable
+      ```
+
+      `defineCrud` derives a create input from the stored record and omits only id and timestamps, so
+      three fields nobody would put in a hand-written contract are in this one:
+
+      - **`mesh`** — the site's exposed contract list *and the gate on each*. A caller who writes it
+        chooses the platform's authorization for that hostname. Exposing `identity.grant_role` at
+        `public` on a new host turns an operator-gated capability into an open one. `describeExposure`
+        still refuses `visibility: 'internal'`, so `user.find` cannot be reached this way — that check
+        holds and is the reason this is a widening rather than a breach.
+      - **`releaseHash`** — what the site serves, with none of `cdn.deploy`'s checks that the release
+        belongs to this tenant and that every contract it calls is one the site exposes. **This is the
+        exact field `cdn.site_edit` exists to keep out of an exposed `site.update`**, and it is
+        reachable through create.
+      - **`tenantId`** — whose site it is. `scopedBy` narrows reads; whether it overrides this on a
+        write is **unverified** and is the first thing to check.
+
+      **Nothing sanitises any of it.** The cdn service mounts no `beforeCrud` and no `afterCrud` —
+      verified, there are none in the file. And `site.create` sits in `CONTROL_CONTRACTS` between
+      `site.find` and `site.seed`, both of which carry paragraphs explaining themselves, **with no
+      justification at all.**
+
+      This is the recurring shape at its most consequential: *a generated action carries a capability
+      it must not, and no gate can subtract a field.* Four purpose-built contracts already exist for
+      exactly this — `identity.sign_out`, `cdn.site_edit`, `cdn.resolve_site`, and the withdrawn
+      `identity.people` — and `cdn.site_edit`'s own doc makes this argument about this very field.
+      **Freeze gate V2 is the mechanism that would end it; this is the strongest single case for it.**
+
+      Wanted, and it is small: `site.create` comes off the control surface, and `site.seed` — which
+      already creates sites, with checks — is the door. If a bare create is genuinely needed, it is a
+      purpose-built contract taking `host` and `application` and nothing else. **S** ·
+      surfdns freeze gate V9, V2
+
+- [ ] **F18 ★★ `identity.set_password` is exposed `public` and its own contract says it must not be.**
+      *(found 2026-09-10 by the V9 sweep)*
+
+      Three statements, two of which disagree:
+
+      | | says |
+      | --- | --- |
+      | `identity.contract.ts:307-310` | *"`user`, not `public`: you must already hold a session … Public would let anybody set anybody's"* |
+      | `cdn/methods/control.ts:69` | `{ key: 'identity.set_password', auth: 'public' }` |
+      | `identity/module.ts` | throws 401 without a session |
+
+      **It fails closed**, because the handler is the one that decides, so this is not a hole. It is
+      the surface lying about itself, and `grants.ts` states the rule it breaks: *a gate stricter than
+      the handler is safe and the reverse is a promise the platform will not keep.* This is the
+      reverse.
+
+      The fix is not simply to tighten it. `set_password` is what claims a provisional account, and a
+      person doing that has the printed password, so they can sign in first — which the bring-up
+      already does. Confirm that is the only path, then gate it `user` and delete the contradiction.
+      **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
