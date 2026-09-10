@@ -1191,6 +1191,49 @@ task** — each is a decision about the platform's own surface that blocks any U
       organization's own members should see its own approval queue is a product question for flowboard,
       and the answer is not to loosen the gate on every site. **S**
 
+- [ ] **F21 ★★★ No tenant member can open the event stream, so no tenant has ever had live
+      updates.** *(found 2026-09-10, signing in to flowboard as its own owner)*
+
+      ```
+      GET /api/events  (flowboard.localhost, as owner@flowboard.test)
+      403  approval.created requires the operator role. (subscribing to approval.created)
+      ```
+
+      The stream is opened only if the caller passes **every** event's gate, and that is deliberate —
+      `api.service.ts` argues *"a caller who could receive some events gets a refusal rather than a
+      stream that silently omits the rest."* Defensible on its own. It meets `surfaceContracts`, which
+      adds `approval.created | updated` at `operator` to **every site**, and the product is that no
+      non-operator anywhere can subscribe to anything. Flowboard's cards, sprints and comments stream
+      to nobody but the operator.
+
+      Invisible on every cluster before today, because the only account that ever signed in was the
+      operator — which is freeze gate V15's whole argument, arriving on schedule.
+
+      A decision, not a patch. Either the stream subscribes a caller to the events it may receive and
+      says which it omitted (the refusal argument answered by *saying so* rather than by refusing), or
+      the platform's surface events stop being operator-only on tenant sites. **M** · surfdns freeze
+      gate V15
+
+- [ ] **F22 ★★ A caller in two organizations reads as signed out.** *(found 2026-09-10, same cluster)*
+
+      Seeding a second tenant made the operator an owner of both organizations (the caller becomes the
+      owner — freeze gate V8b). From then on, every scoped read the console makes with no
+      `x-organization` header fails:
+
+      ```
+      401  Scoped collection "site" requires a resolved "tenantId" scope, but none was provided
+      ```
+
+      and the console renders that 401 as **"You need to sign in"** — to somebody who is signed in.
+      With the header naming Platform the same read returns both of its sites.
+
+      Two defects in one. **The copy**: a 401 for an ambiguous scope and a 401 for no session are
+      different failures, and a screen that says *sign in* to a signed-in person sends them to fix the
+      wrong thing. **The mechanism**: a part has no way to name its organization — the CLI cannot send
+      the header either — so a person in two organizations has no working console at all. Fixing V8b
+      removes this case for the operator and leaves it for every real person in two organizations.
+      **M** · surfdns freeze gate V8b
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
