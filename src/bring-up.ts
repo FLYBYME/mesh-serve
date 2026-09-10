@@ -40,6 +40,29 @@ const every = (name: string): string[] => argv
     .filter((value): value is string => value !== undefined && value !== '');
 
 /**
+ * A flag whose value is a JSON object, refused loudly rather than sent as a string.
+ *
+ * The failure this exists to prevent already happened: `--policy '{"window-manager/mode":"single"}'`
+ * was typed, this file did not know the flag, **nothing said so**, and the seed reported success
+ * having set no policy at all. A whole reseed and a browser check went by before the empty
+ * `policy: {}` in the generated boot module gave it away.
+ *
+ * An unknown flag being ignored is the shape to be angry about; this at least makes a *known* one
+ * that is malformed say so.
+ */
+const parseJsonFlag = (name: string, raw: string | undefined): Record<string, string> => {
+    try {
+        const parsed: unknown = JSON.parse(raw ?? '');
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('not an object');
+        }
+        return parsed as Record<string, string>;
+    } catch {
+        throw new Error(`--${name} expects a JSON object, got: ${raw ?? '(nothing)'}`);
+    }
+};
+
+/**
  * `.env` for credentials, like the node's own.
  *
  * Not a command line: a value typed as `PASSWORD=… npx …` is visible in `ps` to every user on the
@@ -173,6 +196,14 @@ export async function main(): Promise<void> {
         ...(optional('application') === undefined ? {} : { application: optional('application') }),
         ...(optional('title') === undefined ? {} : { title: optional('title') }),
         ...(optional('api') === undefined ? {} : { api: optional('api') }),
+        /**
+         * `--policy '{"window-manager/mode":"single"}'` — what kind of thing this site is.
+         *
+         * JSON rather than a `--mode` flag, because `policy` is an open record on the site record
+         * and a flag per key is a flag per key. Parsed here so a malformed one is a message about
+         * the thing that was typed, rather than a 400 about a JSON body.
+         */
+        ...(optional('policy') === undefined ? {} : { policy: parseJsonFlag('policy', optional('policy')) }),
         ...(has('import-only') ? { importOnly: true } : {}),
     }, ticket);
 

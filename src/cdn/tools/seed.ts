@@ -280,7 +280,20 @@ export async function site_seed(
                 'host_taken', 409,
             );
         }
-        await call('site.update', { id: existing.id, mesh, api }, as);
+        /**
+         * **`policy` is written on a reseed only when this call names one.**
+         *
+         * Otherwise a reseed would quietly reset a site's kind to `windowed`, and re-running a seed
+         * is the ordinary way to redeploy — `site.seed` is documented as idempotent. Silently
+         * undoing a setting somebody chose is worse than not offering to change it, so absent means
+         * *leave it alone* and present means *set it*.
+         */
+        await call('site.update', {
+            id: existing.id,
+            mesh,
+            api,
+            ...(input.policy === undefined ? {} : { policy: input.policy }),
+        }, as);
         siteId = existing.id;
     } else {
         const created = await call('site.create', {
@@ -290,7 +303,7 @@ export async function site_seed(
             api,
             mesh,
             theme: {},
-            policy: {},
+            policy: input.policy ?? {},
             title: input.title ?? application.charAt(0).toUpperCase() + application.slice(1),
         }, as) as { id: string };
         siteId = created.id;

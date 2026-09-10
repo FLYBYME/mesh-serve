@@ -75,6 +75,25 @@ export const seedContract = defineContract({
             name: z.string().min(1),
         }).optional(),
 
+        /**
+         * **What kind of thing this site is, decided when it is created.**
+         *
+         * The one that matters is `window-manager/mode`: `windowed` cascades floating windows,
+         * `tiled` splits the viewport, and **`single` is a website** — one application filling the
+         * page, no titlebars, no furniture to arrange.
+         *
+         * Here because there was no way to say it. `cdn.site_edit` writes `policy` and is the right
+         * contract for *changing* it later, and until 2026-09-10 it was the only one — so a site was
+         * born `windowed` and then had to be edited, which failed on any cluster whose control host
+         * already served a release (roadmap **F16**). A site's kind is a property of creating it,
+         * not a correction applied afterwards.
+         *
+         * Merged over whatever the composition's own policy is, so a release that ships a default
+         * can still be overridden per site. That is the point of policy living on the site record:
+         * *"two sites running one application against different `ui`"*.
+         */
+        policy: z.record(z.string(), z.string()).optional(),
+
         /** Stop after the catalog knows what the parts are. Useful on a slow link. */
         importOnly: z.boolean().default(false),
     }),
