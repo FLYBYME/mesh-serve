@@ -316,7 +316,7 @@ export class McpService extends ServiceModule {
         for (const call of [...descriptor.calls, ...this.#surfaceCalls(descriptor)]) {
             if (call.stream) continue;   // a stream is not a tool result; see spec/mcp.md §7
             if (offered !== undefined && !offered.has(call.key)) continue;
-            if (!await this.#permitted(call, caller, scope)) continue;
+            if (!await this.#permitted(call, caller, scope, descriptor.siteScope)) continue;
 
             tools.push({
                 name: toolName(call),
@@ -373,6 +373,7 @@ export class McpService extends ServiceModule {
         call: DescribedCall,
         caller: Caller | undefined,
         scope: string | undefined,
+        siteScope: string | undefined,
     ): Promise<boolean> {
         const contract = this.lookup(call.key);
         if (contract === undefined) return false;
@@ -382,6 +383,7 @@ export class McpService extends ServiceModule {
             contract,
             caller,
             requestedScope: scope,
+            siteScope,
             input: {},
             ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
         });
@@ -429,13 +431,14 @@ export class McpService extends ServiceModule {
             return toolError(`No tool named ${name}. It may not exist, or this site may not expose it.`);
         }
 
-        if (!await this.#permitted(call, caller, scope)) {
+        if (!await this.#permitted(call, caller, scope, descriptor.siteScope)) {
             const contract = this.lookup(call.key);
             const outcome = contract === undefined ? undefined : await executeGate({
                 gate: call.gate,
                 contract,
                 caller,
                 requestedScope: scope,
+                siteScope: descriptor.siteScope,
                 input: {},
                 ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
             });
@@ -466,6 +469,7 @@ export class McpService extends ServiceModule {
             contract,
             caller,
             requestedScope: scope,
+            siteScope: descriptor.siteScope,
             input,
             ...(this.options.authorize === undefined ? {} : { authorize: this.options.authorize }),
         });

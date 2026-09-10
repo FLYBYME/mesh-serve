@@ -5,9 +5,13 @@
  * reads as signed out" survived until the first cluster with two tenants.
  */
 
+import { readFileSync } from 'node:fs';
+
+import { defineCrud, z } from '@flybyme/mesh';
 import { describe, expect, it } from 'vitest';
 
 import { isUnresolvedScope, ORGANIZATION_REQUIRED, resolveScope } from '../../src/api/methods/scope.js';
+import { describeExposure } from '../../src/api/schema/descriptor.js';
 
 const PLATFORM = 'org-platform';
 const TENANT = 'org-tenant';
@@ -76,5 +80,74 @@ describe('recognising the refusal a scoped read makes with no scope', () => {
         expect(ORGANIZATION_REQUIRED.status).toBe(400);
         expect(ORGANIZATION_REQUIRED.message).toContain('x-organization');
         expect(ORGANIZATION_REQUIRED.message).not.toMatch(/sign in/i);
+    });
+});
+
+/**
+ * **F23 — the same question, asked from the MCP surface.**
+ *
+ * F22 gave the gate a `siteScope` and wired it at the api's four call sites. `McpService` calls the
+ * same gate and was not wired, so an agent whose account belonged to two organizations was told to
+ * name one over a protocol with nowhere to put the answer. It went unnoticed because every account
+ * on every cluster so far belonged to exactly one — `resolveScope`'s "only membership" branch
+ * answered before the site was ever consulted.
+ *
+ * It became load-bearing the day flowboard's own collections were scoped (`flowboard B1`): before
+ * that, an agent dispatching a card read an unscoped collection and no scope was required at all.
+ */
+describe('the MCP surface knows whose site it is serving', () => {
+    const ThingSchema = z.object({ name: z.string(), tenantId: z.string() });
+    const thingCrud = defineCrud('thing', ThingSchema, {
+        pluralPath: 'things',
+        scopedBy: 'tenantId',
+        visibility: { find: 'public' },
+        dependencies: [],
+    });
+    const entries = [{ contract: thingCrud.find, auth: 'user' as const }];
+
+    it('carries the site\'s organization onto the descriptor', () => {
+        const descriptor = describeExposure(entries, { application: 'flowboard', siteScope: TENANT });
+        expect(descriptor.siteScope).toBe(TENANT);
+    });
+
+    /**
+     * Absent, not empty. A descriptor built without one must not claim an organization — the gate
+     * reads `undefined` as *this site cannot help you choose*, and `''` would be a membership check
+     * against a name nobody holds.
+     */
+    it('omits it entirely when the site has none', () => {
+        const descriptor = describeExposure(entries, { application: 'flowboard' });
+        expect('siteScope' in descriptor).toBe(false);
+    });
+
+    /**
+     * Who owns the hostname is not part of what the hostname exposes. Folding it into either hash
+     * would report every generated browser client stale the first time a site changed hands, and
+     * would make two organizations running the same release look like two different APIs.
+     */
+    it('changes neither hash', () => {
+        const plain = describeExposure(entries, { application: 'flowboard' });
+        const owned = describeExposure(entries, { application: 'flowboard', siteScope: TENANT });
+        expect(owned.exposure).toBe(plain.exposure);
+        expect(owned.shapeHash).toBe(plain.shapeHash);
+    });
+
+    /**
+     * **The bug was an omission at a call site, so this is what catches the next one.**
+     *
+     * Reading the source rather than the behaviour, because `McpService` builds an HTTP server in
+     * its constructor and its gate calls are behind `#private` methods — there is no seam to assert
+     * this through, and a rule nothing checks is how the first four call sites got wired and the
+     * fourth file did not. Every `executeGate` on this surface answers *which organization* and
+     * must be handed the site's.
+     */
+    it('passes it at every gate call the MCP surface makes', () => {
+        const source = readFileSync(new URL('../../src/api/mcp.service.ts', import.meta.url), 'utf8');
+        const invocations = source.split('executeGate({').slice(1);
+
+        expect(invocations.length).toBeGreaterThan(0);
+        for (const invocation of invocations) {
+            expect(invocation.slice(0, invocation.indexOf('});'))).toContain('siteScope');
+        }
     });
 });

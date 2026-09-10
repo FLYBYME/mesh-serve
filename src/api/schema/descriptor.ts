@@ -106,6 +106,23 @@ export interface ExposureDescriptor {
     readonly shapeHash: string;
     readonly calls: readonly DescribedCall[];
     readonly events?: readonly DescribedEvent[];
+    /**
+     * **The organization that owns the hostname this descriptor describes.**
+     *
+     * The other half of F22. The api resolves an ambiguous scope by asking *whose site did this
+     * request arrive on* — a caller who belongs to one organization and is reading another's site
+     * gets nothing, and a caller who belongs to the site's owner gets that. The MCP surface asks
+     * the same gate the same question and had no way to supply this half of it, so an agent whose
+     * account belonged to two organizations was told to name one, over a protocol with nowhere to
+     * put the answer.
+     *
+     * Carried on the descriptor because that is all `McpService` is given, for the reason
+     * `agentRoles` is: a second source for *which site is this* is how the two get to disagree.
+     *
+     * **It never widens anything.** `resolveScope` only ever returns a scope the caller is already
+     * a member of; this decides between memberships, and can never add one.
+     */
+    readonly siteScope?: string;
 }
 
 export interface DescribeOptions {
@@ -126,6 +143,9 @@ export interface DescribeOptions {
      * Filtered to only exposed collection domains and sorted deterministically.
      */
     readonly events?: readonly DescribedEvent[];
+    /** The organization that owns the site, so the MCP gate can resolve a scope the way the api
+     *  does. See `ExposureDescriptor.siteScope`. */
+    readonly siteScope?: string;
 }
 
 export const DEFAULT_BASE_PATH = '/api';
@@ -236,6 +256,9 @@ export function describeExposure(
         // nothing about the HTTP shapes a generated client is checked against. Folding it in would
         // report every browser client stale the first time a role was edited.
         ...(options.agentRoles === undefined ? {} : { agentRoles: options.agentRoles }),
+        // Outside both hashes for the same reason: it says who owns the hostname, not what is
+        // exposed on it. Two sites owned by different organizations expose the same shapes.
+        ...(options.siteScope === undefined ? {} : { siteScope: options.siteScope }),
     };
 }
 

@@ -1087,6 +1087,10 @@ export class ApiService extends ServiceModule {
                 // From the release, because which roles exist is part content. What the site grants
                 // is still the site's, and a tool needs both: named by a role *and* exposed here.
                 ...(activeRelease?.agentRoles === undefined ? {} : { agentRoles: activeRelease.agentRoles }),
+                // F23. The api reads `site.tenantId` straight off the site at each gate call; the
+                // MCP surface is handed a descriptor and nothing else, so this is where the same
+                // fact reaches the same gate.
+                siteScope: site.tenantId,
             });
             this.descriptors.set(key, descriptor);
             return descriptor;

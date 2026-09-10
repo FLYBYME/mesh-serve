@@ -1249,6 +1249,32 @@ task** — each is a decision about the platform's own surface that blocks any U
       removes this case for the operator and leaves it for every real person in two organizations.
       **M** · surfdns freeze gate V8b
 
+- [x] **F23 ★★ F22 fixed the api and not the MCP surface.** *(found and fixed 2026-09-10, scoping
+      flowboard's own collections — `flowboard B1`.)*
+
+      `McpService` calls the same `executeGate` and was handed no `siteScope`, so the fix for *a
+      caller in two organizations reads as signed out* covered browsers and left agents exactly where
+      they were — and an agent has nowhere to put an `x-organization` header, so there was no
+      workaround either. Four call sites in `api.service.ts` were wired and the fourth file was not,
+      which is what an omission at a call site looks like.
+
+      Invisible until now for the reason F22 itself was: every account on every cluster belonged to
+      exactly one organization, so `resolveScope`'s *only membership* branch answered before the site
+      was ever consulted. It became load-bearing the day flowboard's collections stopped being global
+      — before that an agent dispatching a card read an unscoped collection and needed no scope at
+      all.
+
+      **The fix.** `ExposureDescriptor` carries `siteScope`, because a descriptor is all `McpService`
+      is given — a second source for *which site is this* is how the two get to disagree, which is the
+      argument `agentRoles` already made. Outside both hashes: who owns a hostname is not part of what
+      the hostname exposes, and folding it in would report every generated browser client stale the
+      first time a site changed hands.
+
+      **Tested by reading the source**, in `test/api/scope.test.ts`. `McpService` builds an HTTP
+      server in its constructor and its gate calls sit behind `#private` methods, so there is no seam
+      — and a rule nothing checks is precisely how four call sites got wired and a fifth did not.
+      Verified by removing one `siteScope` and watching it fail. **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
