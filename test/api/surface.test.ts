@@ -124,12 +124,20 @@ describe('the notification', () => {
      * `tenantId`. An event that cannot be scoped is delivered to nobody — so had this been missed,
      * the stream would have connected and stayed silent forever, which is the failure
      * `schema/events.ts` was written to prevent.
+     *
+     * **This asserted the silence rather than preventing it, until 2026-09-10.** It expected
+     * `tenantId` for both verbs, and `approval.updated` carries `{ id, patch, item }` — so the
+     * scope was read off the top level of a payload that has no `tenantId` there, `decideDelivery`
+     * answered `unscopable`, and every approval *decision* reached nobody while every approval
+     * *request* arrived. The path is per verb because the row is: see `crudPayloadScope`.
      */
-    it('reads a scope from the collection rather than being global', () => {
+    it('reads a scope from the collection, from wherever that verb puts the row', () => {
         const built = eventTable(surface);
-        for (const event of built.events) {
-            expect(event.scope).not.toBe('global');
-            expect(event.scope).toEqual({ field: 'tenantId' });
-        }
+        const scopes = Object.fromEntries(built.events.map((e) => [e.name, e.scope]));
+
+        expect(scopes).toEqual({
+            'approval.created': { field: 'tenantId' },
+            'approval.updated': { field: 'item.tenantId' },
+        });
     });
 });

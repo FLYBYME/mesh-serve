@@ -1303,6 +1303,42 @@ task** — each is a decision about the platform's own surface that blocks any U
       organization's control plane should say *"flowboard.localhost belongs to Flowboard Inc; pass
       --org-slug flowboard"* before it clones anything. **S**
 
+- [x] **F25 ★★★ On a scoped collection only `created` was ever delivered. Every `updated` reached
+      nobody.** *(found and fixed 2026-09-10, on the live cluster, minutes after flowboard's
+      collections became scoped.)*
+
+      `scopedBy` names a field **on the row**, and mesh does not put the row in the same place for
+      all three verbs (`DatabaseMiddleware`): `created` emits the row itself, `updated` emits
+      `{ id, patch, item }`, `deleted` emits `{ id }`. `decideDelivery` read the field off the top
+      level, found nothing on an update, and answered `unscopable` — which is *delivered to nobody,
+      operators included*, because a broken payload is deliberately not broken only for other people.
+
+      **The symptom is a list that only grows.** A row created elsewhere appears; the same row
+      edited does not. Measured, not reasoned: an open `/events` subscription on `flowboard.localhost`
+      received `card.created` in full and nothing at all for `card.updated` on the same card, seconds
+      apart.
+
+      It was never flowboard's. It applies to every scoped collection here — `site`, `release`,
+      `approval`, `membership` — so **an approval *request* streamed and its *decision* did not**,
+      which is the queue this platform tells agents to poll. It hid behind two things: the lists
+      people actually watch (`part`, `node`, the catalog) are `GLOBALLY_DELIVERED`, where the payload
+      is never consulted at all; and `test/api/surface.test.ts` **asserted the broken value** —
+      `{ field: 'tenantId' }` for both verbs — under a comment explaining that the failure it existed
+      to prevent was a stream that "connected and stayed silent forever".
+
+      **The fix is one line and `readScope` already supported it**: it walks a dotted path, so an
+      update is `item.<field>`. `registryLookup` keys on the verb, which it already had in hand.
+
+      **`deleted` cannot be fixed from here and now says so.** `{ id }` is the whole payload; the row
+      is gone and nothing names its owner. mesh would have to emit the scope and mesh is frozen — so
+      a scoped collection's delete is refused *by name, with its own sentence*, and appears in the
+      deploy log and in `x-events-omitted` rather than as a subscription that connects and starves.
+      A client wanting live removals re-reads. Freeze gate **V6** is where the general fix belongs:
+      `defineCrud` taking the row scope and the delivery scope separately.
+
+      Verified live after the fix, and by an integration test that opens a real stream and asserts
+      the `updated` frame arrives — checked by reverting the one line and watching it fail. **S**
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item

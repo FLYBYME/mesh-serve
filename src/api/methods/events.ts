@@ -45,8 +45,56 @@ export interface EventTable {
     readonly refused: readonly { readonly name: string; readonly reason: string }[];
 }
 
-/** How an event name becomes a definition. The framework's registry; a Map in a test. */
-export type EventLookup = (name: string) => { readonly scopedBy?: string } | undefined;
+/**
+ * How an event name becomes a definition. The framework's registry; a Map in a test.
+ *
+ * `refusal` is for an event that is *known* and still cannot be narrowed, which is a different
+ * answer from `scopedBy: undefined` (*nobody said what narrows this*) and from `undefined` (*no
+ * module defines this*). It carries its own sentence because the three read identically to a person
+ * staring at an open stream that delivers nothing.
+ */
+export type EventLookup = (name: string) => {
+    readonly scopedBy?: string;
+    readonly refusal?: string;
+} | undefined;
+
+/**
+ * **Where the row is in a CRUD event's payload, which is not the same place for all three.**
+ *
+ * `scopedBy` names a field *on the row*, and mesh does not put the row in the same place for every
+ * verb (`DatabaseMiddleware`):
+ *
+ * | verb | payload | the row |
+ * | --- | --- | --- |
+ * | `created` | the row itself | top level |
+ * | `updated` | `{ id, patch, item }` | under `item` |
+ * | `deleted` | `{ id }` | **not there** |
+ *
+ * `readScope` walks a dotted path, so `updated` is `item.<field>` and that is the whole fix. Without
+ * it every `updated` on a scoped collection read its scope from the top level, found nothing, and
+ * `decideDelivery` answered `unscopable` — *delivered to nobody, operator included.*
+ *
+ * **The symptom was a board that only grew.** A card created in another tab appeared; the same card
+ * moved between columns did not, and neither did one deleted. It applies to every scoped collection
+ * on the platform — `site`, `release`, `approval`, `membership` — and stayed hidden because the
+ * collections whose lists people watched most were globally delivered, where the payload is never
+ * consulted at all.
+ *
+ * **`deleted` cannot be fixed here.** The payload is `{ id }`: the row is gone and nothing in the
+ * event says whose it was. mesh would have to emit the scope, and mesh is frozen — so this refuses
+ * it by name, loudly, rather than accepting a subscription that can never deliver. A client wanting
+ * live removals re-reads. Freeze gate V6 is where the general fix belongs.
+ */
+function crudPayloadScope(action: string, scopedBy: string): { scopedBy?: string; refusal?: string } {
+    if (action === 'created') return { scopedBy };
+    if (action === 'updated') return { scopedBy: `item.${scopedBy}` };
+    return {
+        refusal:
+            `a delete carries only { id }, so nothing in the payload says which "${scopedBy}" it `
+            + 'belonged to and it can never be narrowed to a subscriber. Re-read the collection to '
+            + 'see removals.',
+    };
+}
 
 /**
  * Collections whose rows belong to everyone, so their CRUD events are delivered to everyone.
@@ -153,7 +201,8 @@ export const registryLookup: EventLookup = (name) => {
             if (crud !== undefined) {
                 // A declared row scope wins over the lists below: it is a stronger statement than
                 // either, and a collection that grows one must not keep being delivered globally.
-                if (crud.scopedBy !== undefined) return { scopedBy: crud.scopedBy };
+                // Where the row *is* in the payload depends on the verb — see `crudPayloadScope`.
+                if (crud.scopedBy !== undefined) return crudPayloadScope(action, crud.scopedBy);
                 // What the collection says about itself, then what this repository says about its own.
                 if (crud.delivery === 'global') return { scopedBy: 'global' };
                 if (GLOBALLY_DELIVERED.has(domain)) return { scopedBy: 'global' };
@@ -180,6 +229,14 @@ export function eventTable(
             const definition = lookup(name);
             if (definition === undefined) {
                 refused.push({ name, reason: 'no module here defines it' });
+                continue;
+            }
+
+            // Known, and still undeliverable — a delete on a scoped collection. Its own sentence,
+            // because "nobody said what narrows this" would send a reader looking for a missing
+            // declaration that is in fact present.
+            if (definition.refusal !== undefined) {
+                refused.push({ name, reason: definition.refusal });
                 continue;
             }
 

@@ -330,11 +330,21 @@ describe.skipIf(!reachable)('what arrives', () => {
             theme: {}, policy: {}, title: 'Live CRUD test',
         });
 
-        // 1. Generate client from the site's descriptor and verify events are declared
+        /**
+         * 1. Generate client from the site's descriptor and verify events are declared.
+         *
+         * **`site.deleted` is asked for and is not here, which is the correct answer.** A delete
+         * carries only `{ id }` — the row is gone and nothing in the payload names the organization
+         * it belonged to — so a scoped collection's delete can never be narrowed to a subscriber.
+         * It is refused by name (the api logs the reason at deploy) rather than accepted as a
+         * subscription that would connect and stay silent. A client wanting live removals re-reads.
+         *
+         * The two that remain read their scope from different places, because the row is in
+         * different places: `created` emits the row, `updated` emits `{ id, patch, item }`.
+         */
         const desc = await fetchDescriptor(port(), CRUD_HOST, ticket);
         expect(desc.events).toEqual([
             { name: 'site.created', gate: { kind: 'auth', level: 'user' } },
-            { name: 'site.deleted', gate: { kind: 'auth', level: 'user' } },
             { name: 'site.updated', gate: { kind: 'auth', level: 'user' } },
         ]);
 
@@ -378,6 +388,37 @@ describe.skipIf(!reachable)('what arrives', () => {
         expect(answer.status).toBe(200);
         expect(answer.frames.some((f) => f.includes('event: site.created'))).toBe(true);
         expect(answer.frames.some((f) => f.includes(newHost))).toBe(true);
+
+        /**
+         * **3. And the same for an update, which is the half that reached nobody.**
+         *
+         * A create emits the row, so its `tenantId` sits at the top of the payload and this test
+         * passed from the day it was written. An update emits `{ id, patch, item }`, the scope was
+         * read from the top level, `decideDelivery` answered `unscopable`, and the frame was
+         * dropped — for everyone, operators included. So a list built on this stream only ever grew:
+         * rows appeared and never changed. Measured on the live cluster before it was fixed.
+         */
+        const target = await call<{ id: string }>('site.create', {
+            host: `to-be-renamed-${String(Date.now())}.test`, application: 'another-app',
+            tenantId: ORG, api: '/api',
+            mesh: [{
+                package: '@flybyme/mesh-serve', version: '^0.1',
+                contracts: [{ key: 'identity.whoami', auth: 'user' }],
+                events: [],
+            }],
+            theme: {}, policy: {}, title: 'Before',
+        });
+
+        const renamed = await listen(port(), {
+            host: CRUD_HOST,
+            ticket,
+            onOpen: () => {
+                void call('site.update', { id: target.id, title: 'Renamed by another connection' });
+            },
+        });
+
+        expect(renamed.frames.some((f) => f.includes('event: site.updated'))).toBe(true);
+        expect(renamed.frames.some((f) => f.includes('Renamed by another connection'))).toBe(true);
     });
 });
 

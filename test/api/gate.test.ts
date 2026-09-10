@@ -12,6 +12,8 @@ import {
 } from '../../src/api/methods/gate.js';
 import { decideDelivery, type Subscriber } from '../../src/api/methods/delivery.js';
 import { DELIVERED_SCOPED_BY, registryLookup } from '../../src/api/methods/events.js';
+import { siteCrud } from '../../src/cdn/contracts/site.contract.js';
+import { partCrud } from '../../src/catalog/contracts/part.contract.js';
 import { gateOf } from '../../src/api/schema/expose.js';
 import type { DescribedEvent } from '../../src/api/schema/events.js';
 
@@ -376,5 +378,107 @@ describe('organization events are delivered by the organization they are about',
     it('reaches nobody who is in no organization', () => {
         expect(decideDelivery(event, payload, {} as Subscriber))
             .toEqual({ deliver: false, reason: 'no-subscriber-scope' });
+    });
+});
+
+/**
+ * **A scoped collection's `updated` events reached nobody, because the row moves.**
+ *
+ * `scopedBy` names a field on the row, and mesh does not put the row in the same place for all three
+ * verbs (`DatabaseMiddleware`): `created` emits the row itself, `updated` emits
+ * `{ id, patch, item }`, and `deleted` emits `{ id }`. Reading `organizationId` off the top level of
+ * an `updated` payload finds nothing, so `decideDelivery` answered `unscopable` — **delivered to
+ * nobody, operator included**, since a broken payload is deliberately not broken only for other
+ * people.
+ *
+ * Measured on the live two-tenant cluster the day flowboard's collections became scoped: an open
+ * `/events` subscription received `card.created` in full and nothing at all for `card.updated`. The
+ * board only ever grew. It applies to every scoped collection here — `site`, `release`, `approval`,
+ * `membership` — and stayed hidden because the lists people watched most are globally delivered,
+ * where the payload is never consulted.
+ */
+describe('a CRUD event is narrowed by where its verb puts the row', () => {
+    /**
+     * `registryLookup` reads `globalCrudRegistry`, which a `defineCrud` fills **when its module is
+     * imported**. `card` is flowboard's, so these use this repository's own equivalents: `site` for
+     * a scoped collection and `part` for a globally delivered one. Importing them for the side
+     * effect is the point, and the void keeps that visible rather than looking unused.
+     */
+    void siteCrud;
+    void partCrud;
+
+    const scopeOf = (name: string): unknown => registryLookup(name);
+
+    it('reads a create from the top level and an update from item', () => {
+        expect(scopeOf('site.created')).toEqual({ scopedBy: 'tenantId' });
+        expect(scopeOf('site.updated')).toEqual({ scopedBy: 'item.tenantId' });
+    });
+
+    /**
+     * The path is what makes it work, so this asserts delivery rather than the string: an update
+     * whose row belongs to one organization reaches that organization and no other.
+     */
+    it('delivers an update to the organization the row belongs to', () => {
+        const event: DescribedEvent = {
+            name: 'site.updated',
+            scope: { field: 'item.tenantId' },
+            gate: { kind: 'auth', level: 'user' },
+        };
+        const payload = {
+            id: 's1',
+            patch: { title: 'renamed' },
+            item: { id: 's1', host: 'a.example', tenantId: 'org-alpha' },
+        };
+
+        expect(decideDelivery(event, payload, { scope: 'org-alpha' } as Subscriber))
+            .toEqual({ deliver: true });
+        expect(decideDelivery(event, payload, { scope: 'org-beta' } as Subscriber))
+            .toEqual({ deliver: false, reason: 'out-of-scope' });
+    });
+
+    /** The old behaviour, kept as the thing that must not come back. */
+    it('would have delivered that update to nobody read off the top level', () => {
+        const wrong: DescribedEvent = {
+            name: 'site.updated',
+            scope: { field: 'tenantId' },
+            gate: { kind: 'auth', level: 'user' },
+        };
+        const payload = { id: 's1', patch: {}, item: { tenantId: 'org-alpha' } };
+
+        expect(decideDelivery(wrong, payload, { scope: 'org-alpha' } as Subscriber))
+            .toEqual({ deliver: false, reason: 'unscopable' });
+        expect(decideDelivery(wrong, payload, { operator: true } as Subscriber))
+            .toEqual({ deliver: false, reason: 'unscopable' });
+    });
+
+    /**
+     * **A delete cannot be narrowed at all, and says so.**
+     *
+     * `{ id }` is the whole payload: the row is gone and nothing in the event names its owner. mesh
+     * would have to emit the scope and mesh is frozen, so this is refused by name rather than
+     * accepted as a subscription that can never deliver — the failure this whole file exists to
+     * prevent. Freeze gate V6.
+     */
+    it('refuses a delete on a scoped collection, with its own reason', () => {
+        const looked = registryLookup('site.deleted') as { scopedBy?: string; refusal?: string };
+        expect(looked.scopedBy).toBeUndefined();
+        expect(looked.refusal).toContain('{ id }');
+    });
+
+    /**
+     * `organization` is the exception and must stay one: `DELIVERED_SCOPED_BY` says its delivery
+     * field is `id`, which is present at the top level of all three payloads — so it keeps working
+     * for deletes, and must not pick up the `item.` prefix.
+     */
+    it('leaves the one stated delivery scope alone', () => {
+        expect(registryLookup('organization.updated')).toEqual({ scopedBy: 'id' });
+        expect(registryLookup('organization.deleted')).toEqual({ scopedBy: 'id' });
+    });
+
+    /** A globally delivered collection never consults the payload, so no verb changes anything. */
+    it('leaves globally delivered collections alone', () => {
+        expect(registryLookup('part.created')).toEqual({ scopedBy: 'global' });
+        expect(registryLookup('part.updated')).toEqual({ scopedBy: 'global' });
+        expect(registryLookup('part.deleted')).toEqual({ scopedBy: 'global' });
     });
 });
