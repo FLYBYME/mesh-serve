@@ -1339,6 +1339,91 @@ task** — each is a decision about the platform's own surface that blocks any U
       Verified live after the fix, and by an integration test that opens a real stream and asserts
       the `updated` frame arrives — checked by reverting the one line and watching it fail. **S**
 
+---
+
+**F26–F28 came out of one thing: running the exposed surface instead of reading it.** V9's sweep
+audited all 35 control contracts and says so in its own header — *"Read-only. Nothing was run"* —
+and closed with *exercised through the real HTTP gate by any test, anywhere: **3***. On 2026-09-10 the
+rest were called, on the live two-tenant cluster, as three accounts: the platform operator, a tenant
+owner with no platform role, and an account belonging to no organization. Every parameterless read,
+then every write probed with an empty body, where `403` means the gate refused and `400` means the
+gate passed and only the input was wrong.
+
+The isolation held everywhere. What it found instead was three ways the platform refuses people it
+should not.
+
+- [x] **F26 ★★★ Every error a hosted service raises reaches its caller as `500 INTERNAL_ERROR`.**
+      *(found and fixed 2026-09-10.)*
+
+      `toHttpError` asked `error instanceof MeshError`. A `--service` is a separate npm package with
+      its own `node_modules/@flybyme/mesh`, so the class it throws is a different object and the
+      answer is always no. Measured: flowboard's `project.git_info` refusing
+      `Either "id" or "repoPath" must be provided` — a `ClientError`, status 400 — arrived as
+      `500 { error: 'INTERNAL_ERROR', message: 'Internal server error' }`, sentence removed.
+
+      **So a hosted application could not tell its own users anything.** Every validation message,
+      every *that is not yours*, every *already exists*, flattened into one 500 — and a 500 is what a
+      client retries. It is the same defect as **F19** (zod's `instanceof` across copies, which would
+      have broken every paged read) and takes the same fix: read the structure, not the identity.
+
+      **The structure is deliberately narrow**, because the opposite failure is worse than a 500 —
+      this function decides whether a thrown message reaches the internet, and a thrown message may
+      carry a connection string. A candidate must be an `Error` with **both** a non-empty string
+      `code` and an integer `status` in 400–599. A `MongoServerError`'s `code` is a number, node's
+      `ENOENT` has no `status`, an undici failure has neither. `test/api/errors.test.ts` asserts each
+      of those still comes back opaque. **S**
+
+- [x] **F28 ★★ Nobody could change their own password on any seeded site.** *(found and fixed
+      2026-09-10, same sweep.)*
+
+      `identity.set_password` is a write, matches none of `gateFor`'s read patterns, and fell to the
+      default — `operator`. So flowboard's own owner, signed in to their own site, got 403 on their
+      own password, and the only account that could change it was the cluster operator.
+
+      The contract says so itself, in the comment directly above its own visibility: *"the input has
+      no id precisely so the caller **is** the subject."* There is no version of this an operator
+      does on somebody else's behalf. It joins the `USER` set, and `test/cdn/gate-for.test.ts` now
+      pins every exception in that table rather than leaving them to be re-derived. **S**
+
+- [ ] **F27 ★★★ A tenant cannot write to its own application.** *(found 2026-09-10, same sweep. Not
+      fixed: it is a change to what `gateFor` means, and that is the site owner's decision.)*
+
+      On `flowboard.localhost`, signed in as the account that **owns Flowboard Inc**, every write is
+      403: `card.create`, `card.update`, `project.create`, and all nine worktree gates. The board is
+      readable and unusable. The only account that can move a card on it is the platform operator.
+
+      `gateFor` ends in `return 'operator'`, and its justification is sound for the contracts it was
+      written against — *"everything that changes what runs on a hostname: composing, deploying,
+      releasing"*. It is applied to **every** contract on every site, including a hosted
+      application's own, where "changes what runs on a hostname" is not what a write means at all.
+      A card is not a deployment.
+
+      **The one thing that lowers a write today is an agent role map**, and that is upside down:
+      `grantsFor` drops a contract to `user` when a release's `agent` part names it, so whether a
+      *person* may add a card depends on whether an unrelated agent part was composed. Even then it
+      is partial — `flowboard-agent`'s `planner` names `card.create` and nothing names `card.update`,
+      so with the agent part composed a tenant may create a card and still not move it.
+
+      **The shape of the answer, not yet chosen.** `gateFor` is handed a key and nothing else, so it
+      cannot tell `cdn.deploy` from `card.update` except by knowing the platform's own domains. Three
+      candidates, and the third is probably right:
+
+      1. *A contract whose domain this repository does not define defaults to `user`.* One line, and
+         it makes a hosted application usable by its own members. But it reads as *a stranger's
+         writes are less dangerous than ours*, which is not a principle.
+      2. *A site's record names per-contract gates.* Already representable — `site.mesh[].contracts`
+         carries `auth` per key — so this is a seed-time flag rather than a platform change. Correct
+         and unusable: it is a flag per contract, per site, typed by hand.
+      3. **An application declares the gate its own contracts want, and the site owner's policy may
+         only tighten it.** The mirror of the agent role map, which already does exactly this for
+         agents and is the piece that proves the mechanism works. A part must never *choose* its own
+         gate — `grants.ts` opens by saying so — but declaring a *request* that a site may refuse is
+         a different act, and it is the one that carries the knowledge to where it lives.
+
+      Whichever it is, `gateFor`'s default must stay `operator` for this repository's own domains.
+      **M** · surfdns freeze gate: this decides what a site's `auth` level means, so it belongs in
+      the freeze rather than after it.
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item

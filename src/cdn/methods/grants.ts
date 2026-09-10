@@ -47,6 +47,20 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
 
     const USER = new Set([
         'identity.whoami', 'identity.sign_out', 'identity.ticket_revoke',
+        /**
+         * **A person may change their own password, and on every site this was `operator`.**
+         *
+         * It is a write, it matches none of the read patterns, so it fell to the default — and the
+         * default is the right instinct applied to the wrong contract. `set_password` takes no
+         * subject id, deliberately: *"the caller **is** the subject"*, which the contract states in
+         * the comment directly above its own visibility. There is no version of this an operator
+         * needs to do on somebody else's behalf, and no version a signed-in person should be
+         * refused.
+         *
+         * Found on the live two-tenant cluster: flowboard's own owner, signed in to their own site,
+         * got 403 on their own password. Roadmap F28.
+         */
+        'identity.set_password',
         'catalog.resolve', 'builder.get_artifact', 'builder.artifact_blob',
     ]);
     if (USER.has(key)) return 'user';
