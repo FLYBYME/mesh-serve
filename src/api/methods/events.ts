@@ -100,6 +100,41 @@ export const GLOBALLY_DELIVERED = new Set([
     'part', 'partVersion', 'artifact', 'node', 'group', 'role',
 ]);
 
+/**
+ * **Where the delivery scope is not the row scope, named per collection.**
+ *
+ * `scopedBy` on a `defineCrud` says two things at once — *which rows a caller may read* and *which
+ * subscribers hear a change* — and for one collection those are different questions.
+ *
+ * **`organization` is the case, and it is the only one.** It has no `scopedBy`, because an
+ * organization is not data inside a tenant; it *is* the tenant, and there is no column pointing at
+ * one. Reads are narrowed instead by identity's `beforeCrud`, which walks the caller's memberships
+ * and exempts an operator. That works for reads and says nothing about events, so
+ * `organization.created | updated | deleted` fell through every branch of `registryLookup`, were
+ * refused as unscopable, and **never appeared in any site's event table.**
+ *
+ * The symptom: *"the identity org list needs to watch for collection events… I have to reload the
+ * page to get the org list to update."* Every other collection on that screen streams. This one
+ * could not, and nothing said so — a refused event is absent from the descriptor, not reported.
+ *
+ * `id` is the right field because `decideDelivery` compares `payload[scope]` to the subscriber's own
+ * resolved scope, and a caller's scope **is** an organization id. So a member hears about their own
+ * organization, an operator hears about all of them by the operator branch, and a caller in no
+ * organization hears nothing. That is the same answer `beforeCrud` gives for reads, reached by a
+ * different mechanism because the two questions are asked in different places.
+ *
+ * **This map outranks both lists below**, including a declared `scopedBy`: it exists precisely to
+ * say *delivery differs here*, so a collection that later grows a row scope must not silently start
+ * delivering by it.
+ *
+ * The general fix is for `defineCrud` to take the two separately, which is a mesh change and mesh is
+ * frozen — so this is mesh-serve stating it for its own collections, the same way
+ * `GLOBALLY_DELIVERED` already does. Freeze gate V6.
+ */
+export const DELIVERED_SCOPED_BY = new Map<string, string>([
+    ['organization', 'id'],
+]);
+
 export const registryLookup: EventLookup = (name) => {
     const fromEvents = globalEventRegistry.get(name);
     if (fromEvents !== undefined) {
@@ -110,10 +145,14 @@ export const registryLookup: EventLookup = (name) => {
         const domain = name.slice(0, dot);
         const action = name.slice(dot + 1);
         if (action === 'created' || action === 'updated' || action === 'deleted') {
+            // Stated delivery wins over everything, including a declared row scope — see the map.
+            const delivered = DELIVERED_SCOPED_BY.get(domain);
+            if (delivered !== undefined) return { scopedBy: delivered };
+
             const crud = globalCrudRegistry.get(domain);
             if (crud !== undefined) {
-                // A declared row scope always wins: it is a stronger statement than either list,
-                // and a collection that grows one later must not keep being delivered globally.
+                // A declared row scope wins over the lists below: it is a stronger statement than
+                // either, and a collection that grows one must not keep being delivered globally.
                 if (crud.scopedBy !== undefined) return { scopedBy: crud.scopedBy };
                 // What the collection says about itself, then what this repository says about its own.
                 if (crud.delivery === 'global') return { scopedBy: 'global' };

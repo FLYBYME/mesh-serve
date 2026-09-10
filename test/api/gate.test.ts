@@ -11,6 +11,7 @@ import {
     type GateOutcome,
 } from '../../src/api/methods/gate.js';
 import { decideDelivery, type Subscriber } from '../../src/api/methods/delivery.js';
+import { DELIVERED_SCOPED_BY, registryLookup } from '../../src/api/methods/events.js';
 import { gateOf } from '../../src/api/schema/expose.js';
 import type { DescribedEvent } from '../../src/api/schema/events.js';
 
@@ -312,5 +313,68 @@ describe('callerMeta carries the resolved scope under every name a scopedBy uses
     it('takes the scope only from its argument', () => {
         expect(callerMeta(caller, 'a').organizationId).toBe('a');
         expect(callerMeta({ userId: 'u-1', roles: [] }, 'b').organizationId).toBe('b');
+    });
+});
+
+/**
+ * **An organization's own events, which no site could stream until 2026-09-10.**
+ *
+ * `scopedBy` on a `defineCrud` answers two questions with one word — which rows a caller may read,
+ * and which subscribers hear a change — and `organization` is the collection where they differ. It
+ * has no `scopedBy` at all, because an organization is not data inside a tenant; it **is** the
+ * tenant, and no column points at one. Reads are narrowed by identity's `beforeCrud` instead.
+ *
+ * That left `organization.created | updated | deleted` falling through every branch of
+ * `registryLookup`, refused as unscopable, and **absent from every site's event table** — which is
+ * why the identity app's organization list only changed on a page reload while every other list on
+ * the same screen streamed. A refused event is missing from the descriptor, not reported in it, so
+ * nothing anywhere said the stream was not there.
+ *
+ * `DELIVERED_SCOPED_BY` states the delivery scope for that one collection. These assertions are
+ * about `id` specifically: an event delivered by the wrong field is delivered to the wrong people,
+ * and *is it in the table* would pass either way.
+ */
+describe('organization events are delivered by the organization they are about', () => {
+    it('is looked up as scoped by id, not refused', () => {
+        expect(registryLookup('organization.created')).toEqual({ scopedBy: 'id' });
+        expect(registryLookup('organization.updated')).toEqual({ scopedBy: 'id' });
+        expect(registryLookup('organization.deleted')).toEqual({ scopedBy: 'id' });
+    });
+
+    /** The map outranks the lists, so a row scope arriving later cannot quietly take over. */
+    it('states delivery for exactly one collection', () => {
+        expect([...DELIVERED_SCOPED_BY.keys()]).toEqual(['organization']);
+    });
+
+    const event: DescribedEvent = {
+        name: 'organization.updated',
+        scope: { field: 'id' },
+        gate: { kind: 'auth', level: 'user' },
+    };
+    // The row is the organization, so its own id is the scope the subscriber is compared against.
+    const payload = { id: 'org-alpha', slug: 'alpha', name: 'Alpha' };
+
+    it('reaches a member of that organization', () => {
+        expect(decideDelivery(event, payload, { scope: 'org-alpha' } as Subscriber))
+            .toEqual({ deliver: true });
+    });
+
+    it('does not reach a member of another one', () => {
+        expect(decideDelivery(event, payload, { scope: 'org-beta' } as Subscriber))
+            .toEqual({ deliver: false, reason: 'out-of-scope' });
+    });
+
+    /**
+     * The operator branch, and it is what makes the identity app work at all: a cluster operator
+     * belongs to no organization by design, so without this they would hear about none of them.
+     */
+    it('reaches a cluster operator', () => {
+        expect(decideDelivery(event, payload, { operator: true } as Subscriber))
+            .toEqual({ deliver: true });
+    });
+
+    it('reaches nobody who is in no organization', () => {
+        expect(decideDelivery(event, payload, {} as Subscriber))
+            .toEqual({ deliver: false, reason: 'no-subscriber-scope' });
     });
 });
