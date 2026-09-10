@@ -328,20 +328,19 @@ for (const name of switchable) {
  * checks the caller is actually a member before honouring it, and refuses rather than falling back
  * to a different organization — silently acting in the wrong scope is the failure that matters.
  */
-const { resolveScope } = await import('../dist/api/methods/scope.js');
-
 /**
- * The rule itself is `resolveScope` (`src/api/methods/scope.ts`), where it is tested. It lived here
- * inline, untested, and the case where a caller belongs to several organizations had never been run:
- * the first cluster with two tenants found every scoped read answering 401 for its operator (F22).
- * This hook's only job now is to fetch the caller's memberships.
+ * The rule is `resolveScope` and the hook is `membershipAuthorize`, both in
+ * `src/api/methods/`, both tested. Two moves, for the same reason each time.
+ *
+ * F22 moved the *rule* out of the inline version that lived here: the case where a caller belongs
+ * to several organizations had never been run, and the first cluster with two tenants found every
+ * scoped read answering 401 for its operator. What stayed behind was the fetch — and it kept this
+ * file the only place a scoped read could be reached from, so the integration test that would have
+ * caught F22 could not be written without copying it. It is a library function now, and this line
+ * is what the test runs too.
  */
-const authorize = async ({ caller, requestedScope, siteScope }) => {
-    if (caller === undefined) return { authorized: true };
-
-    const me = await app.call('identity.whoami', {}, { meta: { user: { id: caller.userId } } });
-    return resolveScope({ memberships: me?.organizations ?? [], requestedScope, siteScope });
-};
+const { membershipAuthorize } = await import('../dist/api/methods/authorize.js');
+const authorize = membershipAuthorize((tool, params, options) => app.call(tool, params, options));
 
 const api = new ApiService({ port: apiPort, authorize });
 await app.registerModule(api);

@@ -93,6 +93,34 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
         return epoch;
     };
 
+    /**
+     * **End every live session a principal has, and record it once.**
+     *
+     * Two callers needed this and only one of them did it. `identity.ticket_revoke` marked each live
+     * ticket revoked *and* appended the principal row; `identity.set_password` appended the row
+     * alone — while its own comment promised the opposite, at length:
+     *
+     * > *"leaving the old sessions alive is exactly the case where that response does nothing … The
+     * > caller's own ticket dies too."*
+     *
+     * They did not die. `ticket_validate` decides on `isLive(ticket)`, which reads `revokedAt` on
+     * the ticket row and knows nothing about the revocation log — so a password changed because it
+     * was believed compromised left every session holding the old one working until it expired,
+     * days later. Nothing failed and nothing said so.
+     *
+     * **The row and the marks are both needed and answer different questions.** The marks are what
+     * `ticket_validate` reads, so they are correctness at the source. The row is what
+     * `revocations_since` serves, so it is how an API instance's ticket cache learns to stop serving
+     * a positive it already holds — without it a cached caller survives for the cache's TTL however
+     * dead the ticket is. Doing one and not the other is what this repository just did for months.
+     */
+    const revokePrincipal = async (userId: string, reason: string): Promise<number> => {
+        const live = await store.liveTicketsOf(userId);
+        for (const ticket of live) await store.markRevoked(ticket.token, now(), reason);
+        await revoke('principal', userId, reason);
+        return live.length;
+    };
+
     const validate = async (token: string): Promise<Validation> => {
         const { newest } = await store.epochRange();
         const ticket = await store.getTicket(token);
@@ -474,12 +502,12 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     }
 
                     if (userId !== undefined) {
-                        const live = await store.liveTicketsOf(userId);
-                        for (const ticket of live) await store.markRevoked(ticket.token, now(), reason);
                         // One revocation row for the principal rather than one per ticket: a poller
                         // that drops everything for this user is correct and cheaper, and a ticket
                         // issued a moment later is covered by the same row.
-                        return { revoked: live.length, epoch: await revoke('principal', userId, reason) };
+                        const revoked = await revokePrincipal(userId, reason ?? 'revoked');
+                        const { newest } = await store.epochRange();
+                        return { revoked, epoch: newest };
                     }
 
                     throw new Error('ticket_revoke needs a token or a userId.');
@@ -542,7 +570,7 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                      * they authenticated with is the one that just stopped being valid. They sign in
                      * again with the password they chose.
                      */
-                    await revoke('principal', userId, claimed ? 'account claimed' : 'password changed');
+                    await revokePrincipal(userId, claimed ? 'account claimed' : 'password changed');
 
                     if (claimed) {
                         broker?.logger.warn(`[identity] provisional account ${held.value.email} claimed`);

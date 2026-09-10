@@ -46,12 +46,16 @@ import { matchRoute, routeTable, type ContractLookup, type RouteTable } from './
 import { openStream, type Stream } from './methods/stream.js';
 import type { Subscriber } from './methods/delivery.js';
 import { createTicketCache, type TicketCache } from './methods/tickets.js';
+import { revocationPoller, type RevocationPoller } from './methods/revocations.js';
 import type { AuthorizeHook } from './methods/gate.js';
 import { describeExposure, type ExposureDescriptor } from './schema/descriptor.js';
 import type { ExposeEntry } from './schema/expose.js';
 import type { TelemSink } from '../telem/sinks/sink.js';
 import { getDefaultTelemSink } from '../telem/sinks/default.js';
 import { ALWAYS_GRANTED } from '../cdn/methods/grants.js';
+/** The name identity broadcasts a revocation under. Imported rather than retyped: two copies of a
+ *  topic string is how a subscriber stops hearing a publisher without anything failing. */
+import { TICKET_REVOKED_EVENT } from '../identity/module.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
 export const SHAPE_HEADER = 'x-exposure-shape';
@@ -108,6 +112,9 @@ export class ApiService extends ServiceModule {
 
     private broker: IServiceBroker | undefined;
     private tickets: TicketCache | undefined;
+    /** Pulls revocations on an interval. Without it the cache TTL is the only thing ending a
+     *  session — see where it is started. */
+    private revocations: RevocationPoller | undefined;
     private unsubscribeEvents: (() => void) | undefined;
     private readonly ttl: number;
 
@@ -156,9 +163,24 @@ export class ApiService extends ServiceModule {
 
         this.unsubscribeEvents = broker.on('*', (payload, packet) => {
             const topic = packet?.topic;
-            if (topic !== undefined) {
-                this.deliver(topic, payload);
+            if (topic === undefined) return;
+
+            /**
+             * **Push for latency.** The poller below is what makes revocation correct; this is what
+             * makes it immediate on the node that heard. Without it, signing out has a window as
+             * long as the poll interval — and *"I signed out and it still works"* is the one thing
+             * about a session people check.
+             *
+             * Handled here rather than through `mountEventHandler` because the name is identity's,
+             * not this repository's generated registry's, and a typed mount would need it declared
+             * in a file identity does not write to.
+             */
+            if (topic === TICKET_REVOKED_EVENT) {
+                this.applyRevocation(payload);
+                return;
             }
+
+            this.deliver(topic, payload);
         });
 
         /**
@@ -198,6 +220,37 @@ export class ApiService extends ServiceModule {
             },
         });
 
+        /**
+         * **Revocation, which until now was a thing this repository had written and never run.**
+         *
+         * `methods/revocations.ts` is the correctness half of auth §3.1 and says so at length —
+         * *"the event cannot be the mechanism … pull for correctness, push for latency"* — and
+         * nothing constructed it. Nothing subscribed to `identity.ticket_revoked` either. So the
+         * cache's TTL was not a backstop, it was the entire mechanism, and every revocation was
+         * advisory for as long as it: **signing out did not sign anybody out**, a password change
+         * left every other session working, and an operator killing a compromised ticket was
+         * telling identity something no API instance would ever ask about.
+         *
+         * Measured on a live cluster before this line existed: sign out, then call `identity.whoami`
+         * with the same ticket, and it answers 200.
+         *
+         * The interval is a correctness parameter and not tuning — it is the worst-case window in
+         * which a revoked ticket still works — so it stays where `revocations.ts` put it, next to
+         * the cache TTL rather than in a config default.
+         */
+        this.revocations = revocationPoller({
+            broker: { call: (tool, params) => this.call(tool, params) },
+            cache: this.tickets,
+            onError: (error) => {
+                // A failed poll is not fatal and must not be silent: it widens the window in which
+                // a revoked ticket still works, which is the one thing an operator would want to
+                // know about this component.
+                broker.logger.warn('[api] revocation poll failed — revoked tickets stay valid for '
+                    + 'longer than they should', error);
+            },
+        });
+        this.revocations.start();
+
         this.listener = await this.listen(this.options.port ?? 0, this.options.host ?? '0.0.0.0');
         const address = this.listener.address();
         this.port = typeof address === 'object' && address !== null ? address.port : this.options.port;
@@ -205,7 +258,30 @@ export class ApiService extends ServiceModule {
         broker.logger.info(`[api] serving on ${String(this.port)}`);
     }
 
+    /**
+     * A revocation heard over the mesh, applied to the ticket cache.
+     *
+     * Best-effort by construction — `TCPTransport.publish` is at-most-once, so an instance that was
+     * down or partitioned never hears this, not late but never. That is the poller's job. This one
+     * only has to be safe when the payload is not what it expects, which for a broadcast from
+     * another process is a thing to check rather than assume.
+     */
+    private applyRevocation(payload: unknown): void {
+        if (this.tickets === undefined || typeof payload !== 'object' || payload === null) return;
+
+        const { kind, subject } = payload as { kind?: unknown; subject?: unknown };
+        if (typeof subject !== 'string' || subject === '') return;
+
+        if (kind === 'principal') this.tickets.revokePrincipal(subject);
+        else if (kind === 'ticket') this.tickets.revoke(subject);
+    }
+
     async onStop(): Promise<void> {
+        if (this.revocations !== undefined) {
+            this.revocations.stop();
+            this.revocations = undefined;
+        }
+
         if (this.unsubscribeEvents !== undefined) {
             this.unsubscribeEvents();
             this.unsubscribeEvents = undefined;

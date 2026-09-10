@@ -1424,6 +1424,47 @@ should not.
       **M** · surfdns freeze gate: this decides what a site's `auth` level means, so it belongs in
       the freeze rather than after it.
 
+- [x] **F29 ★★★ Changing a password did not end a single session, and nothing consumed a revocation
+      at all.** *(found and fixed 2026-09-10, writing the fixture F27 said was missing.)*
+
+      Two halves, each independently enough to break it, and the second is the one that had been
+      written down and never wired.
+
+      **The source.** `identity.set_password` appended a revocation row and stopped.
+      `ticket_validate` decides on `isLive(ticket)`, which reads `revokedAt` on the **ticket row**
+      and knows nothing about the revocation log — so a password changed *because it was believed
+      compromised* left every session holding the old one working until it expired days later.
+      `identity.ticket_revoke` did it correctly five lines away, marking each live ticket and *then*
+      appending the row; the two never shared a path. `set_password`'s own comment promised the
+      outcome at length — *"leaving the old sessions alive is exactly the case where that response
+      does nothing … The caller's own ticket dies too"* — which is F25's shape exactly: a comment
+      stating a guarantee nothing implements, with every test around it green.
+
+      **The consumer.** `api/methods/revocations.ts` is the correctness half of auth §3.1, opens by
+      explaining why the event cannot be the mechanism — *"`TCPTransport.publish` … at-most-once …
+      not late, never"* — and defines `revocationPoller` for exactly that. **Nothing constructed it.**
+      Nothing subscribed to `identity.ticket_revoked` either. So the ticket cache's TTL was not a
+      backstop, it was the whole of it: every API instance served a revoked ticket for up to two
+      minutes after learning nothing, from a component built to make sure it learned.
+
+      **Fixed at both ends.** `revokePrincipal` in identity is now one path used by `set_password`
+      and `ticket_revoke`, because the row and the marks answer different questions and both are
+      needed — the marks are what `ticket_validate` reads, the row is what `revocations_since` serves
+      to an api already holding a cached positive. `ApiService` starts the poller (pull, for
+      correctness) and applies `identity.ticket_revoked` from its existing wildcard subscription
+      (push, for latency, so signing out is immediate on the node that heard rather than within a
+      poll interval).
+
+      **What found it** is worth recording, because it was not a hunch: writing an integration test
+      that changes a password and asserts the old ticket stops working. Three tests in
+      `test/identity/sign-out.test.ts` now say it, checked by reverting the one line and watching one
+      of them fail. **S**
+
+      *An incidental correction to my own reporting: I first measured this as "signing out does not
+      sign you out", and that was wrong — the probe sent `{}` to a contract whose `token` is
+      required, so nothing was revoked and the 400 was correct. Sign-out always worked. Changing a
+      password never did.*
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
