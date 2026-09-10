@@ -485,7 +485,15 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
                 'part-issue': { version: '0.1.0', digest: 'sha256:part-issue' },
                 'part-reg': { version: '0.1.0', digest: 'sha256:part-reg' },
             },
-            requires: ['identity.ticket_issue', 'identity.register'],
+            /**
+             * `identity.whoami`, not `identity.register`, and the swap is the point.
+             *
+             * This fixture used `register` as the contract a deploy adds. It cannot any more:
+             * `register` is in `ALWAYS_GRANTED`, so it is routed on every site that grants it
+             * regardless of what the release requires — which is the whole of that fix. A test
+             * proving *a deploy changes routes* has to use a contract a release actually controls.
+             */
+            requires: ['identity.ticket_issue', 'identity.whoami'],
             policy: {},
             composedAt: new Date(),
         });
@@ -500,6 +508,7 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
                 contracts: [
                     { key: 'identity.ticket_issue', auth: 'public' },
                     { key: 'identity.register', auth: 'public' },
+                    { key: 'identity.whoami', auth: 'user' },
                 ],
             }],
             theme: {}, policy: {}, title: 'Deploy Routes Site',
@@ -538,21 +547,28 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
         expect(userAuthedAnswer.status).toBe(200);
     });
 
+    /**
+     * **Routed versus refused, which is the distinction this proves.**
+     *
+     * Before the deploy `whoami` answers **404 NO_ROUTE** — the route does not exist on this
+     * hostname. After it, with no ticket, it answers **401** — the route exists and refuses the
+     * caller. Two different failures, and only the change from one to the other shows that a deploy
+     * rewrote the table without a restart.
+     *
+     * A 200 would have proven the same thing less precisely, by also depending on the gate.
+     */
     it('proves a deploy changes the routes a hostname serves, without a restart', async () => {
-        // Initially on Release 1: identity.ticket_issue is routed, identity.register is not
+        // Initially on Release 1: identity.ticket_issue is routed, identity.whoami is not
         const issueBefore = await request(port(), 'POST', '/api/identity/ticket', {
             host: DEPLOY_SITE,
             body: { email: 'alice@example.com', password: 'correct horse' },
         });
         expect(issueBefore.status).toBe(200);
 
-        const registerBefore = await request(port(), 'POST', '/api/identity/register', {
-            host: DEPLOY_SITE,
-            body: { email: 'deploy-reg@example.com', password: 'password123', displayName: 'Dep Reg' },
-        });
-        expect(registerBefore.status).toBe(404);
-        if (typeof registerBefore.body === 'object' && registerBefore.body !== null && 'error' in registerBefore.body) {
-            expect(registerBefore.body.error).toBe('NO_ROUTE');
+        const whoamiBefore = await request(port(), 'GET', '/api/identity/whoami', { host: DEPLOY_SITE });
+        expect(whoamiBefore.status).toBe(404);
+        if (typeof whoamiBefore.body === 'object' && whoamiBefore.body !== null && 'error' in whoamiBefore.body) {
+            expect(whoamiBefore.body.error).toBe('NO_ROUTE');
         }
 
         // Deploy Release 2 to the same hostname without restarting
@@ -561,12 +577,9 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
         );
         expect(deployed.changed).toBe(true);
 
-        // Now on Release 2: identity.register is served
-        const registerAfter = await request(port(), 'POST', '/api/identity/register', {
-            host: DEPLOY_SITE,
-            body: { email: 'deploy-reg@example.com', password: 'password123', displayName: 'Dep Reg' },
-        });
-        expect(registerAfter.status).toBe(200);
+        // Now on Release 2 the route exists, and refuses an anonymous caller rather than 404ing.
+        const whoamiAfter = await request(port(), 'GET', '/api/identity/whoami', { host: DEPLOY_SITE });
+        expect(whoamiAfter.status).toBe(401);
 
         // identity.ticket_issue is still served
         const issueAfter = await request(port(), 'POST', '/api/identity/ticket', {
@@ -574,6 +587,34 @@ describe.skipIf(!reachable)('routes come from the record (D2)', () => {
             body: { email: 'alice@example.com', password: 'correct horse' },
         });
         expect(issueAfter.status).toBe(200);
+    });
+
+    /**
+     * **The three granted to every site are routed whether the release names them or not.**
+     *
+     * Release 1 requires only `identity.ticket_issue`, and `identity.register` is served anyway.
+     * That is `ALWAYS_GRANTED`, and this is the assertion that would have caught its absence: the
+     * release filter used to delete exactly the contracts the grant mechanism adds unconditionally,
+     * so the platform had no exposed way to create an account anywhere.
+     */
+    it('routes an always-granted contract that the deployed release never asked for', async () => {
+        // Whichever release is deployed by the time this runs — neither of them requires `register`,
+        // which is the condition the assertion needs. Read rather than assumed, because the test
+        // above deploys, and a fixture fact that depends on test order is a fact that will change.
+        const site = await world.call<{ releaseHash?: string }>(
+            'site.find_one', { query: { host: DEPLOY_SITE } },
+        );
+        const release = await world.call<{ requires?: readonly string[] }>(
+            'release.find_one', { query: { hash: site.releaseHash } },
+        );
+        expect(release.requires ?? []).not.toContain('identity.register');
+
+        const registered = await request(port(), 'POST', '/api/identity/register', {
+            host: DEPLOY_SITE,
+            body: { email: 'always-granted@example.com', password: 'password123', displayName: 'AG' },
+        });
+
+        expect(registered.status).toBe(200);
     });
 
     it('returns a clean 404 for an unknown hostname without database queries on repeats', async () => {

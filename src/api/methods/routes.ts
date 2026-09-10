@@ -22,6 +22,7 @@
 import type { ToolContract, z as Zod } from '@flybyme/mesh';
 import type { ExposedContract, MeshDependency } from '../../cdn/schema/site.js';
 import { type CallShape, callShapeOf, hashShape } from '../schema/descriptor.js';
+import { ALWAYS_GRANTED } from '../../cdn/methods/grants.js';
 import type { Gate } from '../schema/expose.js';
 
 type AnyContract = ToolContract<Zod.ZodTypeAny, Zod.ZodTypeAny>;
@@ -97,8 +98,12 @@ export function routeTable(
             seen.add(key);
 
             // A release says what its parts call (requires); a site says what it exposes (mesh).
-            // When a release is present, only contracts required by its composed parts are routed.
-            if (required !== undefined && !required.has(key)) {
+            // When a release is present, only contracts required by its composed parts are routed —
+            // **except those granted to every site regardless**, which are in `requires` only by
+            // accident and were being deleted by the very filter that should not see them. The
+            // descriptor makes the same exemption; if these two ever disagree, a site advertises a
+            // route it does not have. See `ALWAYS_GRANTED`.
+            if (required !== undefined && !required.has(key) && !ALWAYS_GRANTED.includes(key)) {
                 continue;
             }
 

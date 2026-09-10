@@ -70,6 +70,23 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'identity.whoami', auth: 'user' },
     { key: 'identity.sign_out', auth: 'user' },
 
+    /**
+     * **An operator creates the account they are about to hand an organization to.**
+     *
+     * `operator`, not `public`. `identity.register` is granted `public` on an ordinary site, where
+     * self-registration is the point; a control site is the platform's own console and anyone able
+     * to make themselves an account on it is a stranger on the cluster.
+     *
+     * Added 2026-09-10, and its absence had a real consequence: **there was no exposed way to create
+     * an account anywhere on the platform.** Not here, because it was not in this list, and not on a
+     * seeded site, because the release filter deleted the unconditional grant (see `ALWAYS_GRANTED`,
+     * fixed the same day). A platform built on organizations and memberships could not add a person.
+     *
+     * It is the first half of the handover the operator role exists for. The second half is
+     * `transferOwnership`, which the store has and no contract calls — freeze gate V8b.
+     */
+    { key: 'identity.register', auth: 'operator' },
+
     // Who may do what.
     { key: 'identity.grant_role', auth: 'operator' },
     /**

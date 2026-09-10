@@ -97,6 +97,37 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
  * a dependency on it. So it is granted up front, exactly like signing in: a capability the page
  * needs in order for the rest of the page to be diagnosable at all.
  */
+/**
+ * **Granted to every site whether or not a part declares them — and therefore exempt from the
+ * release filter, which is the half that was missing.**
+ *
+ * `api.service.ts` narrows a site's granted contracts by the deployed release's `requires`, so a
+ * site exposes what it serves. Correct, and it deleted **exactly these three**, because a contract
+ * nobody declares is a contract not in `requires`. The one mechanism that says *grant this anyway*
+ * and the one that says *only what is declared* met, and the second won silently.
+ *
+ * Measured on a live cluster before the fix: a seeded site served `identity.ticket_issue` — only
+ * because the console's own manifest happens to name it — and served neither `identity.register` nor
+ * `telem.ingest`. So the platform had **no exposed way to create an account**, anywhere, and the
+ * reasons each is here were each defeated in their own terms:
+ *
+ * - **`identity.register` and `identity.ticket_issue`**, because *a page nobody can sign in to
+ *   cannot use anything else it was granted.* A site that granted sign-in only when an app
+ *   remembered to ask is a site where forgetting locks everyone out.
+ * - **`telem.ingest`**, and this is the one that bites hardest. *The parts worth hearing from are
+ *   the ones failing to mount, and a part that fails to mount does not get to declare anything* —
+ *   so requiring it to be declared means the failures it exists to report are exactly the failures
+ *   it cannot report. First deploy, nothing declared, nothing heard.
+ *
+ * Exported so the descriptor can skip the filter for these, rather than repeating the list. A second
+ * copy of a security-relevant set is how the two drift.
+ */
+export const ALWAYS_GRANTED: readonly string[] = [
+    'identity.register',
+    'identity.ticket_issue',
+    'telem.ingest',
+];
+
 export function grantsFor(
     requires: readonly string[],
     /**
@@ -120,12 +151,7 @@ export function grantsFor(
     contracts: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
     events: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
 } {
-    const keys = new Set([
-        ...requires,
-        'identity.register',
-        'identity.ticket_issue',
-        'telem.ingest',
-    ]);
+    const keys = new Set([...requires, ...ALWAYS_GRANTED]);
 
     const named = new Set(Object.values(agentRoles ?? {}).flat());
     const contracts = [...keys].sort().map((key) => {

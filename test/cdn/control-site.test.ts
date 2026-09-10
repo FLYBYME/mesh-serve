@@ -58,15 +58,31 @@ describe('the control contract list', () => {
     });
 
     /**
-     * **`identity.register` is deliberately absent.**
+     * **`identity.register` is present, and only for an operator.**
      *
-     * On a tenant site it is how people join. On the platform's own control surface it would be a
-     * way to mint an account on a machine you have not signed in to — and the first-boot operator
-     * already exists, so there is nothing it would enable that is not already possible for somebody
-     * holding the password printed at boot.
+     * It was deliberately absent until 2026-09-10, on this reasoning: *"on the platform's own
+     * control surface it would be a way to mint an account on a machine you have not signed in
+     * to — and the first-boot operator already exists, so there is nothing it would enable that is
+     * not already possible for somebody holding the password printed at boot."*
+     *
+     * **The first half is right about `public` and does not apply at `operator`**, which is how it
+     * is now exposed: minting an account requires already being an operator on the cluster.
+     *
+     * The second half was simply wrong, and the fixture proved it. Holding the printed password
+     * gives you *one* account. It gives you no way to make a **second** one — so an operator could
+     * not create the person they were about to hand an organization to, and a two-tenant cluster
+     * could not be built at all. Combined with the release filter deleting the unconditional grant
+     * on seeded sites (`ALWAYS_GRANTED`), the platform had **no exposed way to create an account
+     * anywhere**.
+     *
+     * Both assertions matter. Present, so the handover is possible; never `public`, so the original
+     * objection stays answered.
      */
-    it('offers no way to create an account', () => {
-        expect(CONTROL_CONTRACTS.map((c) => c.key)).not.toContain('identity.register');
+    it('lets an operator create an account, and nobody else', () => {
+        const register = CONTROL_CONTRACTS.find((c) => c.key === 'identity.register');
+
+        expect(register).toBeDefined();
+        expect(register?.auth).toBe('operator');
     });
 
     /** Everything that changes what the platform runs is an operator's, without exception. */

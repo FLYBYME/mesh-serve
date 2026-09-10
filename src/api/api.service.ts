@@ -50,6 +50,7 @@ import { describeExposure, type ExposureDescriptor } from './schema/descriptor.j
 import type { ExposeEntry } from './schema/expose.js';
 import type { TelemSink } from '../telem/sinks/sink.js';
 import { getDefaultTelemSink } from '../telem/sinks/default.js';
+import { ALWAYS_GRANTED } from '../cdn/methods/grants.js';
 
 export const EXPOSURE_HEADER = 'x-exposure';
 export const SHAPE_HEADER = 'x-exposure-shape';
@@ -963,7 +964,14 @@ export class ApiService extends ServiceModule {
                 if (seen.has(contractKey)) continue;
                 seen.add(contractKey);
 
-                if (required !== undefined && !required.has(contractKey)) {
+                /**
+                 * The release decides what a site exposes — **except for the few granted to every
+                 * site whether a part declares them or not.** Those are in `requires` only by
+                 * accident, so filtering by it deleted precisely them. See `ALWAYS_GRANTED`.
+                 */
+                if (required !== undefined
+                    && !required.has(contractKey)
+                    && !ALWAYS_GRANTED.includes(contractKey)) {
                     continue;
                 }
 
