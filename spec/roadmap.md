@@ -1024,6 +1024,65 @@ task** — each is a decision about the platform's own surface that blocks any U
       it does not work. A second sweep is worth its own item: which other exposed contracts has
       nothing ever called? **S to fix, and the sweep is V9.**
 
+- [ ] **F16 ★★★ `CONTROL_CONTRACTS` is a ceiling, not the exposed set — and following the documented
+      bring-up costs an operator two thirds of the platform.** *(found 2026-09-10, first hour of
+      freeze gate V9)*
+
+      Measured on two live nodes rather than read off the code:
+
+      | | contracts at `/_describe` |
+      | --- | --- |
+      | a control site with **no release deployed** | **38** |
+      | the same host after `site.seed` put the console on it | **15** |
+
+      Both logged `[cdn] control site "127.0.0.1" updated — 34 contract(s) for an operator` at boot.
+      **The log is false on the second one and has been since the first release was deployed.**
+
+      The mechanism is deliberate and correct: `api.service.ts:949` reads `activeRelease.requires`
+      and skips any entry of `site.mesh` the deployed release does not name. A site should expose
+      what it serves and nothing more — least privilege at the composition boundary. With no release,
+      `required` is `undefined` and no narrowing happens, which is why this was invisible: **an
+      unseeded control site is the only one that offers the control surface.**
+
+      What is actually exposed is **`CONTROL_CONTRACTS ∩ release.requires`**, and nothing says so.
+      Every comment in `control.ts` reads as though the list is the offer — *"36 entries long"*,
+      *"added to `CONTROL_CONTRACTS` must not need somebody to remember to re-seed"* — and the boot
+      log states a number that is a ceiling.
+
+      **The operational consequence is the serious part.** `DEFAULT_CONTROL_HOST` is `127.0.0.1` and
+      HANDOVER.md's bring-up seeds the console onto `--host 127.0.0.1`, so following the instructions
+      replaces the control surface with the console's manifest. Unreachable afterwards, through the
+      api or the CLI:
+
+      ```
+      node.status  node.assign  node.provision          the fleet, entirely
+      builder.*    catalog.*    cdn.compose  site.create  the build path
+      organization.*  role.find  membership.create/delete  identity.grant_role
+      ```
+
+      `mesh-serve --host 127.0.0.1:5005 node status` answers *control does not offer "node status" to
+      you*, correctly. And the standing rule is that this package is managed **through the api and
+      the CLI, nothing else** — so a cluster brought up as documented cannot be fully operated by any
+      sanctioned route.
+
+      Three candidate fixes, not chosen here:
+
+      1. **Seed applications onto a hostname that is not the control host.** Costs nothing, changes
+         one line of the bring-up, and leaves both sites whole. Probably right.
+      2. **Exempt the control site from the `requires` narrowing.** Makes the control surface
+         dependable and makes one site special, which is the kind of exception this codebase spends
+         its comments arguing against.
+      3. **`site.seed` refuses the control host** unless told otherwise. Turns a silent reduction
+         into a refusal, which is the direction every other decision here goes.
+
+      Whichever, **the boot log must stop printing a number it does not know.** It has the site
+      record and not the release; the honest line names the ceiling as a ceiling.
+
+      This is the case for freeze gate **V9** and it arrived in its first hour. The item's second
+      question — *has anything ever called it?* — found `membership.find` (F15). Its first question —
+      *why is this safe to expose?* — cannot even be answered for these 23, because **they are not
+      exposed**, and the file that lists them says they are. **M** · surfdns freeze gate V9
+
 ## Track E — Fleet
 
 **All four done.** See [fleet.md](./fleet.md). `test/fleet/fleet.test.ts` — 27 tests, each E-item
