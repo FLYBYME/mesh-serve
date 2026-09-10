@@ -37,7 +37,7 @@ import { hostOf } from '../cdn/methods/hostname.js';
 import { describeContract } from './contracts/api.contract.js';
 import { api_describe } from './tools/describe.js';
 import { toHttpError } from './methods/errors.js';
-import { executeGate, isOperator, SCOPE_HEADER, type Caller } from './methods/gate.js';
+import { callerMeta, executeGate, isOperator, SCOPE_HEADER, type Caller } from './methods/gate.js';
 import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { eventTable, type EventTable } from './methods/events.js';
@@ -422,7 +422,7 @@ export class ApiService extends ServiceModule {
                          */
                         ? { unauthenticated: true }
                         : {
-                            user: { id: caller.userId, tenant_id: outcome.scope ?? '', roles: [...caller.roles] },
+                            user: callerMeta(caller, outcome.scope),
                         }),
                     ...(outcome.scope === undefined ? {} : { tenant_id: outcome.scope }),
                 },

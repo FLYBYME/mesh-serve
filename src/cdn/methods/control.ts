@@ -73,12 +73,15 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     // Who may do what.
     { key: 'identity.grant_role', auth: 'operator' },
     /**
-     * The accounts, without credentials.
+     * **Nothing here lists the cluster's accounts, and that is the design.**
      *
-     * `user.find` is not here and cannot be: `passwordHash` is a field of `UserSchema`, so a
-     * generated find returns it and no gate changes that (roadmap F13).
+     * `user.find` cannot be exposed — `passwordHash` is a field of `UserSchema`, a generated find
+     * returns it, and no gate subtracts a field (freeze gate V2). `identity.people` was a projection
+     * written to get around that and was withdrawn on 2026-09-10 (V8): the operator brings a cluster
+     * up and hands it over, so reading every account on the deployment is not part of the role.
+     *
+     * *Who is in this organization* is `membership.find` below, scoped by `organizationId`.
      */
-    { key: 'identity.people', auth: 'operator' },
     { key: 'organization.find', auth: 'operator' },
     { key: 'organization.get', auth: 'operator' },
     { key: 'organization.create', auth: 'operator' },
@@ -107,17 +110,20 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'cdn.site_edit', auth: 'operator' },
     { key: 'release.find', auth: 'operator' },
     { key: 'release.get', auth: 'operator' },
+    /**
+     * **This organization's sites, not the deployment's.** `site` is `scopedBy: 'tenantId'`, so an
+     * operator asking here gets the sites of whichever organization their scope resolves to, which
+     * on a control site is the platform's own.
+     *
+     * That distinction is the one a console got wrong on 2026-09-10, rendering exactly this read
+     * under a header saying *What this cluster serves*. It looked right because the only clusters
+     * anyone had tested on had one organization. The answer is that the screen says what it shows,
+     * not that the read widens — see `site.contract.ts` for the two doors, and freeze gate V15 for
+     * the two-organization fixture that would have caught it.
+     */
     { key: 'site.find', auth: 'operator' },
     { key: 'site.get', auth: 'operator' },
     { key: 'site.create', auth: 'operator' },
-    /**
-     * Every site on the cluster, not just this organization's.
-     *
-     * `site.find` above is scoped to the caller's tenant, which for an operator is whichever
-     * organization they happen to hold a membership in — the platform's own. A control site's list
-     * is meant to be the deployment (roadmap F14).
-     */
-    { key: 'cdn.all_sites', auth: 'operator' },
     /**
      * The whole pipeline in one call, so a browser and a CLI seed a site the same way rather than
      * the CLI owning an orchestration a console would have to reimplement.

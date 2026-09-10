@@ -40,26 +40,28 @@ import { site_seed } from './tools/seed.js';
 import {
     composeContract, deployContract, releaseCrud, type Release,
 } from './contracts/release.contract.js';
-import { allSitesContract, resolveSiteContract, siteCrud, siteEditContract, type Site } from './contracts/site.contract.js';
+import { resolveSiteContract, siteCrud, siteEditContract, type Site } from './contracts/site.contract.js';
 import { assertTenant, hostOf, TenantMismatch } from './methods/hostname.js';
 import { generatePage } from './methods/page.js';
 import { headersFor, pathOf, resolveFile, resolveRequest } from './methods/resolve.js';
 import { rollForPart } from './methods/rolling.js';
 import { cdn_compose } from './tools/compose.js';
 import { cdn_deploy } from './tools/deploy.js';
-import { cdn_all_sites } from './tools/all_sites.js';
 import { cdn_resolve_site } from './tools/resolve_site.js';
 import { cdn_site_edit } from './tools/site_edit.js';
 import type { TelemSink } from '../telem/sinks/sink.js';
 import { getDefaultTelemSink } from '../telem/sinks/default.js';
 
 /**
- * Only what the two confined readers need: one query, bounded. Deliberately not the whole
+ * Only what the one confined reader needs: one query, bounded. Deliberately not the whole
  * repository — no update, no delete, no cursor.
  *
- * Two tools may hold this and no others: `tools/resolve_site.ts`, which cannot enumerate, and
- * `tools/all_sites.ts`, which may only because it checks for the cluster operator role first. Each
- * states its own invariant at the read.
+ * **Exactly one tool may hold this: `tools/resolve_site.ts`**, which states its invariant at the
+ * read and cannot enumerate. It was briefly two; `tools/all_sites.ts` held it as well, on the
+ * argument that checking the operator role in the handler earned the bypass. Withdrawn 2026-09-10
+ * (freeze gate V8), and the reason it did not earn it is worth keeping: `meta.user.roles` is a wire
+ * field a mesh peer fills in, so that check was api-surface policy rather than a boundary. A second
+ * holder needs an invariant, not a role.
  */
 export interface SiteRepo {
     find(options: { query: Record<string, unknown>; limit: number }): Promise<readonly unknown[]>;
@@ -156,7 +158,6 @@ export class CdnService extends ServiceModule {
         this.mountTool(composeContract, cdn_compose);
         this.mountTool(deployContract, cdn_deploy);
         this.mountTool(resolveSiteContract, cdn_resolve_site);
-        this.mountTool(allSitesContract, cdn_all_sites);
         this.mountTool(siteEditContract, cdn_site_edit);
         this.mountTool(seedContract, site_seed);
 
@@ -315,8 +316,8 @@ export class CdnService extends ServiceModule {
 
     /**
      * The site collection, read directly — see `tools/resolve_site.ts` for why, and for the
-     * invariant that makes it defensible. Only `resolve_site` and `all_sites` may use it, and each
-     * carries its own invariant at the point of the read.
+     * invariant that makes it defensible. **Only `resolve_site` may use it**, and it carries that
+     * invariant at the point of the read.
      */
     siteRepo(): SiteRepo {
         if (this.database === undefined) throw new Error('The cdn is not started.');

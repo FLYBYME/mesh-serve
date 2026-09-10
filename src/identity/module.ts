@@ -672,50 +672,6 @@ export function createIdentityModule(options: IdentityModuleOptions = {}): Ident
                     return { userId: found.id, roles: after, changed };
                 }
 
-                /**
-                 * Who is on this cluster.
-                 *
-                 * The role is checked here and not left to the site's gate, for the same reason
-                 * `grant_role` above checks it: this is an unbounded read of every account on the
-                 * deployment, and a gate is configuration. If a site record is wrong, the mistake
-                 * should be a refusal rather than the whole user table.
-                 *
-                 * **The redaction is the output schema**, not this handler — `peopleContract` has no
-                 * `passwordHash` field, so one cannot be returned by forgetting to remove it. What
-                 * happens below is a mapping, and it would be a compile error if it were not.
-                 */
-                case 'identity.people': {
-                    const { search, role, limit } = input as {
-                        search?: string; role?: string; limit: number;
-                    };
-
-                    const caller = (_ctx.meta as { user?: { roles?: string[] } } | undefined)?.user;
-                    if (!(caller?.roles ?? []).includes('operator')) {
-                        throw new MeshError({
-                            code: 'FORBIDDEN', status: 403,
-                            message: 'identity.people requires the operator role.',
-                        });
-                    }
-
-                    // One more than asked for, so *there are more* is answered by the same query
-                    // rather than by a count of a collection nobody wanted counted.
-                    const found = await store.listUsers({ search, role, limit: limit + 1 });
-                    const truncated = found.length > limit;
-
-                    return {
-                        people: found.slice(0, limit).map((u) => ({
-                            userId: u.id,
-                            email: u.value.email,
-                            displayName: u.value.displayName,
-                            roles: u.value.roles,
-                            suspendedAt: u.value.suspendedAt,
-                            suspendedReason: u.value.suspendedReason,
-                            provisional: u.value.provisional,
-                        })),
-                        truncated,
-                    };
-                }
-
                 case 'identity.permits': {
                     const { roles, contract, organizationId } = input as {
                         roles: string[];

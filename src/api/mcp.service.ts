@@ -50,7 +50,7 @@
 import { MeshError, ServiceModule, type IServiceBroker } from '@flybyme/mesh';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
-import { executeGate, SCOPE_HEADER, type AuthorizeHook, type Caller } from './methods/gate.js';
+import { callerMeta, executeGate, SCOPE_HEADER, type AuthorizeHook, type Caller } from './methods/gate.js';
 import { resolveCaller } from './methods/caller.js';
 import { coerceToSchema, formatZodError } from './methods/input.js';
 import { toHttpError } from './methods/errors.js';
@@ -510,7 +510,7 @@ export class McpService extends ServiceModule {
             meta: {
                 ...(caller === undefined
                     ? { unauthenticated: true }
-                    : { user: { id: caller.userId, tenant_id: outcome.scope ?? '', roles: [...caller.roles] } }),
+                    : { user: callerMeta(caller, outcome.scope) }),
                 ...(outcome.scope === undefined ? {} : { tenant_id: outcome.scope }),
             },
         });
@@ -562,7 +562,7 @@ export class McpService extends ServiceModule {
                 approver,
             }, {
                 meta: {
-                    user: { id: caller.userId, tenant_id: scope ?? '', roles: [...caller.roles] },
+                    user: callerMeta(caller, scope),
                     ...(scope === undefined ? {} : { tenant_id: scope }),
                 },
             }) as { approvalId: string; expiresAt: string };

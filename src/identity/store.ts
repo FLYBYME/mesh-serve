@@ -42,18 +42,6 @@ export interface IdentityStore {
     anyUser(): Promise<boolean>;
     getUser(id: string): Promise<Stored<User> | undefined>;
     updateUser(id: string, patch: Partial<User>): Promise<void>;
-    /**
-     * Every account, for `identity.people`.
-     *
-     * Returns whole `User` rows — including `passwordHash` — because that is what the store holds
-     * and a store method that pre-redacted would be a projection in the wrong place. **The
-     * projection is the contract's output schema**, which is the only thing that reaches a caller.
-     *
-     * `limit + 1` is fetched by the caller's convention so *there are more* can be answered without
-     * a second count; see the handler.
-     */
-    listUsers(options?: { search?: string; role?: string; limit?: number }): Promise<readonly Stored<User>[]>;
-
     createOrganization(org: Organization): Promise<Stored<Organization>>;
     getOrganization(id: string): Promise<Stored<Organization> | undefined>;
     transferOwnership(organizationId: string, currentOwnerId: string, newOwnerId: string): Promise<void>;
@@ -150,21 +138,6 @@ export function memoryStore(): IdentityStore {
         async getUser(key) {
             const value = users.get(key);
             return value === undefined ? undefined : { id: key, value };
-        },
-        async listUsers(options) {
-            const needle = options?.search?.toLowerCase();
-            const matches: Stored<User>[] = [];
-            for (const [key, value] of users) {
-                if (options?.role !== undefined && !value.roles.includes(options.role)) continue;
-                if (needle !== undefined
-                    && !value.email.toLowerCase().includes(needle)
-                    && !value.displayName.toLowerCase().includes(needle)) continue;
-                matches.push({ id: key, value });
-            }
-            // Stable and readable, and the mongo side sorts the same way so a console does not see
-            // the list reorder when a deployment changes store.
-            matches.sort((a, b) => a.value.email.localeCompare(b.value.email));
-            return options?.limit === undefined ? matches : matches.slice(0, options.limit);
         },
         async updateUser(key, patch) {
             const existing = users.get(key);
@@ -607,29 +580,6 @@ export function mongoStore(database: Database | Db): IdentityStore {
             const doc = await cols.users.findOne(byId(key));
             if (doc === null) return undefined;
             return { id: toId(doc._id), value: UserSchema.parse(doc) };
-        },
-
-        async listUsers(options) {
-            await ensureReady();
-            const cols = getCollections();
-
-            const filter: Record<string, unknown> = {};
-            if (options?.role !== undefined) filter['roles'] = options.role;
-            if (options?.search !== undefined) {
-                // Escaped: a search box is user input, and `.*` in a mongo regex is a scan somebody
-                // else asked for.
-                const escaped = options.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                filter['$or'] = [
-                    { email: { $regex: escaped, $options: 'i' } },
-                    { displayName: { $regex: escaped, $options: 'i' } },
-                ];
-            }
-
-            const cursor = cols.users.find(filter).sort({ email: 1 });
-            if (options?.limit !== undefined) cursor.limit(options.limit);
-
-            return (await cursor.toArray())
-                .map((doc) => ({ id: toId(doc._id), value: UserSchema.parse(doc) }));
         },
 
         async updateUser(key, patch) {

@@ -910,6 +910,30 @@ task** — each is a decision about the platform's own surface that blocks any U
       of `passwordHash` by name, because the defect this prevents is a credential arriving in a field
       nobody thought to look at. **S**
 
+      **Withdrawn 2026-09-10, the same day, by freeze gate V8 — and the projection was never the
+      problem.** `identity.people` was safe. It should not have existed, for three reasons that are
+      about the *capability* rather than the implementation:
+
+      1. **The operator is a bootstrap-and-handover role.** Bring a cluster up, `site.seed` a
+         hostname — which creates the organization owning it — hand it over, step out. Reading every
+         account on the deployment is not part of that.
+      2. **The gate was weaker than it read.** *"Checked in the handler rather than trusted from the
+         site record"* is stated above as the stronger guarantee. It is not: `meta.user` is a wire
+         field a joined peer fills in (**D6**), so both rest on the same assertion. It is defence
+         against a misconfigured site, which is worth having and is not isolation.
+      3. **It answered the wrong question.** *Who is in this organization* is `membership.find`,
+         already `scopedBy: 'organizationId'`, already exposed, and bounded by construction.
+
+      **The part of F13 that is still true is the gap**, and it is now freeze gate **V2**: a
+      generated find cannot omit a column, so four purpose-built contracts exist to route around one
+      missing feature. Withdrawing this one does not close it — `user.find` is still unexposable —
+      and the console converting to a members view found the cost directly: **a membership names a
+      person by `userId` and nothing exposed turns an id into a name**, so the screen renders ids.
+      That is the first time this gap has cost a person reading a screen rather than an author
+      writing a contract, and it is the strongest argument for field-level visibility yet: with it,
+      `user.get` would expose `email` and `displayName` and withhold `passwordHash`, and the screen
+      would simply work.
+
 - [x] **F14 An operator console shows one organization's sites, not the cluster's.**
       *(found and fixed 2026-09-10, verifying stage 3)* `site` is `scopedBy: 'tenantId'` and mesh is frozen, so a
       caller resolves to exactly one organization and `site.find` answers within it. The operator now
@@ -935,6 +959,70 @@ task** — each is a decision about the platform's own surface that blocks any U
       7 tests, on a **two-organization** fixture. That is the whole design of the test file: on a
       single-tenant fixture every assertion passes against a scoped read, which is precisely how the
       bug shipped looking correct. **S**
+
+      **Withdrawn 2026-09-10, the same day, by freeze gate V8. The diagnosis was right and the fix
+      was the wrong half of it.**
+
+      Everything above about the header is correct: it said *What this cluster serves* over a scoped
+      read and was already lying. What does not follow is the next paragraph. **The claim was the
+      defect, not the query** — the answer was to make the sentence true, which costs one string, not
+      to widen the read, which costs a contract, a second bypass of scoped CRUD, and a permanent
+      cluster-wide enumeration on the exposed surface.
+
+      Three things were wrong with it beyond that:
+
+      - **Cluster inventory is a fleet question and this put it on the cdn.** *What is on this box* is
+        real during an incident, and the caller is the box's own shell rather than a browser holding
+        a ticket. `node.status` is operator-gated and already exists for it.
+      - **It invented a second answer to a settled question** — `{ sites, truncated }` where the
+        platform already had `find(limit)` and `count`. See freeze gate V1: whatever `find` versus
+        `list` is decided to be, a newcomer does not get to disagree with it.
+      - **`SiteRepo` named two permitted holders and is back to one.** *"The only honest way to widen
+        a stated invariant"* is true as far as it goes, and the honest thing before widening one is
+        to ask whether the second holder should exist. It should not have.
+
+      The console now reads `site.find` and says *N hosts in <organization>*. The two-organization
+      fixture this item introduced is the part worth keeping, and it is promoted to freeze gate
+      **V15**: it is a prerequisite for auditing the operator bypasses at all, because on a
+      one-organization cluster a scoped read and an unscoped one are indistinguishable.
+
+- [x] **F15 ★ `membership.find` was exposed, gated, documented, and refused every caller that ever
+      made it.** *(found and fixed 2026-09-10, building the members view for freeze gate V8)*
+
+      ```
+      Scoped collection "membership" requires a resolved "organizationId" scope,
+      but none was provided in call context.
+      ```
+
+      **The scope was resolved. It was spelled wrong.** mesh resolves a scoped read by looking on
+      `meta.user` for the field the collection named, then for its snake_case spelling
+      (`DatabaseMiddleware.ts:35`). The api wrote `tenant_id` and nothing else, so
+      `scopedBy: 'tenantId'` found it via the fallback and **`scopedBy: 'organizationId'` found
+      nothing** — and `membership` is the one collection on the platform scoped by anything other
+      than `tenantId`.
+
+      Fixed in **one place**: `callerMeta(caller, scope)` in `gate.ts` builds `meta.user` for both
+      `api.service.ts` and the two call sites in `mcp.service.ts`, writing the resolved scope under
+      both names. They are one value — the gate resolves exactly one scope from the caller's own
+      memberships — spelled the two ways the collections spell it. **Not a widening:** the value is
+      still `outcome.scope`, so a caller-supplied organization still cannot reach it. The alternative
+      was renaming `scopedBy` on `membership`, which is a schema change to work around a lookup this
+      side controls.
+
+      4 tests, and they assert the **field names** rather than that a scope is carried. A test of the
+      latter would have passed against the broken version, because it was carried.
+
+      **What this actually is, is F14's lesson one layer down.** `membership.find` sat in
+      `CONTROL_CONTRACTS` at `operator` from the day the control site existed. It was in the
+      exposure descriptor, in the generated client, and in the freeze gate's own text as the
+      recommended alternative to `identity.people` — *"already `scopedBy: 'organizationId'`, already
+      exposable"* — written by somebody, twice, who had never called it. Exposure makes a contract a
+      promise and **nothing had asked whether this one was true.**
+
+      That is precisely the case freeze gate **V9** exists for: every exposed contract needs a
+      sentence saying why it is safe to expose, and writing that sentence is when somebody finds out
+      it does not work. A second sweep is worth its own item: which other exposed contracts has
+      nothing ever called? **S to fix, and the sweep is V9.**
 
 ## Track E — Fleet
 

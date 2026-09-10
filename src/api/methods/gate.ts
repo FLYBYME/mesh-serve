@@ -138,6 +138,44 @@ export function isOperator(caller: Caller | undefined): boolean {
 }
 
 /**
+ * **The caller's `meta.user`, built in one place, carrying the resolved scope under every name a
+ * `scopedBy` collection might look for it by.**
+ *
+ * mesh resolves a scoped read by looking on `meta.user` for the field the collection named, then for
+ * its snake_case spelling (`DatabaseMiddleware.ts:35`). So `scopedBy: 'tenantId'` finds `tenant_id`,
+ * and **`scopedBy: 'organizationId'` finds nothing at all** — which was true of `membership`, the one
+ * collection in the platform scoped by anything else.
+ *
+ * The symptom was that `membership.find` refused every caller, forever, with *Scoped collection
+ * "membership" requires a resolved "organizationId" scope*. It is exposed on the control site at
+ * `operator` and has been since the control site existed, so this is a contract that was reachable,
+ * documented, gated and **not once callable** — found 2026-09-10 by building a members screen on it
+ * (freeze gate V8), and it is the concrete case for V9: an exposed contract nobody had asked *does
+ * this work* about.
+ *
+ * A tenant and an organization are **the same value** here — the gate resolves exactly one scope
+ * from the caller's own memberships, and `Allowed.scope` is it. Writing it under both names is not
+ * two facts; it is one fact spelled the two ways the collections spell it. The alternative is
+ * renaming `scopedBy` on `membership`, which is a schema change on a frozen generator to work around
+ * a lookup this side controls.
+ *
+ * **A caller-supplied scope cannot reach this.** The value is `outcome.scope`, which the gate
+ * returned, which came from memberships. That is the whole reason the gate returns a scope rather
+ * than the request carrying one.
+ */
+export function callerMeta(
+    caller: Caller,
+    scope: string | undefined,
+): { readonly id: string; readonly tenant_id: string; readonly organizationId: string; readonly roles: string[] } {
+    return {
+        id: caller.userId,
+        tenant_id: scope ?? '',
+        organizationId: scope ?? '',
+        roles: [...caller.roles],
+    };
+}
+
+/**
  * Run the gate.
  *
  * Two stages, always in this order, and the second can only take away:

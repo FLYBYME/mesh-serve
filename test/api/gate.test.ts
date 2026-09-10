@@ -2,6 +2,7 @@ import { defineContract, z } from '@flybyme/mesh';
 import { describe, expect, it } from 'vitest';
 
 import {
+    callerMeta,
     executeGate,
     ADMIN_ROLE,
     OPERATOR_ROLE,
@@ -249,5 +250,67 @@ describe('a provisional account is refused until it is claimed', () => {
         });
 
         expect(outcome.ok).toBe(true);
+    });
+});
+
+/**
+ * **The scope has to reach mesh under the name each collection spells it with.**
+ *
+ * mesh resolves a scoped read by looking on `meta.user` for the field the collection named, then for
+ * its snake_case spelling. `scopedBy: 'tenantId'` therefore finds `tenant_id`, and
+ * `scopedBy: 'organizationId'` found nothing at all — so `membership.find` refused every caller with
+ * *Scoped collection "membership" requires a resolved "organizationId" scope*, while being exposed
+ * on the control site at `operator` the whole time.
+ *
+ * Nobody noticed because nothing called it. That is the shape freeze gate V9 exists for: `public`
+ * means *may be exposed*, exposure makes it a promise, and a promise nothing has ever tested is a
+ * route table entry.
+ *
+ * These assertions are deliberately about the **field names**. A test that asserted "the scope is
+ * carried" would have passed on the broken version, because it was carried — under one name, and the
+ * collection asked for another.
+ */
+describe('callerMeta carries the resolved scope under every name a scopedBy uses', () => {
+    const caller: Caller = { userId: 'u-1', roles: [OPERATOR_ROLE] };
+
+    it('spells the scope both tenant_id and organizationId', () => {
+        const meta = callerMeta(caller, 'org-7');
+
+        // What `scopedBy: 'tenantId'` finds, via mesh's snake_case fallback.
+        expect(meta.tenant_id).toBe('org-7');
+        // What `scopedBy: 'organizationId'` finds. Absent until 2026-09-10.
+        expect(meta.organizationId).toBe('org-7');
+    });
+
+    it('carries the caller and the roles unchanged', () => {
+        const meta = callerMeta(caller, 'org-7');
+
+        expect(meta.id).toBe('u-1');
+        expect(meta.roles).toEqual([OPERATOR_ROLE]);
+    });
+
+    /**
+     * A caller with no resolved scope gets an empty string rather than a missing key, which is what
+     * every scoped collection then refuses on. Refusing is right: `resolveCallerScope` requires a
+     * non-empty string, so an unscoped caller cannot read a scoped collection at all.
+     */
+    it('leaves an unscoped caller unable to resolve either name', () => {
+        const meta = callerMeta(caller, undefined);
+
+        expect(meta.tenant_id).toBe('');
+        expect(meta.organizationId).toBe('');
+    });
+
+    /**
+     * **The scope is the gate's answer, never the request's.**
+     *
+     * The only thing that reaches this function is `outcome.scope`, resolved from the caller's own
+     * memberships. Copying it under a second name does not create a second way to set it — worth an
+     * assertion because "the same value under two names" is exactly the shape that grows a third
+     * name somebody can supply.
+     */
+    it('takes the scope only from its argument', () => {
+        expect(callerMeta(caller, 'a').organizationId).toBe('a');
+        expect(callerMeta({ userId: 'u-1', roles: [] }, 'b').organizationId).toBe('b');
     });
 });

@@ -453,77 +453,35 @@ export const grantRoleContract = defineContract({
 });
 
 /**
- * **The accounts on this cluster, as a console may see them.**
+ * **There is deliberately no contract here that lists the accounts on a cluster.**
  *
- * ## Why this exists rather than an exposed `user.find`
+ * `identity.people` was written on 2026-09-10 (roadmap F13) and withdrawn the same day (freeze gate
+ * V8). It was a projection over `user` — email, display name, cluster roles, `suspendedAt`,
+ * `provisional`, and nothing else — gated at `operator` and checked in the handler. The projection
+ * argument was sound and is not why it went.
  *
- * `userCrud` is `internal` on every action, and that is not an oversight to flip: `passwordHash` is
- * a field of `UserSchema`, so **a generated `find` returns the credential**. `visibility` decides
- * whether an action may be exposed and has no way to say *these fields and not that one*, which
- * means `user.find` can never be exposed no matter how it is gated. A console asking *who is on this
- * cluster* had no read at all (roadmap F13).
+ * **It went because the capability should not exist.** A user belongs to no organization
+ * (`userCrud` is global; membership is the join), so nothing could narrow it: every caller who could
+ * call it saw every account on the deployment. The role it served that to is a
+ * bootstrap-and-handover role, not an administration role. An operator brings a cluster up, seeds a
+ * hostname, hands the organization over and steps out, and none of that needs to read the cluster's
+ * accounts.
  *
- * So the answer is the one this codebase has already reached twice — `cdn.site_edit` rather than an
- * exposed `site.update`, and `identity.sign_out` rather than an exposed `ticket_revoke`:
- * **a contract that does not have the field cannot be talked into returning it.** The projection
- * below is the whole security argument, and it is enforced by the output schema rather than by a
- * handler remembering to delete a key.
+ * **What a console should ask instead is who is in *this organization*, which is `membership.find`**
+ * — already `scopedBy: 'organizationId'`, already exposable, and bounded by construction rather than
+ * by a role check.
  *
- * ## What it deliberately does not carry
+ * Two things are worth keeping from the attempt:
  *
- * `passwordHash`, obviously. Also **no ticket, session or last-seen information**: who is signed in
- * right now is a different question with different consequences, and answering it here would make
- * this contract the convenient place to add it.
- *
- * `suspendedAt` and `provisional` *are* here, because they are the two facts that explain a person
- * being unable to do anything — and a console that lists accounts without them shows a working
- * account and a locked one identically.
- *
- * ## Global, and that is why it is `operator`
- *
- * A user belongs to no organization (`userCrud` is global; membership is the join), so there is no
- * `scopedBy` that could narrow this and no tenant-safe version of it. **Every caller who may call
- * this sees every account on the cluster**, which is exactly the unbounded read
- * `site.contract.ts` warns about — and it is acceptable here only because the gate is cluster-scoped
- * `operator`, checked by the handler itself rather than trusted from the site record.
+ * 1. **`user.find` still cannot be exposed**, and the reason is a column rather than a gate:
+ *    `passwordHash` is a field of `UserSchema`, `visibility` is per-action, and no gate subtracts a
+ *    field. That gap is real and is freeze gate V2. A projection contract is a workaround for it,
+ *    not an answer to it, and writing a fifth one is the signal that the mechanism is missing.
+ * 2. **"The handler checks the role itself rather than trusting the site record" is not the stronger
+ *    guarantee it was described as.** `meta.user` is a wire field a mesh peer fills in (roadmap D6),
+ *    so both rest on the same assertion. The claim appears verbatim above `grantRoleContract` and is
+ *    true there in a narrower sense: it is defence against a misconfigured site, not against a peer.
  */
-export const peopleContract = defineContract({
-    domain: 'identity',
-    action: 'people',
-    description: 'List the accounts on this cluster, without credentials.',
-    dependencies: [],
-    inputSchema: z.object({
-        /** Case-insensitive substring of email or display name. Absent lists everyone. */
-        search: z.string().min(1).optional(),
-        /** Only accounts holding this cluster-scoped role. */
-        role: z.string().min(1).optional(),
-        limit: z.number().int().min(1).max(500).default(100),
-    }),
-    outputSchema: z.object({
-        people: z.array(z.object({
-            userId: z.string(),
-            email: z.string(),
-            displayName: z.string(),
-            /** Cluster-scoped only. Organization roles live on the membership — see F3. */
-            roles: z.array(z.string()),
-            suspendedAt: z.number().optional(),
-            suspendedReason: z.string().optional(),
-            /** Made by the platform at first boot and never claimed. Refused above `public`. */
-            provisional: z.boolean().optional(),
-        })),
-        /**
-         * True when `limit` cut the list short, so a console can say so rather than quietly
-         * showing a prefix of the cluster and calling it the cluster.
-         */
-        truncated: z.boolean(),
-    }),
-    rest: { method: 'GET', path: '/identity/people' },
-    /** Exposable; a site that exposes it must gate it at `operator`, and the handler checks too. */
-    visibility: 'public',
-    print: (o) => o.people
-        .map((p) => `${p.email}${p.roles.length > 0 ? ` (${p.roles.join(', ')})` : ''}`)
-        .join('\n') || 'nobody',
-});
 
 // ---------------------------------------------------------------------------- authorization
 
@@ -634,7 +592,6 @@ export const identityContracts: readonly ToolContract[] = [
     whoamiContract,
     registerContract,
     grantRoleContract,
-    peopleContract,
     permitsContract,
     apiTokenValidateContract,
     apiTokenIssueContract,
