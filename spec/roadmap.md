@@ -1385,7 +1385,7 @@ should not.
       does on somebody else's behalf. It joins the `USER` set, and `test/cdn/gate-for.test.ts` now
       pins every exception in that table rather than leaving them to be re-derived. **S**
 
-- [ ] **F27 ★★★ A tenant cannot write to its own application.** *(found 2026-09-10, same sweep. Not
+- [x] **F27 ★★★ A tenant cannot write to its own application.** *(closed 2026-09-10 by F30 stage 3, verified on a live cluster.)* *(found 2026-09-10, same sweep. Not
       fixed: it is a change to what `gateFor` means, and that is the site owner's decision.)*
 
       On `flowboard.localhost`, signed in as the account that **owns Flowboard Inc**, every write is
@@ -1426,6 +1426,31 @@ should not.
       does — by an operator role that holds those grants, rather than by a fallthrough.
       **M** · surfdns freeze gate V16: this decides what a site's `auth` level means, so it belongs
       in the freeze rather than after it.
+
+      **Closed 2026-09-10.** `grantsFor` now emits `permission: <key>` instead of `auth: 'operator'`
+      for a contract that falls through `gateFor` in a domain this repository does not define. Only
+      the fall-through moves: a `user` read stays a read and a role-named contract stays where the
+      agent-role branch put it, so nothing that worked stopped working.
+
+      Measured on `flowboard.localhost`, as the account that owns Flowboard Inc and holds no platform
+      role:
+
+      | | before | after |
+      | --- | --- | --- |
+      | `PATCH /cards/:id` | 403 | 404 *(gate passed; that card does not exist)* |
+      | `POST /projects` | 403 | 400 *(gate passed; empty body)* |
+      | `POST /sprints` | 403 | 400 |
+      | `POST /worktree/dispatch` | 403 | 400 |
+      | `POST /worktree/merge` | 403 | 400 |
+
+      And the half that matters more — a signed-in account belonging to **no** organization is still
+      refused every one of them, 403. The gate did not loosen; it started asking a question that has
+      an answer.
+
+      The before column is worth keeping because it shows why this was not a tidying-up. `card.create`
+      was `user` and `card.update` was `operator`, and the difference was not a decision anybody made:
+      `card.create` is named by `flowboard-agent`'s `planner` role and `card.update` is not. **Whether
+      a person could move a card depended on whether an unrelated agent part had been composed.**
 
 - [x] **F29 ★★★ Changing a password did not end a single session, and nothing consumed a revocation
       at all.** *(found and fixed 2026-09-10, writing the fixture F27 said was missing.)*
@@ -1535,6 +1560,27 @@ should not.
          candidate, applied to grants instead of contracts.
 
       **M** · surfdns freeze gate V16, with F27.
+
+      **Stage 3 landed 2026-09-10**, closing F27 — see its entry for the measured before and after.
+      What stays open:
+
+      - **Reads are still `auth: 'user'`.** Only the operator fall-through became a permission.
+        Making a read one too is right and is a bigger change: it would alter who can *read* a
+        board, and this commit deliberately changed only who can write. Wanted next.
+      - **A role definition is global, and `owner` is one row.** So a grant on `owner` is a grant
+        for every organization's owner. It is bounded twice — a contract is reachable only on a host
+        whose site exposes it, and a `scopedBy` collection confines every row to the caller's own
+        organization — and the ceiling's rule 2 is what keeps it from being bounded *only* by those.
+        **Not verified on a cluster**: the case needs two sites owned by two different accounts, and
+        `organization.create` makes the *caller* the owner while `resolveScope` correctly refuses an
+        operator scoping into an organization they do not belong to, so the fixture is more than a
+        probe. Whether role definitions should be per-organization is the real question underneath
+        and it is unanswered.
+      - **`installGrants` creates grants for roles it never creates.** `owner` is a record since F32;
+        `planner` and `worker` are not, so their rows are inert — the same shape as F32, in the code
+        written the same day. Harmless while agent contracts stay at `user` (the agent-role branch
+        runs first), and a live bug the moment a role-named contract becomes a permission. Seeding
+        must upsert the role before granting to it.
 
       **Stage 1 landed 2026-09-10**: `inherits` on `RoleSchema`, `expandInheritance`,
       `inheritanceProblem`, and `identity.role_upsert` to call them. Both rules are refused at write

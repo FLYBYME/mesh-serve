@@ -82,19 +82,53 @@ describe('grantsFor', () => {
      */
     it('lowers an operator guess to user for a contract a role names, and no further', () => {
         const { contracts } = grantsFor(['card.create', 'card.find'], { planner: ['card.create', 'card.find'] });
-        const gate = Object.fromEntries(contracts.map((c) => [c.key, c.auth]));
+        const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
 
         expect(gate['card.create']).toBe('user');
         expect(gate['card.find']).toBe('user');
         expect(gate['identity.register']).toBe('public');
     });
 
-    it('leaves a contract no role names alone', () => {
+    /**
+     * **F30 stage 3 changed this test's second assertion, and the change is the point.**
+     *
+     * `card.update` used to be `operator`, which meant the account that owned the organization the
+     * application belonged to could not move a card on its own board. It is now a permission named
+     * after the contract, answered by the grants seeding installed. A contract nobody granted is
+     * still refused — `permits` denies by default — so this is not a loosening, it is the same
+     * refusal asked of the right thing.
+     */
+    it('turns an operator fall-through in somebody else\'s domain into a permission', () => {
         const { contracts } = grantsFor(['card.create', 'card.update'], { planner: ['card.create'] });
-        const gate = Object.fromEntries(contracts.map((c) => [c.key, c.auth]));
+        const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
 
+        // Named by a role, so the branch above this one already lowered it.
         expect(gate['card.create']).toBe('user');
-        expect(gate['card.update']).toBe('operator');
+        expect(gate['card.update']).toBe('permission:card.update');
+    });
+
+    it('leaves this repository\'s own domains at operator, however they were exposed', () => {
+        // The half that must not move. `gateFor`'s default is right for the contracts it was
+        // written against, and a part naming one in its manifest does not make it the part's.
+        const { contracts } = grantsFor(['cdn.deploy', 'site.create', 'node.assign', 'builder.release_repo']);
+        const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
+
+        expect(gate['cdn.deploy']).toBe('operator');
+        expect(gate['site.create']).toBe('operator');
+        expect(gate['node.assign']).toBe('operator');
+        expect(gate['builder.release_repo']).toBe('operator');
+    });
+
+    it('leaves a read alone, because only the fall-through moves', () => {
+        // Reads become permissions too eventually; that is a larger change and is on F30. Smuggling
+        // it in here would mean this commit changed who can read as well as who can write.
+        const { contracts } = grantsFor(['card.find', 'card.get', 'project.git_info']);
+        const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
+
+        expect(gate['card.find']).toBe('user');
+        expect(gate['card.get']).toBe('user');
+        // Not a read by the suffix rule, so it falls through — and it is flowboard's domain.
+        expect(gate['project.git_info']).toBe('permission:project.git_info');
     });
 
     /** A collection streams at exactly its own `find`'s gate — looser would push rows to somebody

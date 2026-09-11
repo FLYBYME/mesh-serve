@@ -1,3 +1,5 @@
+import { PLATFORM_DOMAINS, domainOf } from './ceiling.js';
+
 /**
  * **What a site grants, derived from what its release actually calls.**
  *
@@ -94,6 +96,17 @@ export function gateFor(key: string): 'public' | 'user' | 'admin' | 'operator' {
 }
 
 /**
+ * One entry in a site's grant list: a coarse level, or a named permission the site's hook evaluates.
+ *
+ * Both shapes were always representable — `site.mesh[].contracts` carries `auth` *or* `permission`,
+ * and `gateOf` refuses an entry declaring both. Until F30 stage 3 this function only ever produced
+ * the first, which is why the second had no callers to find out it was never evaluated.
+ */
+export type GrantEntry =
+    | { readonly key: string; readonly auth: 'public' | 'user' | 'admin' | 'operator' }
+    | { readonly key: string; readonly permission: string };
+
+/**
  * The site's grants, derived from what the deployed release actually calls.
  *
  * **Not a hand-written list**, which matters more than it looks. `cdn.deploy` refuses a release
@@ -162,20 +175,51 @@ export function grantsFor(
      */
     agentRoles?: Readonly<Record<string, readonly string[]>>,
 ): {
-    contracts: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
+    contracts: GrantEntry[];
     events: { key: string; auth: 'public' | 'user' | 'admin' | 'operator' }[];
 } {
     const keys = new Set([...requires, ...ALWAYS_GRANTED]);
 
     const named = new Set(Object.values(agentRoles ?? {}).flat());
-    const contracts = [...keys].sort().map((key) => {
+    const contracts: GrantEntry[] = [...keys].sort().map((key) => {
         const gate = gateFor(key);
         // Never loosen below what `gateFor` decided: `public` stays public, and `user` is already
         // what this would set. Only an `operator`/`admin` guess on a role-named contract moves.
-        return {
-            key,
-            auth: named.has(key) && (gate === 'operator' || gate === 'admin') ? 'user' as const : gate,
-        };
+        if (named.has(key) && (gate === 'operator' || gate === 'admin')) {
+            return { key, auth: 'user' as const };
+        }
+
+        /**
+         * **F30 stage 3: a guess about a stranger's contract becomes a question about a grant.**
+         *
+         * `gateFor` ends in `return 'operator'` because a key it has not been taught about is one
+         * nobody has classified, and the strict answer is the safe one for a *guess*. That is right
+         * for this repository's own domains and wrong for a hosted application's, where it is
+         * applied to every contract the table has never heard of — which is all of them, by
+         * construction, since the table only knows names defined here.
+         *
+         * Measured on flowboard before this line existed: the account that **owns Flowboard Inc**
+         * could create a card and could not move it. `card.create` was `user` and `card.update` was
+         * `operator`, and the difference was not a decision — `card.create` happens to be named by
+         * an agent role map and `card.update` happens not to be. Whether a *person* could move a
+         * card depended on whether an unrelated *agent* part had been composed.
+         *
+         * There is nothing to guess, because **the permission name and the contract key are the
+         * same string.** `permits(roles, grants, 'card.update')` asks whether any role this caller
+         * holds carries a grant covering it; a contract nobody has granted is refused. That is
+         * `gateFor`'s instinct with the guesswork removed, and it fails closed the same way.
+         *
+         * **Only the fall-through moves.** A `user` read stays a `user` read and a role-named
+         * contract stays where the branch above put it, so nothing that worked yesterday stops:
+         * this replaces the answer given to contracts that were refused to everyone but a platform
+         * operator, and to nothing else. Reads becoming permissions too is a larger change, wanted,
+         * and recorded on F30 rather than smuggled in here.
+         */
+        if (gate === 'operator' && !PLATFORM_DOMAINS.has(domainOf(key))) {
+            return { key, permission: key };
+        }
+
+        return { key, auth: gate };
     });
 
     /**
