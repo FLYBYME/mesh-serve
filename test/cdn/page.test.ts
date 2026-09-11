@@ -32,6 +32,9 @@ const input = (over: Partial<PageInput> = {}): PageInput => ({
         },
         requires: [],
         policy: {},
+        // Required on a release since the agent role map landed. Empty means **no MCP surface**,
+        // not an open one: a contract no role names is on no role's list.
+        agentRoles: {},
         // Not rolling: a page is generated from a release, and whether that release follows the
         // catalog has nothing to do with what the page says.
         rolling: false,

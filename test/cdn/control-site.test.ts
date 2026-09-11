@@ -16,6 +16,28 @@ import { CONTROL_CONTRACTS, DEFAULT_CONTROL_HOST, PLATFORM_SLUG } from '../../sr
 import { describeExposure } from '../../src/api/schema/descriptor.js';
 import { globalContractRegistry } from '@flybyme/mesh';
 
+/**
+ * **The control site's entries are levels, and this is what asserts that rather than assuming it.**
+ *
+ * An exposed contract carries `auth` *or* `permission` — two shapes, and `gateOf` refuses an entry
+ * declaring both. These tests were written when only the first existed and read `.auth` directly,
+ * which stopped compiling the day F30 made the second shape load-bearing.
+ *
+ * The honest fix is not a cast. The control site is **deliberately all levels**: a permission is
+ * answered by a grant, and the platform's own management surface is not something a tenant's grants
+ * get to decide. So a `permission` entry appearing here is a finding, and this says so out loud
+ * instead of reading `undefined` and quietly passing.
+ */
+const levelOf = (entry: (typeof CONTROL_CONTRACTS)[number]): 'public' | 'user' | 'admin' | 'operator' => {
+    if (!('auth' in entry) || entry.auth === undefined) {
+        throw new Error(
+            `${entry.key} is exposed on the control site behind a permission. The platform's own `
+            + `management surface is gated by level, not by a grant a tenant's roles could carry.`,
+        );
+    }
+    return entry.auth;
+};
+
 // Importing a service mounts its contracts into the registry, which is where `lookup` reads them.
 import '../../src/identity/index.js';
 import '../../src/catalog/catalog.service.js';
@@ -41,7 +63,7 @@ describe('the control contract list', () => {
         const entries = CONTROL_CONTRACTS.map((exposed) => {
             const contract = globalContractRegistry.get(exposed.key);
             expect(contract, `${exposed.key} is in CONTROL_CONTRACTS but nothing provides it`).toBeDefined();
-            return { contract: contract as never, auth: exposed.auth };
+            return { contract: contract as never, auth: levelOf(exposed) };
         });
 
         expect(() => describeExposure(entries, { application: 'control', base: '/api' })).not.toThrow();
@@ -57,7 +79,7 @@ describe('the control contract list', () => {
      * `checkCoarse`, which runs before the level.
      */
     it('lets an unauthenticated caller sign in, and nothing else', () => {
-        const open = CONTROL_CONTRACTS.filter((c) => c.auth === 'public').map((c) => c.key).sort();
+        const open = CONTROL_CONTRACTS.filter((c) => levelOf(c) === 'public').map((c) => c.key).sort();
         expect(open).toEqual(['identity.ticket_issue']);
     });
 
@@ -95,14 +117,14 @@ describe('the control contract list', () => {
         const register = CONTROL_CONTRACTS.find((c) => c.key === 'identity.register');
 
         expect(register).toBeDefined();
-        expect(register?.auth).toBe('operator');
+        expect(register === undefined ? undefined : levelOf(register)).toBe('operator');
     });
 
     /** Everything that changes what the platform runs is an operator's, without exception. */
     it('gates every management contract at operator', () => {
         const weak = CONTROL_CONTRACTS
-            .filter((c) => c.auth !== 'operator')
-            .map((c) => `${c.key}@${c.auth}`)
+            .filter((c) => levelOf(c) !== 'operator')
+            .map((c) => `${c.key}@${levelOf(c)}`)
             .sort();
 
         // The four that are not operator are the session ones, and they are named rather than

@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import type { BuilderService } from '../builder.service.js';
 import { importRepoContract } from '../contracts/artifact.contract.js';
 import { resolveGitSource } from '../methods/source.js';
+import { declareContract } from '../../catalog/contracts/part.contract.js';
 import { DESCRIPTOR_FILE, parseDescriptor, requirementsOf } from '../schema/descriptor.js';
 
 type Input = z.infer<typeof importRepoContract['inputSchema']>;
@@ -106,7 +107,7 @@ export async function builder_import_repo(
                 continue;
             }
 
-            const declared = await ctx.call('catalog.declare', {
+            const declared = await declarePart(ctx, part.id, {
                 name: part.id,
                 kind: part.kind,
                 repository: input.repository,
@@ -131,5 +132,49 @@ export async function builder_import_repo(
     } finally {
         // Ours, and destroyed whatever happened. A caller never learns where it was.
         await rm(workspace, { recursive: true, force: true });
+    }
+}
+
+/**
+ * **`catalog.declare`, with the one refusal that needs translating.**
+ *
+ * A part name is **one global namespace**, so the second organization to import a repository whose
+ * parts somebody else already published is refused — correctly. `catalog.declare` answers *No such
+ * part*, 404, and its comment says why that wording is deliberate: *"not found, not forbidden: which
+ * organization publishes a part is not something an unrelated caller gets to confirm by probing."*
+ *
+ * Correct, and unusable at the point it arrives. A person seeding a site names three repositories,
+ * gets `No such part`, and goes looking at the catalog — which is the one place the answer is not.
+ * The part exists; the caller may not claim it. Roadmap **F24**, and it cost a seed on the day it was
+ * logged and another on the day it was fixed.
+ *
+ * So the category and the way out are stated here, where the part's name and the repository are both
+ * known, and **nothing is added that the caller did not already supply**: they named this repository,
+ * so hearing that its parts are published by somebody else confirms nothing they could not learn by
+ * reading their own command. Which organization is still not said.
+ *
+ * The check is structural rather than `instanceof ClientError`, for F26's reason: a `--service`
+ * brings its own copy of `@flybyme/mesh`, so a thrown error that crossed a module boundary is not an
+ * instance of the class this file imported.
+ */
+async function declarePart(
+    ctx: IServiceContext,
+    name: string,
+    params: z.infer<typeof declareContract['inputSchema']>,
+): Promise<{ partId: string; name: string; existed: boolean }> {
+    try {
+        return await ctx.call('catalog.declare', params) as { partId: string; name: string; existed: boolean };
+    } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        if (code !== 'part_not_found') throw error;
+
+        throw new ClientError(
+            `"${name}" is already published by another organization, and a part name is one global `
+            + `namespace — so importing ${params.repository} cannot claim it. `
+            + `If you meant to use their copy, do not import this repository: name "${name}" among `
+            + `the parts to compose and the catalog resolves it across publishers. If you meant a `
+            + `part of your own, give it a different name.`,
+            'part_published_elsewhere', 409,
+        );
     }
 }

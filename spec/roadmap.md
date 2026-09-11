@@ -1635,7 +1635,7 @@ should not.
       was `owner`, and `permits` would have dropped it. Any grant seeded against `owner` would have
       done nothing, and the seeding would have looked correct. **S**
 
-- [ ] **F31 ★ `npm run typecheck` is red on master, and `npm test` does not run it.** *(found
+- [x] **F31 ★ `npm run typecheck` was red on master, and `npm test` does not run it.** *(the six errors fixed 2026-09-10; the second half stands.)* *(found
       2026-09-10 while landing F30's stage 1.)*
 
       Two errors, neither new and neither mine: `test/cdn/control-site.test.ts:105` reads `.auth` off
