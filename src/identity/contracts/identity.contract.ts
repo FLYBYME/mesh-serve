@@ -105,13 +105,30 @@ export type StoredRole = z.infer<typeof roleCrud.outputSchema>;
  *
  * Scoping: Global. Grants define what contracts a role permits.
  */
+/**
+ * **Grants stopped being internal on 2026-09-10, and the reason is F30.**
+ *
+ * Every action was `internal`, which was right while a gate was a level compiled into `gateFor`:
+ * there was nothing here anybody needed to look at. Now **a grant row is what decides whether a
+ * caller may call a contract**, seeding installs them, and an operator could neither see one nor
+ * make one. A model made of data with no way to read it is a model nobody can audit.
+ *
+ * `find`, `create` and `delete` only. `update` stays internal deliberately: a grant is a
+ * `(roleKey, contract)` pair and nothing else, so *changing* one is revoking one and making
+ * another — two calls, which is also the record of what happened. `createMany` stays internal
+ * because a bulk grant is the one shape nobody should reach for casually.
+ *
+ * Exposed **only at `operator`** (`control.ts`), and that is not a preference. A grant decides who
+ * may call what, so the contract that writes one cannot itself be answered by a grant — that
+ * circularity is exactly what the coarse levels exist to break.
+ */
 export const grantCrud = defineCrud('grant', GrantSchema, {
     pluralPath: 'grants',
     unique: [{ fields: ['roleKey', 'contract'], scope: 'global' }],
     visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
+        find: 'public', findOne: 'internal', get: 'internal', resolve: 'internal',
+        count: 'internal', create: 'public', createMany: 'internal', update: 'internal',
+        replace: 'internal', delete: 'public',
     },
     dependencies: [],
 });
@@ -515,6 +532,17 @@ export const roleUpsertContract = defineContract({
         created: z.boolean().describe('False when this replaced a role that already existed'),
     }),
     rest: { method: 'POST', path: '/identity/roles/define' },
+    /**
+     * Exposable, and gated at `operator` wherever it is exposed.
+     *
+     * A contract defaults to internal, and the default is right for most of identity — a site that
+     * exposed `ticket_revoke` took itself down, which is why `control-site.test.ts` refuses a list
+     * naming an internal contract. This one is different in the way that matters: **since F30 a role
+     * and its grants decide who may call what, and an operator who cannot define a role cannot
+     * operate the platform.** The alternative is roles that exist only where somebody edited a
+     * database by hand.
+     */
+    visibility: 'public',
     print: (o) => `${o.key} ${o.created ? 'defined' : 'updated'}`,
 });
 

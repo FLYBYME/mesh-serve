@@ -108,7 +108,32 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'membership.find', auth: 'operator' },
     { key: 'membership.create', auth: 'operator' },
     { key: 'membership.delete', auth: 'operator' },
+    /**
+     * **Roles and grants — the authorization model, which became data and had no interface.**
+     *
+     * Before F30 a gate was a level compiled into `gateFor`, so there was nothing to look at and
+     * `role.find` alone was enough. Now **a grant row is what decides whether a caller may call a
+     * contract**, seeding installs them, and an operator could neither see one nor make one. The
+     * model changed and its surface did not, on the same day.
+     *
+     * `role_upsert` rather than `role.create`/`role.update`: `roleCrud`'s generated writes are
+     * `internal` deliberately, because the two rules on `inherits` — no cycles, same scope only —
+     * need the rest of the role table to decide and a zod schema sees one document. The contract is
+     * what calls `inheritanceProblem`.
+     *
+     * `grant.delete` is here and `grant.update` is not. A grant is a (role, contract) pair and
+     * nothing else; *changing* one is revoking one and making another, and saying so in two calls
+     * keeps an audit that reads as what happened.
+     *
+     * All `operator`. A grant decides who may call what, so the contract that writes one cannot be
+     * behind a grant — that is the circularity the level gates exist to break.
+     */
     { key: 'role.find', auth: 'operator' },
+    { key: 'role.get', auth: 'operator' },
+    { key: 'identity.role_upsert', auth: 'operator' },
+    { key: 'grant.find', auth: 'operator' },
+    { key: 'grant.create', auth: 'operator' },
+    { key: 'grant.delete', auth: 'operator' },
 
     // What the platform knows how to build.
     { key: 'catalog.declare', auth: 'operator' },

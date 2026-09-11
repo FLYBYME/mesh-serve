@@ -148,3 +148,60 @@ describe('the control contract list', () => {
         expect(keys.length).toBe(new Set(keys).size);
     });
 });
+
+/**
+ * **The authorization model is reachable, and only by an operator.**
+ *
+ * Added 2026-09-10 with the exposure itself. Before F30 a gate was a level compiled into `gateFor`,
+ * so there was nothing here to look at and `role.find` alone was enough. Now a **grant row decides
+ * whether a caller may call a contract**, seeding installs them, and until this landed an operator
+ * could neither see one nor make one — a model made of data with no way to read it.
+ */
+describe('roles and grants are operable', () => {
+    const gate = (key: string): string | undefined => {
+        const entry = CONTROL_CONTRACTS.find((c) => c.key === key);
+        return entry === undefined ? undefined : levelOf(entry);
+    };
+
+    it('exposes what an operator needs to read the model', () => {
+        expect(gate('role.find')).toBe('operator');
+        expect(gate('grant.find')).toBe('operator');
+    });
+
+    it('exposes what an operator needs to change it', () => {
+        // `identity.role_upsert` rather than a generated write: the two rules on `inherits` -- no
+        // cycles, same scope only -- need the rest of the role table to decide, and a zod schema
+        // sees one document. The contract is what calls `inheritanceProblem`.
+        expect(gate('identity.role_upsert')).toBe('operator');
+        expect(gate('grant.create')).toBe('operator');
+        expect(gate('grant.delete')).toBe('operator');
+    });
+
+    /**
+     * **The circularity the coarse levels exist to break.**
+     *
+     * A grant decides who may call what. So the contract that *writes* a grant cannot itself be
+     * answered by a grant — a caller could then grant themselves the right to grant. Every entry
+     * above is a level, and `levelOf` throws if one ever becomes a permission.
+     */
+    it('never puts the grant writes behind a grant', () => {
+        for (const key of ['identity.role_upsert', 'grant.create', 'grant.delete']) {
+            const entry = CONTROL_CONTRACTS.find((c) => c.key === key)!;
+            expect(() => levelOf(entry), key).not.toThrow();
+        }
+    });
+
+    /**
+     * `update` and `createMany` stay internal, and the reason is not caution.
+     *
+     * A grant is a `(roleKey, contract)` pair and nothing else, so *changing* one is revoking one and
+     * making another — two calls, which is also the record of what happened. A bulk grant is the one
+     * shape nobody should reach for casually.
+     */
+    it('offers no way to edit a grant in place, or to make many at once', () => {
+        const keys = CONTROL_CONTRACTS.map((c) => c.key);
+        expect(keys).not.toContain('grant.update');
+        expect(keys).not.toContain('grant.replace');
+        expect(keys).not.toContain('grant.createMany');
+    });
+});
