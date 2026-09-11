@@ -548,3 +548,101 @@ What happened on 2026-09-11 that earns that:
 
 - **The "missing type" story was wrong.** It was inferred from the casts instead of
   opening `IServiceContext`, which is the same mistake the code makes.
+
+
+
+# CLI
+
+Start the server for the first time. should get a temp password and email
+
+```shell
+npx mesh-server node ...
+```
+
+And the output will look like.
+
+```text
+────────────────────────────────────────────────────────────────────────
+  FIRST BOOT — no accounts existed, so one was created.
+
+    email     operator@node.invalid
+    password  JXkMDtM4r22QiupkHljA0nQrospzIKvZ
+
+  This is shown once and is not recoverable. It can do nothing except set its own
+  password — every other call is refused until it does.
+
+    mesh-serve --host <site> login
+────────────────────────────────────────────────────────────────────────
+
+[2026-09-11T20:06:44.032Z] [identity] first boot: created provisional operator operator@node.invalid (u-6aa45f54426ce55efa0a7a0b)
+[2026-09-11T20:06:44.036Z] [identity] ready — 4 roles
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Registering module: approval (Node: ubuntu-GW15-43P)
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.create
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.find
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.find_one
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.get
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.update
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.delete
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.count
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.replace
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.resolve
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.create_many
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.request
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.check
+[2026-09-11T20:06:44.051Z] [ServiceBroker] Tool registered successfully: approval.decide
+[2026-09-11T20:06:44.072Z] [ServiceBroker] Registering module: mcp (Node: ubuntu-GW15-43P)
+
+mesh-serve is up
+  mesh      ws://127.0.0.1:4001
+  cdn       http://127.0.0.1:8080
+  api       http://127.0.0.1:5005
+  mcp       http://127.0.0.1:5006/mcp
+  mongo     mongodb://localhost:27017/test-db-111
+  artifacts ./.artifacts
+  config    (no .env found — using the environment only)
+
+Ctrl-C to stop.
+[2026-09-11T20:06:44.228Z] [DB] Ensured unique index "uniq_site_host" on collection "site"
+[2026-09-11T20:06:44.233Z] [cdn] control site "127.0.0.1" created — 39 contract(s) for an operator
+```
+
+No site is in the system but 127.0.0.1.
+
+Now login and resset the password and or update the email
+
+```shell
+npx mesh-serve login ... # If i dont provide --host it shold do 127.0.0.1
+npx mesh-serve identity set_password
+npx mesh-serve identity whoami
+npx mesh-serve identity update --email [EMAIL_ADDRESS]
+```
+
+List organizations
+
+```shell
+npx mesh-serve organization find
+```
+
+List repositories
+
+```shell
+npx mesh-serve repository find
+```
+
+List sites
+
+```shell
+npx mesh-serve site find
+```
+
+Create an organization.
+
+```shell
+npx mesh-serve organization create --name platform
+```
+
+Load the repository from git repo.
+
+```shell
+npx mesh-serve repository create --name mesh-core ...
+```

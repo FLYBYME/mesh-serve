@@ -1,0 +1,166 @@
+Delete the casts that are standing in front of types this repository already
+has. **The compiler decides when you are done, not you.**
+
+This task was chosen because it has an oracle. `npm run typecheck` is the whole
+acceptance test: if you delete a cast and the code still compiles, the type was
+always there and the cast was hiding it. If it stops compiling, you have found
+something real and it goes in `spec/roadmap.md`. There is nothing here to
+estimate and nothing to claim.
+
+Read `stuff.md` in the repository root first — items 1, 3 and 4 are this
+dispatch, written by the platform's owner after he read the code himself.
+
+--------------------------------------------------------------------------------
+PART 1 — `ctx.call` IS TYPED, AND TEN FILES REACH PAST IT
+
+`node_modules/@flybyme/mesh/dist/interfaces/IServiceContext.d.ts:44`
+
+    call<K extends keyof IServiceToolRegistry>(
+        tool: K,
+        params: IServiceToolRegistry[K]['params'],
+        options?: ICallOptions<TMeta>,
+    ): Promise<IServiceToolRegistry[K]['returns']>;
+
+`src/generated/api.ts` augments that global with **every contract in the
+platform**, input and output, straight from the zod schemas:
+
+    'builder.import_repo': {
+        params:  z.input<typeof Contract_2.importRepoContract['inputSchema']>,
+        returns: z.infer<typeof Contract_2.importRepoContract['outputSchema']>
+    };
+
+So `ctx.call('builder.import_repo', …)` already returns the right type, already
+checks the params, and already fails to compile on a tool name that does not
+exist.
+
+**Thirteen places take the untyped broker instead**, in nine files:
+
+    src/cdn/methods/control.ts          src/fleet/methods/node.ts
+    src/fleet/methods/reconcile.ts      src/approval/methods/context.ts
+    src/telem/telem.service.ts          src/api/api.service.ts
+    src/api/mcp.service.ts              src/api/methods/errors.ts
+    src/identity/module.ts
+
+The shape is always the same:
+
+    const call = ((ctx.broker as unknown as { call: Call }).call.bind(ctx.broker)) as Call;
+
+where `type Call = (tool: string, params: unknown, options?: unknown) => Promise<unknown>`.
+That asserts away every parameter type and returns `unknown`, **which is what
+forces a cast at every call site downstream.** One line manufactures the need for
+all the others. Delete it and use `ctx.call`.
+
+### When there is no `ctx`, pass the broker — do not manufacture one
+
+The owner's words: *"if you need to makes calls that where not trigged but a
+contract you need to pass the broker around. the ServiceModule get passed the
+broker on start."*
+
+`IServiceModule.onStart(broker: IServiceBroker)`, and every service here already
+takes it — `src/cdn/cdn.service.ts:214` is `async onStart(broker: IServiceBroker)`.
+So a reconcile loop, a timer, a background task holds the broker it was handed at
+start. **Casting `ctx.broker` into a shape is not a workaround for having no
+context; it is a workaround for not having kept the one that was passed in.**
+
+Where a file genuinely needs a broker outside a request, store the one from
+`onStart` on the service and use it. Do not invent a second way to reach one.
+
+--------------------------------------------------------------------------------
+PART 2 — THE RESULTS OF THOSE CALLS
+
+Once Part 1 lands these stop compiling on their own, which is the point:
+
+    src/fleet/methods/reconcile.ts:60
+        const all = await ctx.call('node.find', { query: {} }) as (NodeRecord & { id: string })[];
+
+    src/fleet/methods/node.ts:155, reconcile.ts:187
+        const groups = (await ctx.call('group.find', { query: {} }) as GroupRecord[]) ?? [];
+
+    src/fleet/methods/node.ts:236
+        nodes = (await ctx.call('node.find', { query: {} }) as NodeRecord[]) ?? [];
+
+Each is `ctx.call` — the typed one — with the answer thrown away immediately
+after. Delete the assertion and let the generated type stand.
+
+**If the generated type and the hand-written one disagree, the hand-written one is
+not automatically wrong** — it may be that the contract's output schema is looser
+than reality. Say which, in the roadmap, with both shapes. Do not "fix" it by
+tightening a schema you have not checked against the handler.
+
+--------------------------------------------------------------------------------
+PART 3 — `IMeshMeta` EXISTS AND SAYS IT IS MEANT TO BE AUGMENTED
+
+`node_modules/@flybyme/mesh/dist/interfaces/IMeshMeta.d.ts` already declares:
+
+    user?: { id: string; tenant_id: string; roles?: string[]; [key: string]: unknown };
+    tenant_id?: string;
+
+and its own doc comment says *"This interface is meant to be augmented by domain
+services."* Nothing in this repository augments it. Instead three files re-assert
+it, each slightly differently:
+
+    src/cdn/tools/seed.ts:47
+        const meta = (ctx.meta ?? {}) as {
+            user?: { id?: string; tenant_id?: string; roles?: readonly string[] };
+            tenant_id?: string;
+        };
+
+    src/cdn/tools/compose.ts:216
+        const meta = ctx.meta as { user?: { tenant_id?: string }; tenant_id?: string } | undefined;
+
+    src/fleet/methods/node.ts:50
+        const user = ctx.meta?.user as { roles?: readonly string[] } | undefined;
+
+Note that seed's version makes `id` and `tenant_id` **optional** when the real type
+has them required, so the cast is not narrowing — it is weakening, and the
+undefined checks below it exist because of the cast rather than because of the
+data.
+
+Augment `IMeshMeta` once, in this repository, with whatever this platform adds to
+it (`provisional` is one — `src/api/methods/gate.ts:43` declares it locally), and
+delete the three re-assertions.
+
+--------------------------------------------------------------------------------
+WHAT NOT TO DO
+
+- **Do not change behaviour.** This is a typing job. If deleting a cast changes
+  what the code does at run time, stop and write it down — that is a bug the cast
+  was concealing and it deserves its own commit and its own test.
+- Do not touch `@flybyme/mesh` (frozen). If the fix is genuinely there, write it
+  into `spec/roadmap.md` with the evidence and work around it here.
+- Do not edit mesh-core, mesh-web, mesh-operator or flowboard.
+- Do not weaken a contract's schema to make a cast unnecessary.
+- Do not introduce `any`, `as` or `!` while removing others. The count must go
+  down and nothing may move sideways.
+
+--------------------------------------------------------------------------------
+HOW TO EDIT, AND WHY THIS PARAGRAPH IS HERE
+
+**Edit files with your file tools.** Three dispatches in a row have committed
+programs that rewrite source with regular expressions — eighteen `.cjs` files in
+mesh-core, five `patch_*.js` here, six more in mesh-core the same evening. They
+have been deleted by hand three times, twice by the person who owns this platform.
+One of them **deleted 88 lines of explanatory comments** from `bin/node.mjs` on
+its way past. Write the change. Do not write a program that writes the change.
+
+**Commit as you go, in the foreground.** A dispatch here reported SUCCESS with
+eight modified files sitting unstaged and nothing committed. When your turn ends
+the process exits: a commit survives that, an unstaged edit does not.
+
+**`git status` must be clean when you finish**, with no file in the repository
+that is not part of the change.
+
+--------------------------------------------------------------------------------
+DONE MEANS
+
+- `npm run typecheck` clean. It is the referee for this whole task.
+- `npm test` green and not smaller than when you started (680 tests; the script
+  runs typecheck first — deliberate, do not remove it).
+- `grep -rn "as unknown as" src/` returns **nothing**. It is 13 today.
+- The three `ctx.meta` re-assertions are gone and `IMeshMeta` is augmented once.
+- No new `any`, `as` or `!` anywhere.
+- `git status` clean; no `patch_*`, `fix_*`, `scratch*` or `test-*` file in the
+  repository root.
+- `spec/roadmap.md` carries anything the compiler turned up that is a real
+  disagreement rather than a cast.
+- No `Co-Authored-By` or `Claude-Session` trailers.
