@@ -26,11 +26,28 @@ collection unsorted. That is not missing server work; it is parameters nobody pa
 
 ## 2. What it does not give
 
-mesh is frozen (`mesh/docs/STABILITY.md`), and adding registry fields for a downstream package is
-explicitly disallowed. So the four things below are **mesh-serve's**, in a `defineCollection` that
-wraps `defineCrud` and enforces the rest in this package's own serving layer.
+**These belong in `defineCrud`, not in a wrapper, and an earlier draft of this file got that
+backwards.**
 
-### Hidden fields
+`mesh/docs/STABILITY.md` says frozen, bug fixes only, and that is about mesh not drifting under three
+packages being built on it concurrently. It is not the whole picture.
+`surfdns/architecture/the-freeze.md` plans **mesh 2 → 3**, and says the thing that decides this:
+
+> **The version bump is the last cheap breaking change.** Every interface mistake still in the
+> surface on freeze day is permanent, or costs a major version to remove.
+
+Its **Track V** is *"All three items are `defineCrud` semantics, all three are breaking"*, and **V2**
+is field-level visibility, described there as *"the single strongest argument for v3 being a real
+major rather than a renumbering"*.
+
+So a `defineCollection` wrapper would be building a second definition function **during the one
+window in which fixing the first is cheap**, and leaving the original wrong forever. The two would
+disagree, and the disagreement would be about security.
+
+What follows goes into `defineCrud` as part of 2 → 3. Where mesh-serve still needs its own layer —
+routing, the projections, precedence — that is named as such below.
+
+### Hidden fields — surfdns **V2**, and it is mesh's
 
 A collection may hold something no caller may ever receive: a password hash, a token hash. Today the
 only way to keep it in is to mark every action internal, which is why nothing can turn a user id
@@ -50,6 +67,38 @@ stripped.
 (2) still belongs here. Asking for a hidden field is **an error naming it**, not a silent omission.
 A caller who asks has either made a mistake or made an attempt, and both deserve an answer rather
 than an empty column.
+
+### Scoping is not binary
+
+`scopedBy` has one answer: a row is in your organization or you cannot see it. **That is wrong for
+every collection somebody is meant to share**, and the catalog is the case that proves it.
+
+`serve/kernel` should be **owned by one organization and usable by everyone.** A part is published by
+whoever publishes it and composed by whoever needs it. Under `scopedBy` alone, a tenant's catalog
+read returns their own parts and nothing else, so the only way to reach somebody else's is a
+contract that is not scoped at all — which is an unbounded read with a hand-written narrowing in
+front of it, and that shape has its own entry in the platform's history.
+
+So a scoped read answers **mine, plus what has been made public**:
+
+```
+find  →  rows where organizationId = <resolved scope>
+      ∪  rows where visibility = 'public'
+```
+
+Three things follow, and the second is the one that bites:
+
+- **Public is a property of the row, set by its owner.** Publishing is a deliberate act with an
+  audit trail, not a side effect of the collection it lives in.
+- **Public means readable, never writable.** The union applies to `find`, `get` and `count`. Every
+  write stays scoped to the owner, or "public" becomes "anyone may edit".
+- **A public row may still hide fields.** The two mechanisms are independent: hidden fields decide
+  *which columns*, visibility decides *which rows*. A public part exposes its name, version and
+  digest; it does not become a different shape because a stranger is reading it.
+
+**Whether this is `defineCrud`'s or mesh-serve's is genuinely open.** It is the same kind of thing as
+`scopedBy` and belongs beside it — but `scopedBy` is already in Track V's list of breaking changes,
+so it is a decision to make in that window rather than after it.
 
 ### Nested routes
 
@@ -100,10 +149,14 @@ discard quietly.
 
 ## 4. Open
 
-- **Whether `defineCollection` wraps or replaces.** Wrapping keeps mesh frozen and costs two
-  definition functions that can drift. The alternative is unfreezing mesh while three packages are
-  built on it concurrently. Wrapping is the current decision.
+- **What goes into mesh 2 → 3 and what stays here.** Hidden fields (V2) and public rows are
+  `defineCrud` semantics and belong in the bump. Routing, precedence and the projections are
+  mesh-serve's. Relations could be either. **This has to be settled before the bump, not after** —
+  afterwards each item costs a major version.
 - **Whether asking for a hidden field is a refusal or a silent drop.** Recorded above as a refusal;
   not yet built.
+- **Whether public rows are a flag or a list.** A boolean answers *everyone or nobody*. Some
+  collections will want *these organizations*, which is a different column and a much larger
+  feature. Start with the boolean and say so.
 - **One name for the scope field.** `tenantId` and `organizationId` are the same value under two
   names because two schemas disagreed.

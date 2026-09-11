@@ -22,7 +22,8 @@ will be wrong by the time anyone reads it.
 | **api** | an HTTP client, a CLI, a part in a page | routes with schemas |
 | **mcp** | an agent | tools with schemas |
 | **git-http** | a git client | refs and packfiles |
-| **smtp** | a sending mail server | a message for delivery |
+| **smtp-submission** | a phone, a mail client | a message to send, authenticated |
+| **smtp-relay** | another mail server | a message to deliver, anonymous |
 | **imap** | a mail client | folders and messages |
 | **ftp** | a file client | a directory tree |
 
@@ -56,13 +57,13 @@ The first three projections are all request/response, JSON-shaped, and carry a `
 bearer token. **Nothing about that generalises**, and assuming it did is the mistake this section
 exists to prevent.
 
-| | cdn / api / mcp | git-http | smtp | imap / ftp |
-| --- | --- | --- | --- | --- |
-| shape | request/response | request/response | one-way delivery | stateful session |
-| payload | JSON | packfile | a message | streams |
-| site from | `Host` header | `Host` header | recipient domain, or SNI | SNI, or login, or port |
-| credential | bearer ticket | basic auth, or a token | `AUTH`, or none at all | `LOGIN` |
-| caller may be absent | yes, and must work | yes, for a public repo | **yes, and that is normal** | no |
+| | cdn / api / mcp | git-http | smtp submission | smtp relay | imap / ftp |
+| --- | --- | --- | --- | --- | --- |
+| shape | request/response | request/response | one-way | one-way | stateful session |
+| payload | JSON | packfile | a message | a message | streams |
+| site from | `Host` header | `Host` header | SNI | recipient domain | SNI, or login, or port |
+| credential | bearer ticket | basic auth, or a token | `AUTH`, always | **none, by design** | `LOGIN` |
+| caller may be absent | yes, and must work | yes, for a public repo | no | **always** | no |
 
 Two of those rows are worth stating as their own problem.
 
@@ -91,11 +92,28 @@ token in a URL. None of these is the others.
 same.** The ceremony is the adapter's; the caller is identity's. A projection must never carry its
 own notion of who somebody is, or there will be as many session models as there are ports.
 
-**SMTP is the one that breaks the shape**, and it is worth saying now rather than discovering it:
-inbound mail is *unauthenticated by design*. Anyone may deliver to you. So a projection may have a
-site and no account at all, permanently, and the contracts it can reach must be ones that make sense
-for an anonymous caller. That is the same requirement as a browser fetching a page, which is
-reassuring — it means the rule already exists.
+**SMTP is two projections wearing one name**, and treating it as one is how a relay ends up open:
+
+| | port | caller | what it is |
+| --- | --- | --- | --- |
+| **submission** | 587 | **authenticated, always** | a phone or a mail client sending *as* somebody |
+| **relay** | 25 | **anonymous, by design** | another mail server delivering *to* somebody |
+
+A phone sending mail authenticates — `AUTH` over TLS, an account and a password — and everything in
+this document applies to it unchanged: an account, a scope, permissions.
+
+Inbound relay is the opposite and cannot be otherwise: anyone on the internet may deliver to you, and
+a server that demanded credentials would receive no mail. So that projection has a site and
+**permanently no account**, and the contracts it can reach must be ones that make sense for an
+anonymous caller.
+
+**The two must never share a listener**, because the difference between them is the difference
+between a mail server and an open relay. They resolve their site differently too — submission by SNI,
+relay by the recipient's domain — which is the clearest case in this document for §4 being a chain
+rather than a rule.
+
+The reassuring part is that anonymous-with-a-site is not a new requirement. A browser fetching a page
+is already exactly that.
 
 ## 6. One description, many renderings
 

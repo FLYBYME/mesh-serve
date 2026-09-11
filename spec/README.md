@@ -15,10 +15,21 @@ how a machine comes to run one, or who the caller is.
 ## What it is not
 
 It is not mesh. mesh is the framework underneath — the broker, the contracts, the typed tool
-registry, the database layer. It is three and a half months old, 19,930 lines, and **frozen**
-(`mesh/docs/STABILITY.md`). Everything mesh-serve needs about calling a contract, typing a result or
-scoping a collection is already there and already typed. Reaching around it is the single most
-common defect in this repository's history and it has its own record in `stuff.md`.
+registry, the database layer. It is three and a half months old and 19,930 lines. Everything
+mesh-serve needs about calling a contract, typing a result or scoping a collection is already there
+and already typed. Reaching around it is the single most common defect in this repository's history
+and it has its own record in `stuff.md`.
+
+**mesh is stable, not sealed, and the difference matters right now.**
+`mesh/docs/STABILITY.md` says bug fixes only — which is about mesh not drifting under three packages
+being built on it at once. `surfdns/architecture/the-freeze.md` plans **mesh 2 → 3**, and says
+*"the version bump is the last cheap breaking change"*. Its Track V is three `defineCrud` items, all
+breaking, and field-level visibility is called *"the single strongest argument for v3 being a real
+major rather than a renumbering"*.
+
+So the rule is: **do not drift mesh, and do not route around it either.** Anything that belongs in
+`defineCrud` goes into the 2 → 3 bump, because after that it is permanent. See
+[collections.md](./collections.md) §2.
 
 ## The four things
 
