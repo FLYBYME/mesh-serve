@@ -37,17 +37,14 @@ const rangeFor = (version: string): string => {
     return major === undefined || minor === undefined ? `^${version}` : `^${major}.${minor}`;
 };
 
-type Call = (tool: string, params: unknown, options?: unknown) => Promise<unknown>;
+
 
 export async function site_seed(
     this: CdnService,
     input: Input,
     ctx: IServiceContext,
 ): Promise<Output> {
-    const meta = (ctx.meta ?? {}) as {
-        user?: { id?: string; tenant_id?: string; roles?: readonly string[] };
-        tenant_id?: string;
-    };
+    const meta = ctx.meta ?? {};
     const userId = meta.user?.id;
     if (userId === undefined || userId === '') {
         throw new ClientError(
@@ -56,7 +53,6 @@ export async function site_seed(
         );
     }
 
-    const call = ((ctx.broker as unknown as { call: Call }).call.bind(ctx.broker)) as Call;
     const problems: string[] = [];
 
     /**
@@ -72,7 +68,7 @@ export async function site_seed(
      * anything, which is the distinction that answered `403 card.create requires the operator role`
      * on the first day somebody tried.
      */
-    const organizationId = await ensureOrganization(call, input, userId, meta.user?.tenant_id ?? meta.tenant_id);
+    const organizationId = await ensureOrganization(ctx, input, userId, meta.user?.tenant_id ?? meta.tenant_id);
     /**
      * Every call below runs in the caller's organization.
      *
@@ -98,7 +94,7 @@ export async function site_seed(
     const kinds = new Map<string, string>();
 
     for (const source of input.sources) {
-        const imported = await call('builder.import_repo', {
+        const imported = await ctx.call('builder.import_repo', {
             repository: source.repository,
             ref: source.ref,
             ...(source.subdirectory === undefined ? {} : { subdirectory: source.subdirectory }),
@@ -129,7 +125,7 @@ export async function site_seed(
          */
         for (const part of imported.parts) {
             if (part.kind !== 'kernel' || part.version === undefined) continue;
-            await call('builder.release_part', {
+            await ctx.call('builder.release_part', {
                 part: part.name,
                 version: part.version,
                 bump: 'patch',
@@ -138,7 +134,7 @@ export async function site_seed(
             versions.set(part.name, part.version);
         }
 
-        const released = await call('builder.release_repo', {
+        const released = await ctx.call('builder.release_repo', {
             repository: source.repository,
             bump: 'patch',
             branch: source.ref,
@@ -213,7 +209,7 @@ export async function site_seed(
     const fromCatalog: { kind: 'application' | 'extension'; id: string; version: string }[] = [];
     for (const name of input.parts ?? []) {
         if (releasedHere.some((part) => part.id === name)) continue;
-        const known = await call('part.find_one', { query: { name } }, as) as { kind?: string } | null | undefined;
+        const known = await ctx.call('part.find_one', { query: { name } }, as) as { kind?: string } | null | undefined;
         if (known === null || known === undefined) {
             problems.push(`${name} was named but nobody has published it, and it was not in any repository given.`);
             continue;
@@ -254,7 +250,7 @@ export async function site_seed(
         ?? (applications.length === 1 ? applications[0]?.id : undefined)
         ?? 'console';
 
-    const composed = await call('cdn.compose', {
+    const composed = await ctx.call('cdn.compose', {
         // A kernel released in this call is pinned to its own caret. A seed that released none — the
         // second tenant, composing against the platform's kernel — takes the newest the catalog has,
         // and every part's declared kernel range is still checked by compose.
@@ -282,7 +278,7 @@ export async function site_seed(
      * it off the compose output instead is `TypeError: requires is not iterable`, which is a truthful
      * error about a field that was never there.
      */
-    const release = await call('release.find_one', { query: { hash: composed.hash } }, as) as {
+    const release = await ctx.call('release.find_one', { query: { hash: composed.hash } }, as) as {
         requires?: readonly string[];
         agentRoles?: Readonly<Record<string, readonly string[]>>;
     } | null | undefined;
@@ -301,7 +297,7 @@ export async function site_seed(
     const mesh = [{ package: '@flybyme/mesh-serve', version: '^0.1.0', contracts, events }];
     const api = input.api ?? this.controlApi() ?? '';
 
-    const existing = await call('site.find_one', { query: { host: input.host } }, as) as
+    const existing = await ctx.call('site.find_one', { query: { host: input.host } }, as) as
         { id: string; tenantId?: string } | null | undefined;
 
     let siteId: string;
@@ -326,7 +322,7 @@ export async function site_seed(
          * undoing a setting somebody chose is worse than not offering to change it, so absent means
          * *leave it alone* and present means *set it*.
          */
-        await call('site.update', {
+        await ctx.call('site.update', {
             id: existing.id,
             mesh,
             api,
@@ -334,7 +330,7 @@ export async function site_seed(
         }, as);
         siteId = existing.id;
     } else {
-        const created = await call('site.create', {
+        const created = await ctx.call('site.create', {
             host: input.host,
             application,
             tenantId: organizationId,
@@ -347,7 +343,7 @@ export async function site_seed(
         siteId = created.id;
     }
 
-    await call('cdn.deploy', { host: input.host, release: composed.hash }, as);
+    await ctx.call('cdn.deploy', { host: input.host, release: composed.hash }, as);
 
     /**
      * **The roles the application declares, installed as grants.** F30 stage 2.
@@ -356,7 +352,7 @@ export async function site_seed(
      * the release is on it. `contracts` above is that set, already computed — passing it here rather
      * than recomputing keeps one answer to *what does this site serve*.
      */
-    const granted = await installGrants(call, as, contracts.map((c) => c.key), release?.agentRoles ?? {});
+    const granted = await installGrants(ctx, as, contracts.map((c) => c.key), release?.agentRoles ?? {});
 
     ctx.logger.info(
         `[cdn] seeded ${input.host} → ${composed.hash} (${String(composing.length)} part(s), `
@@ -388,7 +384,7 @@ export async function site_seed(
  * next question rather than answered here by omission.
  */
 export async function installGrants(
-    call: Call,
+    ctx: IServiceContext,
     as: unknown,
     exposed: readonly string[],
     declaredRoles: Readonly<Record<string, readonly string[]>>,
@@ -416,7 +412,7 @@ export async function installGrants(
     for (const roleKey of [...new Set(wanted.map((g) => g.roleKey))].sort()) {
         // `owner` ships with identity (F32) and is not a part's to redefine.
         if (roleKey === 'owner') continue;
-        await call('identity.role_upsert', {
+        await ctx.call('identity.role_upsert', {
             key: roleKey,
             name: roleKey.charAt(0).toUpperCase() + roleKey.slice(1),
             scope: 'organization',
@@ -426,21 +422,21 @@ export async function installGrants(
         }, as);
     }
 
-    const existing = await call('grant.find', { query: {} }, as) as
+    const existing = await ctx.call('grant.find', { query: {} }, as) as
         readonly { roleKey?: string; contract?: string }[] | undefined;
     const have = new Set((existing ?? []).map((g) => `${g.roleKey ?? ''} ${g.contract ?? ''}`));
 
     let added = 0;
     for (const grant of wanted) {
         if (have.has(`${grant.roleKey} ${grant.contract}`)) continue;
-        await call('grant.create', grant, as);
+        await ctx.call('grant.create', grant, as);
         added += 1;
     }
     return added;
 }
 
 async function ensureOrganization(
-    call: Call,
+    ctx: IServiceContext,
     input: Input,
     userId: string,
     scope: string | undefined,
@@ -454,7 +450,7 @@ async function ensureOrganization(
         );
     }
 
-    const found = await call('organization.find_one', {
+    const found = await ctx.call('organization.find_one', {
         query: { slug: input.organization.slug },
     }) as { id: string } | null | undefined;
 
@@ -473,7 +469,7 @@ async function ensureOrganization(
      * `ownerId` is still sent because `OrganizationSchema` requires it — an organization with no
      * owner must be unconstructible (surfdns#29) — and the value is replaced with the caller's.
      */
-    const created = await call('organization.create', {
+    const created = await ctx.call('organization.create', {
         slug: input.organization.slug,
         name: input.organization.name,
         ownerId: userId,
