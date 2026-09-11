@@ -59,8 +59,9 @@ Every rule in `spec/README.md` is broken in six lines. It is worth keeping here 
   on is a node somebody drives to a datacentre for.
 - **Assignment is a desired state, not a command.** Reconciliation is what makes it true, and the
   gap between desired and observed is the thing an operator needs to see.
-- **Fleet reads are gated at `operator`, including the reads.** A gate looser than its handler is a
-  promise the platform will not keep.
+- **Fleet reads need a permission, including the reads.** `serve.node.find` is not public and not
+  merely authenticated: what a cluster is running is operational detail. A gate looser than its
+  handler is a promise the platform will not keep.
 - **Nothing here is on the serving path.** A page must render on a node that cannot reach the fleet
   record at all.
 
@@ -77,10 +78,5 @@ the one to look at first.
 
 ## 5. Open
 
-- **What a telemetry sink writes to, decided once and injected**, rather than discovered through a
-  cast at start.
-- **Whether provisioning belongs here.** Creating a machine is a different act from recording that
-  one exists, and it is the part that touches a cloud provider.
-- **Whether approval belongs anywhere in mesh-serve.** It is self-contained, calls nothing, and
-  looks like an application that ended up inside the platform. It gates destructive agent calls,
-  which is a real need and not obviously this package's.
+What a telemetry sink writes to (**E5**), listeners as records (**D5**) and whether provisioning
+belongs here (**D6**) are in [questions.md](./questions.md).

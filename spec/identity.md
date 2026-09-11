@@ -17,7 +17,7 @@ it is a dependency of everything and depends on nothing, so it can be reasoned a
 | **organization** | who owns things: sites, repositories, parts | a group of permissions |
 | **membership** | an account's place in one organization, carrying roles | the account |
 | **role** | a named set of permissions, and a row | a level |
-| **permission** | a pattern matching contracts — `identity.user.find`, `build.part.*` | a contract |
+| **permission** | a pattern matching contracts — `identity.user.find`, `serve.part.*` | a contract |
 | **ticket** | a bearer credential, revocable, with an expiry | a session object |
 
 ## 2. There is one kind of standing, held in two places
@@ -57,7 +57,7 @@ A permission names contracts by pattern:
 ```
 identity.user.find          exactly one
 identity.user.*             every action on one collection
-build.part.**               everything at or below
+serve.part.**              everything at or below
 **                          everything — see §5
 ```
 
@@ -131,9 +131,9 @@ part it is and `part.create` does not.
 A role is a row holding patterns. Roles inherit, so common sets are named once:
 
 ```
-build.repository.part.reader   build.part.find, build.part.get
-build.repository.part.writer   build.part.create, build.part.update
-build.repository.part          inherits both
+serve.part.reader     serve.part.find, serve.part.get
+serve.part.writer     serve.part.create, serve.part.update
+serve.part.admin      inherits both, plus serve.part.delete
 ```
 
 **Inheritance is same-scope only and acyclic**, checked when written and honoured when read. An
@@ -178,8 +178,8 @@ three different answers, so the list has to carry where each entry applies:
 
 ```
 identity.user.find                          everywhere
-build.part.create        in   Platform
-build.part.find          in   Platform, Flowboard Inc
+serve.part.create        in   Platform
+serve.part.find          in   Platform, Flowboard Inc
 serve.site.seed          in   Platform
 ```
 
@@ -237,20 +237,7 @@ rather than validating one the request carried.
 - **A password is never read from argv**, where it is visible in `ps` and lands in shell history.
 - **A gate looser than its handler is a promise the platform will not keep.**
 
-## 9. Open, and these block the build
+## 9. Open
 
-1. **The contract rename** (§3). 174 contracts, flat to two rooted hierarchies. Nothing else in this
-   document works without it, and it deletes `PLATFORM_DOMAINS`.
-2. **Revocation semantics** (§5). Cascade, or refuse to revoke what has been re-granted.
-3. **Where `**` lives.** A root role that cannot be edited, or a flag on the first account, or
-   something else. It is the one place authority enters the system.
-4. **One name for the scope field** (§7).
-5. **Field-level visibility.** `user` carries a password hash, a generated find returns the row, and
-   no gate subtracts a field — so every `user` action is internal and nothing can turn a user id into
-   a name. Six instances deep: the console shows ids, members cannot be named, *who holds this role*
-   is unanswerable. The fix is in [collections.md](./collections.md), and §2's operator with
-   `identity.user.find` depends on it.
-6. **`transferOwnership` exists in the store and no contract calls it.** An operator can create the
-   account to hand an organization to and cannot finish the handover, which is the operator's actual
-   job.
-7. **Changing your own email has no contract**, for the reason in (5).
+The contract rename (**C1**) blocks everything in §3 onward. Revocation (**C2**), the root
+wildcard (**C3**) and field-level visibility (**A1**) are in [questions.md](./questions.md).

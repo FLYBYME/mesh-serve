@@ -137,16 +137,5 @@ node's mounted set rather than the site's exposed set has removed it.
 
 ## 8. Open
 
-- **Where bootstrap lives.** A cluster with no sites cannot be reached: resolution is host → site, so
-  on a fresh node there is no route to sign in, so no site can be created. The previous answer was
-  the node serving one site for itself on `127.0.0.1`, in 414 lines that reached into five other
-  domains — which is why serving appeared to depend on everything. It needs a home chosen on
-  purpose.
-- **Whether a projection is a part.** If protocols are an open set, adding one should not mean
-  editing this package. A projection has a shape — resolve, authenticate, express, refuse — and that
-  shape is a contract somebody could implement outside.
-- **Ports and listeners as records.** Each projection needs an address to listen on, and those are
-  facts about a node. That is [fleet.md](./fleet.md)'s territory and the seam is not drawn yet.
-- **Whether `_describe` is exempt from the provisional refusal.** A provisional account is refused
-  ahead of every check, deliberately — so a site's description is readable with no credential and
-  refused with a real provisional one. Defensible, surprising, undecided.
+Bootstrap (**D1**), whether a projection is a part (**D2**), and listeners as records
+(**D5**) are in [questions.md](./questions.md), with everything else still undecided.

@@ -76,9 +76,6 @@ own timeout, and a caller that gives up must not leave the work unattributed.
 
 ## 5. Open
 
-- **The repository collection itself** (§2), and migrating `part.repository` to reference it.
-- **Whether building belongs in this package at all.** It is the piece with the fewest ties to
-  serving: it produces artifacts and a release row, and serving reads them. It could be a separate
-  service that a node runs, or does not.
-- **Where a bare repository path fits.** Local development imports from `/home/…/.git-remotes/x.git`,
-  which is a reference that resolves on exactly one machine. Honest for a laptop, wrong for a fleet.
+Whether building belongs in this package (**D3**) and where a bare repository path fits (**E4**)
+are in [questions.md](./questions.md). The repository collection itself is decided — §2 — and not
+yet built.

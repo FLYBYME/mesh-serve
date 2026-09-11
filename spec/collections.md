@@ -68,37 +68,44 @@ stripped.
 A caller who asks has either made a mistake or made an attempt, and both deserve an answer rather
 than an empty column.
 
-### Scoping is not binary
+### Two kinds of collection, and publishing crosses between them
 
-`scopedBy` has one answer: a row is in your organization or you cannot see it. **That is wrong for
-every collection somebody is meant to share**, and the catalog is the case that proves it.
+`scopedBy` has one answer: a row is in your organization or you cannot see it. That is right, and it
+is not enough, because some things are meant to be shared — `serve/kernel` is **owned by one
+organization and usable by everyone**.
 
-`serve/kernel` should be **owned by one organization and usable by everyone.** A part is published by
-whoever publishes it and composed by whoever needs it. Under `scopedBy` alone, a tenant's catalog
-read returns their own parts and nothing else, so the only way to reach somebody else's is a
-contract that is not scoped at all — which is an unbounded read with a hand-written narrowing in
-front of it, and that shape has its own entry in the platform's history.
+**The answer is not a flag on the row.** A per-row `visibility` field turns every scoped read into a
+union, makes every write check whether it is crossing a line, and puts the most security-sensitive
+decision in the platform inside a column that an update could change by accident.
 
-So a scoped read answers **mine, plus what has been made public**:
+**A collection is either scoped or public, declared once:**
 
-```
-find  →  rows where organizationId = <resolved scope>
-      ∪  rows where visibility = 'public'
-```
+| | scoped | public |
+| --- | --- | --- |
+| read | within the caller's organization | by anyone, including no caller |
+| write | permission, within the scope | permission, and only the owning organization |
+| carries | `organizationId` | an owner field, for writes |
+| examples | repository, site, membership, card | part, version, a blog post |
 
-Three things follow, and the second is the one that bites:
+**Publishing is a contract, not a field change.** It reads from a scoped collection and writes to a
+public one, and it is the only thing that crosses. So it has a name, a permission, an audit trail,
+and somewhere to put the rules — *is this version already published, does this name belong to you,
+is the digest reproducible*. A boolean has nowhere to put any of that.
 
-- **Public is a property of the row, set by its owner.** Publishing is a deliberate act with an
-  audit trail, not a side effect of the collection it lives in.
-- **Public means readable, never writable.** The union applies to `find`, `get` and `count`. Every
-  write stays scoped to the owner, or "public" becomes "anyone may edit".
-- **A public row may still hide fields.** The two mechanisms are independent: hidden fields decide
-  *which columns*, visibility decides *which rows*. A public part exposes its name, version and
-  digest; it does not become a different shape because a stranger is reading it.
+Three consequences:
 
-**Whether this is `defineCrud`'s or mesh-serve's is genuinely open.** It is the same kind of thing as
-`scopedBy` and belongs beside it — but `scopedBy` is already in Track V's list of breaking changes,
-so it is a decision to make in that window rather than after it.
+- **A public collection may be a different shape.** It holds what publishing chose to expose, which
+  is usually narrower than the private row. A repository has a URL and a default branch; the part it
+  publishes does not.
+- **An unscoped read is unbounded, which this platform bans**, so on a public collection pagination
+  is not optional — a default limit and a maximum, enforced, not left to the caller. That is
+  surfdns **V1** and **V4** and this is the case that needs them most.
+- **Scoped stays exactly as it is.** No union, no per-row check, and `scopedBy` does not have to
+  change for mesh 2 → 3. One fewer breaking change in the window.
+
+The unresolved part is not the mechanism, it is **what a public collection's writes are gated by**.
+Reads are open by construction; creates and updates still belong to an owner, and the owner field is
+doing work that `scopedBy` used to do for free.
 
 ### Nested routes
 
@@ -149,14 +156,5 @@ discard quietly.
 
 ## 4. Open
 
-- **What goes into mesh 2 → 3 and what stays here.** Hidden fields (V2) and public rows are
-  `defineCrud` semantics and belong in the bump. Routing, precedence and the projections are
-  mesh-serve's. Relations could be either. **This has to be settled before the bump, not after** —
-  afterwards each item costs a major version.
-- **Whether asking for a hidden field is a refusal or a silent drop.** Recorded above as a refusal;
-  not yet built.
-- **Whether public rows are a flag or a list.** A boolean answers *everyone or nobody*. Some
-  collections will want *these organizations*, which is a different column and a much larger
-  feature. Start with the boolean and say so.
-- **One name for the scope field.** `tenantId` and `organizationId` are the same value under two
-  names because two schemas disagreed.
+See [questions.md](./questions.md) — the open items from every spec are gathered there, so there is
+one list to work through rather than five.
