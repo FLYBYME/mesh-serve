@@ -1,0 +1,181 @@
+The CLI is the platform's front door, and it fails at the two things a front
+door has to do: tell you what it offers, and fail comprehensibly.
+
+This is one batch about one file's worth of concern. Do all of it in this
+dispatch. Both defects below were hit by a person today, in ordinary use, within
+an hour of each other, and one of them was hit twice.
+
+Read in this order, and you should not need much else:
+
+    spec/cli.md              the design, already argued. Status says Proposed,
+                             "Nothing is built" — that is stale, most of §1 is
+                             built. Fix the status line as you go.
+    bin/mesh-serve.mjs       118 lines. The dispatcher. Both defects start here.
+    src/cli/run.ts           404 lines. The site client — the part that IS built
+                             the way spec/cli.md wants, from a site's exposure.
+    src/cli/args.ts          128 lines. Flag parsing for that projection.
+    src/bring-up.ts          228 lines. `seed`, and its own hand-rolled flags.
+
+--------------------------------------------------------------------------------
+PART 1 — `--help` STARTS A NODE
+
+Measured twice today:
+
+    $ npx mesh-serve node --help
+    connecting to mongodb://localhost:27017/mesh-serve ... ok
+    [MeshApp starting...]                       ← it started a database node
+
+    $ node bin/mesh-serve.mjs seed --help
+    Bring-up failed: No password. …             ← it tried to seed a cluster
+
+`bin/mesh-serve.mjs` branches on `command === 'node'` and hands the rest of argv
+to `node.mjs`, which reads `process.argv` itself. Nothing anywhere looks for
+`--help` or `-h`. So the two commands that change the most state are the two that
+answer a request for documentation by doing the thing.
+
+**`--help` must be answered before any command runs**, for every subcommand,
+including ones that fall through to the site projection. A person typing `--help`
+has told you they do not know what will happen; running it is the one response
+that cannot be right.
+
+Each subcommand's help has to name its own flags, and they are not guessable:
+
+- `node` takes `--ws --cdn --api --mcp --db --service`.
+- `seed` reads fifteen — `api application control email host import-only org-name
+  org-slug parts password ref repo set-password title policy` — every one of them
+  hand-parsed in `bring-up.ts` by `argv.indexOf`.
+
+`--control` and `--api` in that list are the second half of this part. **They are
+both URLs and they mean different things**: `--control` is the node you sign in
+to, `--api` is the URL the served page will call. Passing `--api` when you meant
+`--control` silently signs in against the default `http://127.0.0.1:5005` and
+reports *"Those credentials are not valid"* while the node you meant is running in
+front of you. That cost a real run today. Help text for `seed` that does not
+distinguish them is help text that has not done its job.
+
+**And an unknown flag must be refused, not ignored.** `bring-up.ts` already has a
+comment about this, written after `--policy` was typed, not recognised, ignored,
+and the seed reported success having set no policy — *"An unknown flag being
+ignored is the shape to be angry about."* It made the known-but-malformed case
+loud and left the unknown case silent. Close it.
+
+### On `commander`
+
+The person who owns this repository says it should use `commander`, and the
+argument is the one above: this file hand-rolls `indexOf`-based parsing three
+separate times — `bin/mesh-serve.mjs`, `bring-up.ts`, and `cli/args.ts` — and
+each gets a different subset of the job right. Help, unknown-flag rejection and
+`--` handling are three things a parser has as a matter of course.
+
+**Take that as the direction, and then be careful about one thing**, because it is
+the whole point of `spec/cli.md` §1: the site projection has **no fixed list of
+subcommands**. What `mesh-serve --host … <domain> <action>` accepts comes from the
+site's own `_describe`, resolved at run time — *"the commands are the contracts"*
+— and a parser that demands its commands be declared up front would undo that.
+
+So: a parser for the fixed part (`node`, `seed`, `client`, `publish`, `dev` and
+their flags), and the dynamic projection keeps resolving from the exposure. If
+`commander` can carry the second half cleanly, use it for both. If making it do so
+means teaching it a command list that a site is supposed to decide, use it for the
+fixed part only and say so in `spec/cli.md` with the reason. **Do not flatten the
+dynamic half to make the parser tidy.**
+
+--------------------------------------------------------------------------------
+PART 2 — A CLUSTER FROM AN OLDER VERSION CANNOT START, AND SAYS SO IN A STACK TRACE
+
+The same command, against the default database:
+
+    [DB] Ensured unique index "uniq_organization_slug" on collection "organization"
+    [BootOrchestrator] Boot sequence aborted due to error: { error: 'Index already exists with a different name: email_1' }
+    MongoServerError: Index already exists with a different name: email_1
+        at Connection.sendCommand (…/mongodb/lib/cmap/connection.js:306:27)
+        … 9 more frames …
+      code: 85, codeName: 'IndexOptionsConflict'
+
+**What is actually happening.** `email_1` is mongo's default name for an index on
+`{email: 1}`. A `mesh-serve` database created by an older version of this code has
+one, from before the index was given a name. Today both
+`identity.contract.ts:35` (`unique: [{ fields: 'email', scope: 'global' }]`, which
+mesh turns into an index) and `identity/store.ts:472` create the same index as
+`uniq_user_email`. Mongo will not rename an existing index, so it refuses with
+code 85 and the boot aborts.
+
+Three things to fix, and the third is the one that matters:
+
+1. **The same index is declared in two places.** Both name it `uniq_user_email`,
+   so they are idempotent with each other today and this is not what is failing —
+   but it is one index with two sources of truth, which is the shape that has bitten
+   this repository repeatedly. Decide which one owns it. If the contract's
+   `unique:` is the declaration, `store.ts` should not also create it.
+
+2. **mesh rethrows this raw.** `Database.ensureIndexes` catches code `11000`
+   (duplicate data) and gives it a real message; everything else, code 85
+   included, is rethrown untouched, so a startup misconfiguration reaches the
+   user as a mongodb driver stack trace. **mesh is frozen** — see
+   `mesh/docs/STABILITY.md` — so the fix is not there. Catch it on this side,
+   where the indexes are declared.
+
+3. **There is no way forward.** The message says what mongo refused and nothing
+   about what a person should do, and *every* option is destructive-adjacent:
+   drop the old index, rename it, or point at a different database. A node that
+   refuses to start needs to say which database, which collection, which index,
+   and what the operator can do — and it must not do any of it silently. Decide
+   whether this is a refusal with instructions or an offered migration behind an
+   explicit flag; write the argument into `spec/roadmap.md` either way.
+
+Reproduce it before you fix it. Any database carrying an `email_1` index does it;
+make one in a scratch database rather than touching a live one.
+
+--------------------------------------------------------------------------------
+WHAT NOT TO DO
+
+- **Do not start, stop or reseed the cluster on ports 4001/5005/5006/8080.** It is
+  the two-tenant cluster on `surfdns-stage3` and it is being used. Scratch ports
+  and a scratch `--db` for anything you need to run; `RUNNING.md` (new today) has
+  the commands, and reading it first will save you working them out.
+- **Do not touch `@flybyme/mesh`.** Frozen. If the real fix is there, write it
+  into `spec/roadmap.md` with the evidence and work around it here.
+- Do not edit mesh-core, mesh-web, mesh-operator or flowboard. Separate
+  repositories.
+- `as any` and `as never` are bugs here, not style nits. Three came out of
+  mesh-operator today and one was hiding a command that discarded its own result.
+- Do not add a second list of subcommands anywhere. That is `spec/cli.md` §1's
+  entire argument and the reason the site projection exists.
+
+--------------------------------------------------------------------------------
+A NOTE ON HOW TO EDIT
+
+Edit files with your file tools. A dispatch in a neighbouring repository this week
+committed eighteen throwaway `.cjs` scripts that read a source file, ran a regex
+over it and wrote it back — `fix-table-row.cjs` through `fix-table-row5.cjs`,
+which is a record of the same pattern failing to match four times. They had to be
+removed by hand. Write the change; do not write a program that writes the change.
+
+--------------------------------------------------------------------------------
+COMMIT AS YOU GO — NOT ADVICE
+
+Run `npm test` in the **foreground** and wait. Never background a command and
+never end your turn saying you will wait for results: you are running
+non-interactively, so when your turn ends the process exits, anything backgrounded
+is killed, and uncommitted work is lost with no report. Two dispatches have died
+exactly that way. A commit survives the process ending; an unstaged edit does not.
+
+--------------------------------------------------------------------------------
+DONE MEANS
+
+- `npm test` green and not smaller than when you started (680 tests, and the
+  script runs `typecheck` first — that is deliberate, do not remove it).
+- `mesh-serve --help`, `mesh-serve node --help` and `mesh-serve seed --help` each
+  print that command's own flags and **start nothing**. A test asserts it for
+  every fixed subcommand, by running the entry point rather than by calling a
+  help function directly — the defect was that the branch was never reached.
+- An unknown flag to `seed` is refused with a message naming it.
+- `seed --help` distinguishes `--control` from `--api` in words.
+- A database carrying a legacy `email_1` index produces a refusal that names the
+  database, the collection, the index and the way forward — not a stack trace.
+  A test covers it.
+- One owner for the user email index.
+- `spec/cli.md` status updated; it says "Nothing is built" and most of §1 is.
+- `spec/roadmap.md` carries anything found, including the mesh-side half of the
+  index handling.
+- No `Co-Authored-By` or `Claude-Session` trailers.
