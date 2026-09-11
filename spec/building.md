@@ -1,199 +1,84 @@
 # Building
 
-**Status: Decided.** No code yet.
+**How a release comes to exist.** A repository holds parts, a part is published at a version, and a
+release names a set of versions that a hostname can serve.
 
----
+`catalog` and `builder` were two domains. Catalog reads and writes only its own rows; builder reads
+catalog and writes into it. **Builder is catalog's writer**, and they are one thing.
 
-## 1. There are two kinds of bundle — **Decided**
+## 1. The nouns
 
-**The kernel**, and **parts**. An Application and an Extension are the same kind of artifact with a
-different `kind`; the only difference is that an Extension is installed and singleton while an
-Application is run and may have several instances. So: two kinds, not three.
+| | is | is not |
+| --- | --- | --- |
+| **repository** | a git remote this platform knows about, owned by an organization | a path on a machine |
+| **part** | something publishable that lives in a repository | a package |
+| **version** | one build of a part, at a commit, with a digest | a tag somebody typed |
+| **release** | a named set of versions that compose | a deployment |
 
-Both are versioned and hashed. The kernel is built and bundled to its version and hash exactly as a
-part is.
+**A release is not a deployment.** Composing produces a release; pointing a hostname at one is a
+separate act, and that separation is what makes a rollback picking a row from a list.
 
-## 2. A part artifact must not contain the kernel — **Decided, and it is correctness**
+## 2. A repository is a first-class row, and today it is a string
 
-**`mesh-ui` got this wrong in the one line that mattered.** Its esbuild `external` list named node
-builtins and server packages — `node:fs`, `express`, `mongodb`, `ws` — and a plugin aliased
-`@flybyme/mesh` to a browser build, which esbuild then **inlined into every extension**. Every part
-carried its own framework.
+This is the largest change these specs ask for.
 
-That is not a size problem. A browser resolves modules by URL, so two copies under two URLs are two
-module graphs and **two of every singleton the capability model depends on**. The whole of
-`needs()` / `provides()` assumes one kernel.
+Today `repository` is a **field on every part** — a git URL, repeated on each part that came from the
+same place, with nothing keeping them consistent. So:
 
-So the framework is `external`, always, and the page's import map resolves it to the one mounted
-kernel artifact. This is the single line separating "one kernel, many parts" from "many kernels
-pretending".
+- *"What repositories does this cluster know about?"* can only be answered by reading every part and
+  taking the distinct values.
+- A repository cannot be registered before it is imported.
+- Nothing records a default branch, or where a monorepo's subdirectory is, except inline at import
+  time, every time.
 
-Measured on the last artifact built the old way: `out/framework` was 1.1 MB across 192 files against
-`out/app`'s 72 KB across 8. **94% of every artifact was a private copy of the kernel.**
+**One repository holds many parts, and that is already true in practice.** `mesh-core.git` produces
+`auth`, `identity` and `ui`. `flowboard.git` produces `flowboard` and `flowboard-agent`. The data
+model does not say so.
 
-## 3. A build does not install — **Decided**
+### What it fixes
 
-Fetch the commit, run esbuild, hash the output. No `npm i`, no network, no `node_modules`.
+**The part namespace.** Today a part name is one global namespace, and a second organization
+importing a repository whose part names are taken is refused outright:
 
-This is possible because **esbuild does not typecheck.** It strips types and emits. A part whose only
-dependency is the framework — which is external — needs nothing installed at all.
+> `"mesh-web"` is already published by another organization, and a part name is one global
+> namespace — so importing … cannot claim it.
 
-The predecessor ran `npm ci` inside every build, which cost a measured **95 to 125 seconds per site**
-and made the framework a git clone on every build. That is not an optimisation to make later; it is
-the difference between a marketplace and a form that occasionally works.
+With a repository owned by an organization, a part is identified by its path — `platform/kernel`,
+`flowboard/kernel` — and the two coexist. **The constraint stops existing rather than getting a
+better message.**
 
-**Typechecking is the author's job**, in their own repository, before they push. A build server is the
-slowest possible place to discover that a type is wrong.
+See [collections.md](./collections.md) for the nested route this implies.
 
-### The rule that makes it hold
+## 3. What must be true
 
-**Vendored or external.** The framework is external. Anything else a part uses is committed to the
-part's repository. There is no resolution step, so a missing dependency is a build failure rather
-than a network round trip — and a build is reproducible from a commit with nothing else in the world
-required.
+- **Idempotent, and running it twice is how you find out.** Importing declares or updates; releasing
+  is cached when the commit has not moved; composing the same parts is the same release; deploying a
+  release a site already serves changes nothing.
+- **A version is minted, never declared.** A repository that holds its own version number is a
+  repository that must be edited to ship, and a number that can be spent twice.
+- **A part belongs to its publisher**, and a repository that could name its own owner could name
+  somebody else's.
+- **A composition is refused at compose time, not in a browser.** A release naming a part it does not
+  have, or a part whose requirement is unmet, fails when it is built. The failure moves from a blank
+  page to a build, which is the whole point.
+- **A reference, never a path.** A repository is resolvable by any builder on any node.
 
-### 3a. A repository names an entry, not a command — **Decided**
+## 4. Timeouts are a design constraint here, not a setting
 
-The consequence of §3, and it is a bigger change than it sounds.
+The broker's default call timeout is ten seconds, which is right for a question and wrong for work.
+Releasing one repository is a clone and a bundle per part and has taken twenty-two seconds on a warm
+machine.
 
-The predecessor's descriptor carried `ui.build` — a shell command the builder ran with `sh -c` — and
-`ui.output`, the directory it was expected to have written. That is what made `npm ci` possible in
-the first place, and it made the builder's threat model *arbitrary code from a repository*.
+The failure this produced is worth keeping: **the caller timed out and reported `RPC Timeout` while
+the builder carried on and finished every part correctly.** The run failed and the work succeeded,
+which is the most confusing pair of outcomes available. Anything that clones or bundles declares its
+own timeout, and a caller that gives up must not leave the work unattributed.
 
-There is no `build` field now. A part declares an **entry** — `src/app.ts` — and the builder runs
-esbuild against it. What a repository can ask for is a bundle of its own source, and nothing else.
+## 5. Open
 
-What is given up: a repository can no longer run a pre-build step. That is deliberate — a pre-build
-step is where `npm ci` came back, and a build that runs a repository's own tooling is a build that
-cannot be reproduced from a commit alone.
-
-### 3b. Requirements are declared per part, not per repository — **Decided**
-
-A repository builds several parts: `surfdns-console` is a chrome extension and an application in one
-tree. `mesh` — the contracts a part calls — hangs off each part, not off the repository.
-
-A repository-level list would make every part declare every contract any of them calls, so a site
-loading only the chrome extension would have to grant it the domain contracts the console app uses.
-**Over-declaring a requirement turns the grant check into a formality**, which is the one thing it
-must not become.
-
-## 4. An artifact declares what it is — **Decided, built in the predecessor**
-
-An artifact carries a `Declaration`: the parts it provides, and `builtAgainst` — the versions it was
-actually linked against, read from the built tree rather than from a range, because `^1.2.0` is a wish
-and the installed version is the fact.
-
-**And for a git dependency the version identifies nothing.** `@flybyme/mesh-web` reports `0.1.0` and
-will report `0.1.0` on every build forever, because nothing bumps the version of a package consumed
-from a branch. The field added specifically to catch a framework mismatch was constant across every
-framework change. The lockfile has the real identity, so the **commit** is recorded alongside.
-
-Found by running it against a real repository after the unit tests passed on the first try and proved
-nothing. The same run found that reading only a root `package.json` returns nothing at all for an npm
-workspace — which is not an exotic layout, it is what a repository with two halves naturally is.
-
-### 4a. A collection cannot take a natural key — **Open, and it costs something here**
-
-*(found 2026-09-06, wiring the builder onto `defineCrud`)*
-
-An artifact is bytes and a hash. The hash is its identity — that is the whole design — so the obvious
-shape is a collection keyed by digest, where storing the same bytes twice is impossible rather than
-merely unlikely.
-
-`defineCrud` cannot express that. Its create input is `baseSchema.omit({ id, _id, createdAt,
-updatedAt })`, so **nothing can supply an id**; the database mints one. `idField` renames that minted
-id on the wire, which is a different thing entirely, and setting it produces parameters that look
-like natural keys and carry mongo ids. The framework refuses a schema that declares its own id field,
-which is how this was found rather than discovered later in production.
-
-So every artifact has two identities and only one of them means anything. The invariant that content
-addressing was supposed to make free — **two rows must not claim the same bytes** — now needs
-somewhere to live:
-
-- a unique index on `digest`, which is where it can actually be enforced
-- the writer checking before it creates, which is a race unless the index backs it
-
-Both, in practice. Neither is written yet. The same shape applies to `site.host` and to any
-collection whose key comes from the domain rather than from the database.
-
-## 4b. Private sources, and the hole a token opens — **Half decided 2026-09-06**
-
-`mesh*` is public and `surfdns*` is a private company, so the builder has to clone repositories it
-cannot read anonymously. Two ways, and they are not alternatives — they answer different questions.
-
-### A token, and why it cannot simply be one token
-
-`GIT_TOKEN_GITHUB_COM` on the builder node, sent as `http.extraHeader`, never in the remote URL — a
-URL with a token in it lands in `.git/config`, in git's error messages, and therefore **in the build
-log, which is stored on the build row and travels with the failure**. Built, and it works for one
-operator with one organization.
-
-It does not survive contact with a second tenant, and the reason is not the token — it is
-`build_start`:
-
-> ```
-> build_start({ source: { kind: 'git', repository: <anything>, ref } })
-> ```
-
-**The caller names the repository.** A node holding a token that can read `surfdns` will clone
-`surfdns` for whoever asks, bundle it, and publish an artifact addressed by a digest that the same
-caller can then fetch. That is not a leak in the token; it is `build_start` accepting an arbitrary
-URL and having a credential.
-
-### The fix is already sitting in the catalog
-
-A `part` row carries `repository` and `publisher`. So the build takes a **part and a version**, not a
-URL:
-
-```
-build_start({ part: 'surfdns-console', version: '0.3.1' })
-```
-
-The repository comes from the catalog, the caller is checked against `publisher`, and there is no
-longer a field in which to name somebody else's repository. It also makes a build reproducible from
-the catalog alone, which is what the `gone` → rebuild path needs anyway — so this is not a security
-patch bolted on, it is the shape the rest of the design already wanted.
-
-### The tarball, and what it costs
-
-An `archive` source is already in the schema. It is the right answer for a source the builder cannot
-reach at all — an air-gapped forge, a CI job that pushes rather than being pulled from — and it needs
-no credential, which removes the whole class of problem above.
-
-**But it breaks the durability story.** Everything else rests on: an edge's disk is a cache, and the
-archive is git. `gone` → rebuild from the commit works because the commit is still there. An uploaded
-tarball has nothing behind it: if every edge loses its copy, the artifact cannot be rebuilt, and the
-version is gone rather than `gone`.
-
-So a tarball source has to be **stored durably or marked as unreproducible**, and neither is written.
-Until then it is a development convenience and must not be how anything is published.
-
-## 5. Verification happens at build time — **Decided**
-
-A site's `mesh[]` names contracts as strings. With an imported `ToolContract`, a wrong name was a
-compile error; with a string, nothing catches it and the failure looks like a 404, indistinguishable
-from a route that never existed.
-
-The `package` field is what recovers this. **The build asks whether that package really exports those
-contracts**, and fails if not — which also hands the client generator its schemas.
-
-It asks the **catalog**, not npm. A service package publishes its contract descriptors when it is
-released, so a build needs nothing installed and stays offline. Everything a build consumes comes
-from one place.
-
-## 6. What is generated, and by whom
-
-- **the builder** — part artifacts, kernel artifacts, and the typed client for a repository, because
-  the builder is the only thing that ever has a repository checked out
-- **the cdn** — the page, the boot module and the theme, because those come from a *composition*
-  rather than from any single repository. See [serving.md](./serving.md).
-
-## 7. Open
-
-- **Whether the kernel is one file or many.** Unbundled ES modules give per-file cache granularity,
-  which matches content addressing: change one module, refetch one file. One bundle means every
-  client refetches a megabyte for a one-line change. Against that, 192 requests on a cold load. Once
-  the kernel is shared and immutable, that cost is paid **once per kernel version per browser, across
-  every site**, which weakens the argument for bundling it considerably. Measure before deciding.
-- **Where the client generator runs.** A part repository needs types in an editor with nothing
-  running. See [exposure.md §4](./exposure.md).
+- **The repository collection itself** (§2), and migrating `part.repository` to reference it.
+- **Whether building belongs in this package at all.** It is the piece with the fewest ties to
+  serving: it produces artifacts and a release row, and serving reads them. It could be a separate
+  service that a node runs, or does not.
+- **Where a bare repository path fits.** Local development imports from `/home/…/.git-remotes/x.git`,
+  which is a reference that resolves on exactly one machine. Honest for a laptop, wrong for a fleet.

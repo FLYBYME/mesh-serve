@@ -1,103 +1,86 @@
 # Fleet
 
-Nodes announce; the fleet reacts.
+**Which machines exist, and what each one is running.** Independent of everything in
+[serving.md](./serving.md) and [building.md](./building.md): nothing about resolving a hostname or
+composing a release needs to know how many nodes there are.
 
-**Status: Decided in shape. Nothing built.** This is the answer to *"I need a standard way to run
-services locally or in a k8s cluster."*
+That independence is the point of this document. Fleet is the one part of mesh-serve that could be
+lifted out and still make sense, and it should be built so that stays true.
 
----
+## 1. It is one thing, not two
 
-## 1. The fleet does not start processes — **Decided**
+`fleet` and `supervisor` were separate domains. The dependency graph says otherwise: fleet calls
+supervisor, and supervisor calls nothing at all. The seam between them is the direction of a single
+call.
 
-Something else always starts a process — a person, systemd, a pod. The node then joins the mesh and
-says **"my name is x, what should I run?"** The fleet only ever answers.
+- **fleet** is the record: which nodes exist, what each is assigned, how they group.
+- **supervisor** is the mechanism: starting and stopping services inside a running process.
 
-That is why one mechanism covers a laptop and a cluster: it never had to know how a process comes to
-exist, so it does not care that Kubernetes does it differently from a terminal.
+A record with no mechanism is a control surface over nothing — which is exactly what happened.
+`node.assign` failed with *"Local tool not found: supervisor.service_status"* because the node
+registered every service directly, so the supervisor owned none of them and there was nothing to
+switch. **Assignment had been a form you could fill in that changed nothing.**
 
-**The fleet client is the single entrypoint.** One binary everywhere. Locally you start one node and
-it is assigned everything — a cluster can be one process. In a cluster you start twenty and each is
-assigned a slice. Same command, same image, and **no service has its own `main.ts`**.
+## 2. Telemetry belongs here
 
-That last point is the whole of it. The predecessor had at least seven ways to start a node —
-`mesh start --services`, `mesh supervise -c`, a role wrapper binary, four manifest generators, a
-hand-curated `role-services.json`, and a bespoke `MeshApp` construction in every product repository.
-All of it existed because *what runs where* was baked into build artifacts instead of being an input.
+`telem` was a ninth domain. It calls nothing but itself and one call into `cdn` — the only
+wrong-direction edge in the whole graph.
 
-## 2. Assignment is the gate, not the join — **Decided**
+**Metrics are about machines.** What a node is running, how hard, whether it is failing. That is the
+same subject as the rest of this document, and the only reason telemetry was separate is that it was
+written separately.
 
-A node joins the mesh first. That is cheap — a namespace and a transport — and then it asks.
+The current implementation is also the clearest example in the repository of what these specs exist
+to prevent:
 
-**A node with no assignment sits there running nothing.** That is a state you can query and explain,
-which is better than a node half-admitted to a network. It also means an ad-hoc node — someone on a
-laptop — joins correctly and idles, which is right, but it must *say so*: `joined as node-a7f3, no
-assignment` rather than silence, or the first person to see it will think it is broken.
+```ts
+const app = (broker as unknown as { app?: { getProvider(name: string): { db?: Db; getDb?(): Db } } }).app;
+const dbProvider = app?.getProvider?.('database');
+const db = dbProvider?.db ?? dbProvider?.getDb?.();
+if (db && this.sink instanceof CompositeSink) { … }
+} catch {
+    // Database provider may not be available in standalone tests
+}
+```
 
-## 3. The fleet does both jobs — **Decided**
+`getProvider` is **on the broker**, typed, and `onStart` is handed the broker. This casts past it to
+reach an invented `.app`, guesses twice at whether the result spells it `db` or `getDb()`, and
+swallows every failure — so when it does not work, telemetry silently writes nowhere and nothing
+says so. The comment admits the reason: it was written to stop a test complaining.
 
-**What a package is.** `@flybyme/surfdns-domains` exists at 2.1.0, exporting these contracts with
-these schemas. Read by a build to verify a site's `mesh[]`, and by a generator for types.
+Every rule in `spec/README.md` is broken in six lines. It is worth keeping here as the example.
 
-**Where it runs.** Which nodes have it mounted, at which version, and whether it is actually up.
+## 3. What must be true
 
-The first is *declared*, the second splits into *desired* and *observed* — a record says a node should
-run these modules; the node reports what it actually mounted, **including mount failures**. A
-desired-state system whose observed side is optimistic is worthless.
+- **A node that cannot be reached is a node in an unknown state, not a node that is down.** Those
+  are different and the difference matters when deciding whether to reassign its work.
+- **The things that must never be switchable are the ones you need in order to switch anything:**
+  the fleet itself, identity, and the api. A node that can be switched off from outside and not back
+  on is a node somebody drives to a datacentre for.
+- **Assignment is a desired state, not a command.** Reconciliation is what makes it true, and the
+  gap between desired and observed is the thing an operator needs to see.
+- **Fleet reads are gated at `operator`, including the reads.** A gate looser than its handler is a
+  promise the platform will not keep.
+- **Nothing here is on the serving path.** A page must render on a node that cannot reach the fleet
+  record at all.
 
-## 4. Fleet depends on nothing else here — **Decided, and it must be enforced**
+## 4. Independence, concretely
 
-It is the recovery path, so it has to work when nothing else does. If fleet needed the cdn, then a
-broken cdn would mean you cannot fix the cdn.
+Fleet may read identity, because everything resolves a caller. It must not be read *by* serving or
+building. If a release ever needs to know which node it is on, that is a fact passed to it, not a
+lookup it performs — otherwise the serving path acquires a dependency on a record that exists to
+describe machines.
 
-Nothing in `src/fleet/` may import from another service in this repository.
+If fleet is ever lifted into its own package, the test of whether these specs were right is whether
+anything in serving breaks. Today the answer is one call — `cdn` reaches `node` — and that call is
+the one to look at first.
 
-## 5. Genesis is the one static exception — **Decided**
+## 5. Open
 
-Node 1 cannot ask the fleet what to run when the fleet is what it is being asked to run. So exactly
-one node, once, is told statically — a file.
-
-It must stay an exception that names itself. If a file is also the ordinary path for local
-development, it will drift from the record-driven path and the two will disagree at the worst moment.
-Local development reads its assignment from a local fleet, not from a file.
-
-## 6. Three things to decide before the contract is written
-
-Each has a silent failure, which is why they are worth deciding rather than discovering.
-
-**Two nodes claiming one name.** If assignments are keyed by name and a `singleton` control loop is
-assigned to it, two processes both mount it and you have split-brain with no error anywhere. The fleet
-should refuse the second claim while the first is live.
-
-**Whether a node reports what it *can* run.** If every node runs the same image, it need not. The
-moment images differ, the fleet can assign something a node cannot load — and you find out as a mount
-failure at runtime rather than a refusal at assignment time.
-
-**Predefined versus generated names.** A provisioned node arrives with a name the fleet already
-expects and an assignment waiting. An ad-hoc node generates one the fleet has never seen and correctly
-gets nothing. Both are right; only the second is surprising.
-
-## 7. What this replaces, and what stays
-
-The framework's supervisor is already most of a reconciler: dynamic mount and unmount through
-`registerModule` / `unregisterModule`, `dependsOn` with a topological sort and cycle detection, honest
-partial-failure status, and `supervisor.*` as real contracts.
-
-**The gap is one line**: its manifest is read once, at startup, so nothing can tell it the desired
-state changed. That is why its control surface had to be imperative — commands rather than
-declarations.
-
-Two things follow that belong in the first implementation rather than after the first outage:
-
-- **The node caches the last assignment it successfully read**, and starts from that cache when the
-  fleet is unreachable — running the last known good composition and *reporting that it is doing so*,
-  rather than running nothing. Today a node that cannot reach the mesh still knows what to run,
-  because the manifest is on disk. Afterwards it knows nothing.
-- **A local control channel stops being optional.** It is the only way into a node that cannot reach
-  the mesh, and a fleet of them is exactly the scenario it exists for.
-
-## 8. Not in scope here
-
-**Placement.** The fleet reacts to nodes that exist; it does not decide how many there should be or
-where they land. If that is ever wanted, it is a different subsystem and probably a different
-repository — and it will need an answer for what happens when two things both have opinions about
-placement.
+- **What a telemetry sink writes to, decided once and injected**, rather than discovered through a
+  cast at start.
+- **Whether provisioning belongs here.** Creating a machine is a different act from recording that
+  one exists, and it is the part that touches a cloud provider.
+- **Whether approval belongs anywhere in mesh-serve.** It is self-contained, calls nothing, and
+  looks like an application that ended up inside the platform. It gates destructive agent calls,
+  which is a real need and not obviously this package's.
