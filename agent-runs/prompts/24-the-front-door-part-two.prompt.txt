@@ -1,0 +1,130 @@
+The front door, part two. Four defects found in ordinary use on 2026-09-11,
+after dispatch 23 was already running — so they are written down here rather than
+added to a prompt that had been read. **Do not start this until 23 has merged**:
+it touches the same three files.
+
+All four were measured. The commands and their real output are below.
+
+--------------------------------------------------------------------------------
+1 — THE RECOVERY MESSAGE NAMES A FLAG THAT DOES NOT EXIST
+
+    $ npx mesh-serve login
+    A node is running, and no site serves console.localhost:8080.
+
+    Seed one:
+
+      mesh-serve seed --org-slug <slug> --org-name "<name>" \
+        --host console.localhost \
+        --api http://console.localhost:5005 \
+        --app-repo <a git url or bare repo> --parts <part>
+
+`src/cli/descriptor.ts:135`. **`--app-repo` appears exactly once in this
+repository: in the message that tells you to type it.** `bring-up.ts` reads
+`--repo`. And `bring-up.ts` ignores unknown flags — its own comment says an
+unknown flag being ignored *"is the shape to be angry about"* — so following this
+instruction runs a seed with **no repositories at all**.
+
+The same four lines are wrong twice more:
+
+- **`--api` is not how you name the node.** `--control` is. `--api` is the URL the
+  served page will call. Passing `--api` where `--control` was meant signs in
+  against the default `http://127.0.0.1:5005` and reports *"Those credentials are
+  not valid"* while the node you meant is running in front of you.
+- **`--password` is missing**, and `seed` cannot run without it.
+
+A recovery instruction that cannot be followed is worse than no instruction: it
+spends the reader's trust before it spends their time. **Test this one.** A test
+that runs the suggested command shape against the flags `bring-up.ts` actually
+reads would have caught all three, and it is the only kind of test that can.
+
+--------------------------------------------------------------------------------
+2 — THE PLATFORM EXPLAINS ITSELF PERFECTLY AND THE CLI THROWS IT AWAY
+
+This is the best defect of the four, because the hard half is already right.
+
+    $ npx mesh-serve whoami
+    http://127.0.0.1:5005/_describe answered 403.
+
+What the server actually sent, verified with curl against the same node and the
+same stored ticket:
+
+    {"error":"PROVISIONAL_ACCOUNT",
+     "message":"This account was created on first boot and can do nothing until its
+                password is set. Set one, and it becomes an ordinary account."}
+
+`src/cli/descriptor.ts:116`:
+
+    if (!response.ok) throw new CliError(`${url} answered ${String(response.status)}.`);
+
+**The body is discarded and the status code is printed.** Every refusal this
+platform is careful about — `PROVISIONAL_ACCOUNT`, and every gate refusal with it
+— arrives at the person who needs it as three digits.
+
+It is worse than generic here, because the CLI *already has the way out*:
+`set-password` is a built-in command in `run.ts`, written for exactly this account
+and with a comment explaining that a provisional caller's descriptor is nearly
+empty by design. The one command that would fix the situation is unreachable
+because the message that would name it was dropped.
+
+Fix `fetchDescriptor` to read the body and render `error` and `message` when they
+are there. Then check the rest of the CLI for the same shape — a refusal is a
+sentence the server wrote, and no layer should be replacing it with a number.
+
+Worth confirming while you are here: the provisional gate refuses **ahead of every
+level including `public`** (`api/methods/gate.ts:263`), which is deliberate and
+documented. So `_describe` answers 200 with no ticket, 200 with a *garbage*
+ticket, and 403 with a real provisional one. That is defensible and surprising in
+equal measure — being signed in as the account the platform just made for you is
+the only state in which the public endpoint refuses. Decide whether `_describe`
+should be exempt, and write the argument either way; if it stays, the message is
+all the more important.
+
+--------------------------------------------------------------------------------
+3 — ONE SITE, TWO ENTRIES IN THE CREDENTIAL STORE
+
+`~/.mesh-serve/credentials.json` holds both:
+
+    http://127.0.0.1:5005      ticket issued 2026-09-11T20:08
+    127.0.0.1:5005             ticket issued 2026-09-10T19:49
+
+`--host http://127.0.0.1:5005` and `--host 127.0.0.1:5005` are the same site and
+key two different records, each with its own ticket. So signing in through one
+form leaves the other stale, `logout` forgets one of them, and which ticket a
+command uses depends on how the host was typed that time.
+
+Normalise the host before it is used as a key, in one place, and migrate or
+discard the duplicates already on disk. `spec/cli.md` says the CLI follows the
+page's own api URL, so scheme-or-not is a shape it will keep meeting.
+
+--------------------------------------------------------------------------------
+4 — `login` SUCCEEDS AND LOOKS LIKE IT DID NOT
+
+From the same session:
+
+    $ npx mesh-serve login --host http://127.0.0.1:5005
+    email: operator@node.invalid
+    password: $
+
+The shell prompt returns on the password line and nothing else is printed.
+`run.ts` does print `Signed in to … as …` and `Ticket stored in …`, and the ticket
+**was** written — the credential file shows it, issued at that minute. So the
+output exists and did not survive the hidden-password prompt, which turns off
+`rl.output.write` and restores raw mode around the read.
+
+A sign-in whose confirmation is eaten is a sign-in the person has to verify by
+running something else. Find out what swallows it — the suppressed `output.write`
+not being restored is the first suspect — and test it by driving the entry point
+with a scripted stdin rather than by calling `login` directly.
+
+--------------------------------------------------------------------------------
+DONE MEANS
+
+- The seed instruction in `descriptor.ts` names only flags `bring-up.ts` reads,
+  and a test enforces that correspondence.
+- A refusal body's `error` and `message` reach the terminal, with a test using
+  `PROVISIONAL_ACCOUNT` as the case.
+- One host spelling, one credential record, with the existing duplicates handled.
+- `login` prints its confirmation, proved by a test that captures stdout.
+- `spec/roadmap.md` carries the `_describe`-versus-provisional decision.
+- `npm test` green and not smaller than when you started.
+- No `Co-Authored-By` or `Claude-Session` trailers.
