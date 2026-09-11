@@ -68,16 +68,30 @@ first is a collection, not a place.
 ### Two roots
 
 ```
-identity.user.*        identity.org.*       identity.membership.*
-identity.role.*        identity.grant.*     identity.ticket.*
+identity.user.*       identity.org.*        identity.membership.*
+identity.role.*       identity.grant.*      identity.ticket.*
 
-platform.serve.site.*  platform.serve.release.*   platform.serve.edge.*
-platform.build.part.*  platform.build.version.*   platform.build.repository.*
-platform.fleet.node.*  platform.fleet.group.*     platform.fleet.telem.*
+serve.site.*          serve.release.*       serve.edge.*
+serve.repository.*    serve.part.*          serve.version.*
+serve.node.*          serve.group.*         serve.telem.*
 ```
 
 Everything a tenant's application declares lives outside both: `flowboard.card.create`,
 `flowboard.worktree.dispatch`.
+
+**`serve`, not `platform`, because `platform` is taken.** It is an organization slug on every
+cluster this has run on — the one the first operator belongs to. A permission root and an
+organization name that are the same word will be confused in conversation before they are confused
+in code, and a namespace should not need a disambiguating sentence.
+
+**Uniform depth: `root.noun.action`.** The four areas in [README.md](./README.md) are how the code is
+organised, not a fact about permissions — nobody grants *"everything in building"*, they grant
+everything about parts, or about repositories. Adding an area segment would make `serve.build.part.*`
+and `serve.fleet.node.*` four deep while `serve.site.*` stays three, and inconsistent depth makes
+every wildcard a question about where the boundary fell.
+
+If a grouping wildcard is genuinely wanted later — `serve.build.**` — it can be added as a segment
+then. It cannot easily be removed once roles are written against it.
 
 **The first thing this buys is deleting a list.** `ceilingFor` — the rule that stops a seed granting
 the platform's own contracts to a tenant — is currently a hand-maintained set of 23 domain names,
@@ -99,7 +113,7 @@ two prefixes, and a new contract is covered by construction.
 platform* from *deciding who may operate it*:
 
 ```
-platform.**     deploy anything, build anything, run anything
+serve.**        deploy anything, build anything, run anything
 identity.**     create accounts, write roles, grant permissions
 ```
 
@@ -109,8 +123,8 @@ already holds. Two roots make *"can do everything"* and *"can authorise everythi
 answers, and an operator normally wants the first.
 
 That is a rename of every contract, mechanical and large. It is the price of wildcards meaning
-anything, and the naming is better independently of permissions: `platform.build.part.create` says
-where a part comes from and `part.create` does not.
+anything, and the naming is better independently of permissions: `serve.part.create` says whose
+part it is and `part.create` does not.
 
 ## 4. Roles compose
 
@@ -126,19 +140,22 @@ build.repository.part          inherits both
 organization role cannot inherit a cluster role — that is the rule that keeps an operator from
 becoming an owner of every tenant by accident, now that both are the same mechanism.
 
-## 5. The one thing that breaks, and the rule that fixes it
-
-Collapsing levels into permissions removes a protection that was load-bearing.
+## 5. Why the last level can go too
 
 Today a grant-writing contract is gated by a **level**, never by a permission, for a specific
 reason: *a caller who could be granted the right to write grants could grant themselves anything.*
 The coarse level existed to break that circle.
 
-If everything is a permission, `identity.grant.create` is grantable and the circle closes.
+So `identity.grant.create` looks like the one permission that cannot safely be a permission. It is
+not — **the level was only ever needed because a grant could create authority out of nothing.**
 
-**The rule that replaces it: you may only grant what you already hold.** A grant is a transfer, not
-a creation. Holding `identity.grant.create` lets you give away a subset of your own permissions and
-nothing else, so no chain of grants ever produces a permission that was not already in the system.
+**A grant is a transfer, not a creation. You may only grant what you already hold.** With that, a
+caller holding `identity.grant.create` can give away a subset of their own permissions and nothing
+else, so no chain of grants ever produces a permission that was not already in the system. The
+circle cannot close, and the level has nothing left to protect.
+
+Which means it is an ordinary role like any other — `identity.grant.writer`, held by whoever should
+be handing out access — and there is no special case left anywhere in the model.
 
 Three things follow:
 

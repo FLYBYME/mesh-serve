@@ -80,7 +80,8 @@ These are not style. Each one is here because breaking it cost a day or more, an
   decision somebody writes down.
 - **Name the reader, or do not add the field.** A field nothing reads is a promise nothing keeps,
   and this repository has produced that shape more than any other.
-- **A prefix, not a list.** Two roots — `identity.*` and `platform.*` — with a tenant's own contracts
-  outside both. Every rule about *the platform's own* becomes a prefix test, and the 23-name
-  `PLATFORM_DOMAINS` set that had to be kept in step with reality goes away. See
+- **A prefix, not a list.** Two roots — `identity.*` and `serve.*` — with a tenant's own contracts
+  outside both. Every rule about *this platform's own* becomes a prefix test, and the 23-name
+  `PLATFORM_DOMAINS` set that had to be kept in step with reality goes away. Not `platform.*`:
+  that word is an organization slug on every cluster this has run on. See
   [identity.md](./identity.md) §3.
