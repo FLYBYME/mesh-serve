@@ -153,7 +153,12 @@ describe('seeding installs the grants, and does it once', () => {
 
     const recorder = (existing: readonly { roleKey: string; contract: string }[] = []) => {
         const created: { roleKey: string; contract: string }[] = [];
+        const roles: string[] = [];
         const call = async (tool: string, params: unknown): Promise<unknown> => {
+            if (tool === 'identity.role_upsert') {
+                roles.push((params as { key: string }).key);
+                return { key: (params as { key: string }).key, created: true };
+            }
             if (tool === 'grant.find') return existing;
             if (tool === 'grant.create') {
                 created.push(params as { roleKey: string; contract: string });
@@ -161,7 +166,7 @@ describe('seeding installs the grants, and does it once', () => {
             }
             throw new Error(`unexpected call: ${tool}`);
         };
-        return { created, call };
+        return { created, roles, call };
     };
 
     it('creates a grant per role and contract inside the ceiling', async () => {
@@ -203,6 +208,25 @@ describe('seeding installs the grants, and does it once', () => {
 
         expect(added).toBe(1);
         expect(created).toEqual([{ roleKey: 'owner', contract: 'card.update' }]);
+    });
+
+    /**
+     * **A grant on a role nobody defined is inert, and inert in the way that reads as policy.**
+     *
+     * `permits` skips a held key it cannot resolve — deliberately, so deleting a role does not take
+     * every membership naming it out of service. So a grant for `planner` with no `planner` row
+     * refuses the caller and says nothing about why. That is F32 exactly, and the first version of
+     * this function repeated it: it installed grants for the declared roles and created none of them.
+     */
+    it('creates the role before granting to it, and never redefines `owner`', async () => {
+        const { roles, call } = recorder();
+
+        await installGrants(call, undefined, exposed, { planner: ['card.find'], worker: ['card.update'] });
+
+        expect(roles).toEqual(['planner', 'worker']);
+        // `owner` ships with identity (F32). A part redefining it would be changing a role the
+        // platform assigns.
+        expect(roles).not.toContain('owner');
     });
 
     it('asks identity nothing when there is nothing it may grant', async () => {

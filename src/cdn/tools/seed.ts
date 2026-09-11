@@ -396,6 +396,36 @@ export async function installGrants(
     const wanted = grantsToInstall(exposed, declaredRoles);
     if (wanted.length === 0) return 0;
 
+    /**
+     * **The role has to exist before anything is granted to it.**
+     *
+     * `permits` resolves a held key against the deployment's role table and **skips one it cannot
+     * find** — deliberately, so that deleting a role does not take every membership naming it out of
+     * service. The cost of that leniency is that a grant on a role nobody defined is inert, and inert
+     * in the way that reads as policy: the caller is refused and nothing says why.
+     *
+     * This is exactly F32, which was `owner` being written as a membership's `roleKey` by seven call
+     * sites with no row behind it — and the first version of this function repeated it, installing
+     * grants for `planner` and `worker` and creating neither. Found by writing F30's stage 3 note
+     * about it rather than by anything failing, because nothing fails: it just does not work.
+     *
+     * Organization-scoped, like `owner`: a role a tenant's application declares is a fact about that
+     * organization, never standing across the deployment. `role_upsert` refuses an inheritance edge
+     * that cycles or crosses scope; these declare none.
+     */
+    for (const roleKey of [...new Set(wanted.map((g) => g.roleKey))].sort()) {
+        // `owner` ships with identity (F32) and is not a part's to redefine.
+        if (roleKey === 'owner') continue;
+        await call('identity.role_upsert', {
+            key: roleKey,
+            name: roleKey.charAt(0).toUpperCase() + roleKey.slice(1),
+            scope: 'organization',
+            description: `Declared by a part composed onto this site.`,
+            builtin: false,
+            inherits: [],
+        }, as);
+    }
+
     const existing = await call('grant.find', { query: {} }, as) as
         readonly { roleKey?: string; contract?: string }[] | undefined;
     const have = new Set((existing ?? []).map((g) => `${g.roleKey ?? ''} ${g.contract ?? ''}`));

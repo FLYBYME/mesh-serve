@@ -76,17 +76,30 @@ describe('grantsFor', () => {
     });
 
     /**
-     * An agent role is by definition held by somebody who is not an operator, so a write a role
-     * names is lowered to `user` — otherwise the role map is decorative. It never goes below what
-     * `gateFor` decided, so a `public` stays public and nothing is loosened past a read.
+     * **The agent-role lowering now applies only to this repository's own domains.**
+     *
+     * It exists because *"a gate the role holder cannot pass makes the role map decorative"* — an
+     * agent role is by definition held by somebody who is not an operator. That argument still
+     * holds for a platform contract a role names. It is answered better for a foreign one: a
+     * permission says *who*, where the lowering only says *somebody signed in*, and seeding now
+     * installs the grant and the role to carry it.
      */
-    it('lowers an operator guess to user for a contract a role names, and no further', () => {
+    it('answers a foreign contract with a permission whether or not a role names it', () => {
         const { contracts } = grantsFor(['card.create', 'card.find'], { planner: ['card.create', 'card.find'] });
         const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
 
-        expect(gate['card.create']).toBe('user');
-        expect(gate['card.find']).toBe('user');
+        expect(gate['card.create']).toBe('permission:card.create');
+        expect(gate['card.find']).toBe('permission:card.find');
+        // Unchanged, and it must be: a page nobody can sign in to cannot use anything it was granted,
+        // and holding a grant requires the session you do not have yet.
         expect(gate['identity.register']).toBe('public');
+    });
+
+    it('still lowers an operator guess to user for a platform contract a role names', () => {
+        const { contracts } = grantsFor(['builder.release_repo'], { worker: ['builder.release_repo'] });
+        const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
+
+        expect(gate['builder.release_repo']).toBe('user');
     });
 
     /**
@@ -102,8 +115,7 @@ describe('grantsFor', () => {
         const { contracts } = grantsFor(['card.create', 'card.update'], { planner: ['card.create'] });
         const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
 
-        // Named by a role, so the branch above this one already lowered it.
-        expect(gate['card.create']).toBe('user');
+        expect(gate['card.create']).toBe('permission:card.create');
         expect(gate['card.update']).toBe('permission:card.update');
     });
 
@@ -119,16 +131,23 @@ describe('grantsFor', () => {
         expect(gate['builder.release_repo']).toBe('operator');
     });
 
-    it('leaves a read alone, because only the fall-through moves', () => {
-        // Reads become permissions too eventually; that is a larger change and is on F30. Smuggling
-        // it in here would mean this commit changed who can read as well as who can write.
-        const { contracts } = grantsFor(['card.find', 'card.get', 'project.git_info']);
+    /**
+     * **A foreign read is a permission too, for the reason the read rule states about itself.**
+     *
+     * `gateFor`'s read line carries its own warning — *"safe only where the collection declares
+     * `scopedBy` … this line is therefore slightly ahead of the platform"*. It answered `user` to any
+     * signed-in caller and leaned entirely on the collection to confine the rows: one mechanism doing
+     * the work of two, on a line that says so.
+     */
+    it('answers a foreign read with a permission, and a platform read with user', () => {
+        const { contracts } = grantsFor(['card.find', 'card.get', 'project.git_info', 'site.find']);
         const gate = Object.fromEntries(contracts.map((c) => [c.key, 'auth' in c ? c.auth : `permission:${c.permission}`]));
 
-        expect(gate['card.find']).toBe('user');
-        expect(gate['card.get']).toBe('user');
-        // Not a read by the suffix rule, so it falls through — and it is flowboard's domain.
+        expect(gate['card.find']).toBe('permission:card.find');
+        expect(gate['card.get']).toBe('permission:card.get');
         expect(gate['project.git_info']).toBe('permission:project.git_info');
+        // This repository's own: a console keeps working unchanged.
+        expect(gate['site.find']).toBe('user');
     });
 
     /** A collection streams at exactly its own `find`'s gate — looser would push rows to somebody

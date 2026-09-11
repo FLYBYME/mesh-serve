@@ -183,42 +183,54 @@ export function grantsFor(
     const named = new Set(Object.values(agentRoles ?? {}).flat());
     const contracts: GrantEntry[] = [...keys].sort().map((key) => {
         const gate = gateFor(key);
+
+        /**
+         * **A contract in a domain this repository does not define is answered by a grant.**
+         *
+         * `gateFor` decides a gate from the key and nothing else, so it can only recognise names
+         * defined *here* — a hosted application's contracts match none of its rules, by
+         * construction. `public` is the one exception and stays one: the calls a signed-out browser
+         * must make in order to sign in at all cannot be behind a grant, because holding a grant
+         * requires a session.
+         */
+        if (gate !== 'public' && !PLATFORM_DOMAINS.has(domainOf(key))) {
+            return { key, permission: key };
+        }
+
         // Never loosen below what `gateFor` decided: `public` stays public, and `user` is already
         // what this would set. Only an `operator`/`admin` guess on a role-named contract moves.
+        //
+        // Reached now only for **this repository's own** domains — a foreign contract was answered
+        // above, and a grant is a better answer than this lowering for the same reason: it says who,
+        // where the lowering only says *somebody signed in*.
         if (named.has(key) && (gate === 'operator' || gate === 'admin')) {
             return { key, auth: 'user' as const };
         }
 
         /**
-         * **F30 stage 3: a guess about a stranger's contract becomes a question about a grant.**
+         * **F30 stage 3, and why this is not a loosening.**
          *
          * `gateFor` ends in `return 'operator'` because a key it has not been taught about is one
-         * nobody has classified, and the strict answer is the safe one for a *guess*. That is right
-         * for this repository's own domains and wrong for a hosted application's, where it is
-         * applied to every contract the table has never heard of — which is all of them, by
-         * construction, since the table only knows names defined here.
+         * nobody has classified, and the strict answer is the safe one for a *guess*. Right for this
+         * repository's own domains; wrong applied to a hosted application's, where it lands on every
+         * contract — all of them, since the table only knows names defined here.
          *
-         * Measured on flowboard before this line existed: the account that **owns Flowboard Inc**
-         * could create a card and could not move it. `card.create` was `user` and `card.update` was
-         * `operator`, and the difference was not a decision — `card.create` happens to be named by
-         * an agent role map and `card.update` happens not to be. Whether a *person* could move a
-         * card depended on whether an unrelated *agent* part had been composed.
+         * There is nothing to guess, because **the permission name and the contract key are the same
+         * string**, and `permits` denies by default: a contract nobody granted is refused exactly as
+         * the old default refused it. What changes is *who* can be granted it.
          *
-         * There is nothing to guess, because **the permission name and the contract key are the
-         * same string.** `permits(roles, grants, 'card.update')` asks whether any role this caller
-         * holds carries a grant covering it; a contract nobody has granted is refused. That is
-         * `gateFor`'s instinct with the guesswork removed, and it fails closed the same way.
+         * Measured on flowboard before the writes moved: the account that **owns Flowboard Inc** could
+         * create a card and could not move it, because `card.create` is named by an agent role map and
+         * `card.update` is not. Whether a person could move a card depended on whether an unrelated
+         * *agent* part had been composed.
          *
-         * **Only the fall-through moves.** A `user` read stays a `user` read and a role-named
-         * contract stays where the branch above put it, so nothing that worked yesterday stops:
-         * this replaces the answer given to contracts that were refused to everyone but a platform
-         * operator, and to nothing else. Reads becoming permissions too is a larger change, wanted,
-         * and recorded on F30 rather than smuggled in here.
+         * The reads moved for the reason `gateFor`'s read line states about itself — *"safe **only**
+         * where the collection declares `scopedBy` … this line is therefore slightly ahead of the
+         * platform"*. It answered `user` to any signed-in caller and leaned entirely on the collection
+         * to confine the rows: one mechanism doing the work of two, on a line that says so. A
+         * permission does not replace `scopedBy`; it stops being the only thing between a signed-in
+         * stranger and a tenant's board.
          */
-        if (gate === 'operator' && !PLATFORM_DOMAINS.has(domainOf(key))) {
-            return { key, permission: key };
-        }
-
         return { key, auth: gate };
     });
 

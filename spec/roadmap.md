@@ -1564,9 +1564,15 @@ should not.
       **Stage 3 landed 2026-09-10**, closing F27 — see its entry for the measured before and after.
       What stays open:
 
-      - **Reads are still `auth: 'user'`.** Only the operator fall-through became a permission.
-        Making a read one too is right and is a bigger change: it would alter who can *read* a
-        board, and this commit deliberately changed only who can write. Wanted next.
+      - ~~**Reads are still `auth: 'user'`.**~~ **Done the same day.** Every contract in a foreign
+        domain is now answered by a grant, read or write, and the decision is made *before* the
+        agent-role lowering rather than after — so a role-named read and a role-named write get the
+        same answer instead of one of each. `public` is the one exception and stays one: the calls a
+        signed-out browser makes in order to sign in cannot be behind a grant, because holding a
+        grant requires the session you do not have yet. Measured on `flowboard.localhost`:
+        `GET /cards` answers **200** to the owner and **403** to a signed-in stranger, where before
+        the stranger reached the collection and was stopped only by having no scope to resolve.
+        `console.localhost` is unchanged — a platform read is still `user`.
       - **A role definition is global, and `owner` is one row.** So a grant on `owner` is a grant
         for every organization's owner. It is bounded twice — a contract is reachable only on a host
         whose site exposes it, and a `scopedBy` collection confines every row to the caller's own
@@ -1576,11 +1582,15 @@ should not.
         operator scoping into an organization they do not belong to, so the fixture is more than a
         probe. Whether role definitions should be per-organization is the real question underneath
         and it is unanswered.
-      - **`installGrants` creates grants for roles it never creates.** `owner` is a record since F32;
-        `planner` and `worker` are not, so their rows are inert — the same shape as F32, in the code
-        written the same day. Harmless while agent contracts stay at `user` (the agent-role branch
-        runs first), and a live bug the moment a role-named contract becomes a permission. Seeding
-        must upsert the role before granting to it.
+      - ~~**`installGrants` creates grants for roles it never creates.**~~ **Fixed before the reads
+        moved, because the reads are what would have made it bite.** `permits` skips a held key it
+        cannot resolve — deliberately, so deleting a role does not take every membership naming it
+        out of service — and the cost of that leniency is that a grant on an undefined role is
+        inert, refusing the caller with nothing to say why. `installGrants` now calls
+        `identity.role_upsert` for every role it is about to grant to, organization-scoped, skipping
+        `owner` because that ships with identity and is not a part's to redefine. Third instance of
+        F32's shape, this one in code written the same day and found by writing the note about it
+        rather than by anything failing — because nothing fails; it just does not work.
 
       **Stage 1 landed 2026-09-10**: `inherits` on `RoleSchema`, `expandInheritance`,
       `inheritanceProblem`, and `identity.role_upsert` to call them. Both rules are refused at write
