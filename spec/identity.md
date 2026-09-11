@@ -1,10 +1,13 @@
 # Identity
 
-**Who is calling, and in which organization.** Everything in [serving.md](./serving.md) resolves
-through these two questions, and every scoped collection is confined by the second answer.
+**Who is calling, and what they may do.** Everything in [serving.md](./serving.md) resolves through
+this, and every scoped collection is confined by it.
 
 Identity is the one domain in this repository that calls nothing but itself. That is worth keeping:
 it is a dependency of everything and depends on nothing, so it can be reasoned about alone.
+
+**Status: being redesigned, 2026-09-11.** §3 onward is the new model and is not what the code does.
+§9 lists what has to be answered before it can be built.
 
 ## 1. The nouns
 
@@ -12,28 +15,147 @@ it is a dependency of everything and depends on nothing, so it can be reasoned a
 | --- | --- | --- |
 | **account** | a person or a machine that can hold a ticket | a member of anything by itself |
 | **organization** | who owns things: sites, repositories, parts | a group of permissions |
-| **membership** | an account's place in one organization, with a role | the account |
-| **role** | a named set of grants, and a row, not an enum | a level |
-| **grant** | one `(role, contract)` pair — this role may call this | a list on a role |
+| **membership** | an account's place in one organization, carrying roles | the account |
+| **role** | a named set of permissions, and a row | a level |
+| **permission** | a pattern matching contracts — `identity.user.find`, `build.part.*` | a contract |
 | **ticket** | a bearer credential, revocable, with an expiry | a session object |
 
-**A role is a row and a grant is a row**, because the interesting queries run the other way: *which
-roles can call this contract* is the question an operator actually asks, and an array on a role
-cannot answer it.
+## 2. There is one kind of standing, held in two places
 
-## 2. Scope is an organization, and it has one name
+**This is the change.** Today `operator` is checked outside the permission system: a coarse level,
+tested ahead of everything, that no role can express and no grant can produce. It is a second
+mechanism, and a second mechanism is a second set of bugs.
+
+An account holds permissions. A membership holds permissions. **Same mechanism, two places it can be
+attached:**
+
+```
+account ──── holds roles ──────────────► permissions that apply everywhere
+   │
+   └──── membership in org A ─ roles ──► permissions that apply in org A
+   └──── membership in org B ─ roles ──► permissions that apply in org B
+```
+
+So an operator is an ordinary account that happens to hold `identity.user.find` and
+`identity.user.create`, and the `user` role does not. Nothing about the *check* is special; only the
+grants differ.
+
+Two coarse states survive, and only because they are about the caller existing rather than about
+what they may do:
+
+- **public** — no caller at all. A browser fetching a page.
+- **authenticated** — some caller. Used only where the identity matters and the permission does not:
+  reading your own account, setting your own password, signing out.
+
+Everything else is a permission. `admin` and `operator` stop being levels and become roles somebody
+can read, edit and grant.
+
+## 3. Permissions are patterns over a contract hierarchy
+
+A permission names contracts by pattern:
+
+```
+identity.user.find          exactly one
+identity.user.*             every action on one collection
+build.part.**               everything at or below
+**                          everything — see §5
+```
+
+**This requires contract names to be a hierarchy, and today they are not.** There are 174 contracts
+across 23 flat, one-word domains: `part.find`, `user.create`, `site.seed`. Two segments, and the
+first is a collection, not a place.
+
+The hierarchy falls out of the four things in [README.md](./README.md):
+
+```
+serve.site.*        serve.release.*      serve.edge.*
+build.part.*        build.version.*      build.repository.*      build.artifact.*
+identity.user.*     identity.org.*       identity.membership.*   identity.role.*
+fleet.node.*        fleet.group.*        fleet.telem.*
+```
+
+That is a rename of every contract, which is mechanical and large. It is the price of wildcards
+meaning anything, and the naming is better independently of permissions: `build.part.create` says
+where a part comes from and `part.create` does not.
+
+## 4. Roles compose
+
+A role is a row holding patterns. Roles inherit, so common sets are named once:
+
+```
+build.repository.part.reader   build.part.find, build.part.get
+build.repository.part.writer   build.part.create, build.part.update
+build.repository.part          inherits both
+```
+
+**Inheritance is same-scope only and acyclic**, checked when written and honoured when read. An
+organization role cannot inherit a cluster role — that is the rule that keeps an operator from
+becoming an owner of every tenant by accident, now that both are the same mechanism.
+
+## 5. The one thing that breaks, and the rule that fixes it
+
+Collapsing levels into permissions removes a protection that was load-bearing.
+
+Today a grant-writing contract is gated by a **level**, never by a permission, for a specific
+reason: *a caller who could be granted the right to write grants could grant themselves anything.*
+The coarse level existed to break that circle.
+
+If everything is a permission, `identity.grant.create` is grantable and the circle closes.
+
+**The rule that replaces it: you may only grant what you already hold.** A grant is a transfer, not
+a creation. Holding `identity.grant.create` lets you give away a subset of your own permissions and
+nothing else, so no chain of grants ever produces a permission that was not already in the system.
+
+Three things follow:
+
+- **`**` exists only at the root**, held by the first account at first boot, and is the only place
+  authority enters. Everything else is descended from it.
+- **Revocation must cascade or be refused.** If A granted B a permission A no longer holds, B's grant
+  is no longer descended from anything. Decide which, and say so.
+- **The reverse query still has to work.** *Which roles can call this contract* is the question an
+  operator actually asks, and with patterns it is a match rather than an index lookup. At 174
+  contracts and a few dozen roles that is cheap, and it must stay answerable — it is why a grant is a
+  row rather than an array in the first place.
+
+## 6. What `login` answers
+
+> *"when i login with mesh-serve login i should get a complete list of endpoints that my account can
+> do. it should not be a list of things my account can do in an org."*
+
+So the answer is **per account, not per organization** — but an account in three organizations has
+three different answers, so the list has to carry where each entry applies:
+
+```
+identity.user.find                          everywhere
+build.part.create        in   Platform
+build.part.find          in   Platform, Flowboard Inc
+serve.site.seed          in   Platform
+```
+
+That is one list, sorted by what the account can do, with the scope as a column rather than as a
+separate question. A caller reads it and knows what to try.
+
+**This is a different question from what a site exposes**, and both filters remain:
+
+| | asks | narrows by |
+| --- | --- | --- |
+| the account's list | *what may I do anywhere* | permissions |
+| a site's description | *what does this hostname serve* | the release's declared calls, and the site's grants |
+
+A call succeeds only if both allow it. A site cannot grant a permission the account lacks, and an
+account cannot reach a contract the site does not serve. Removing either filter removes a reason
+multi-tenancy is safe.
+
+## 7. Scope
 
 The resolved scope is an **organization id**. Never a user id.
 
-It currently reaches a handler under two names — `tenant_id` and `organizationId` — set from the
-same value, because a scoped collection is narrowed by *its own* field name and two schemas
-disagreed: `site` declares `tenantId`, `membership` declares `organizationId`. Both spellings have
-to be present or one of those collections stops resolving.
+It currently reaches a handler under two names, `tenant_id` and `organizationId`, set from the same
+value, because a scoped collection is narrowed by *its own* field name and two schemas disagreed:
+`site` declares `tenantId`, `membership` declares `organizationId`. **One value, two names, to paper
+over a naming disagreement.** Picking one is a migration, not a decision, and it is open.
 
-**That is one value written twice to paper over a naming disagreement, and it should be one name.**
-Picking it is a migration, not a decision, and it is open.
-
-## 3. How a scope is resolved
+How it is resolved:
 
 ```
 ticket ──► account ──► memberships ──► one organization
@@ -42,77 +164,42 @@ ticket ──► account ──► memberships ──► one organization
                    checked against the memberships
 ```
 
-- **One membership**: that is the scope. Nothing to choose.
-- **Several**: the site's own organization decides, if the caller is a member of it. A request on
+- **One membership**: that is the scope.
+- **Several**: the site's own organization decides, if the caller is a member. A request on
   `flowboard.localhost` means Flowboard Inc, because that is whose site it is.
 - **An explicit selection** — a header, a verified path segment — chooses among the caller's
-  memberships and is checked against them. It narrows and cannot add.
-- **None that match**: no scope. Every scoped read then refuses, and *that is correct*. A caller
-  outside every organization is not a caller with an empty result set.
+  memberships and is checked against them. It narrows; it cannot add.
+- **None that match**: no scope, and every scoped read refuses. A caller outside every organization
+  is not a caller with an empty result set.
 
-The mechanism matters as much as the rule: **the gate returns the scope**. A request never supplies
-one. This is the whole reason the gate returns a value rather than validating one the request
-carried.
+**The gate returns the scope. A request never supplies one.** This is why the gate returns a value
+rather than validating one the request carried.
 
-## 4. Two kinds of standing, enforced apart
+## 8. What must be true
 
-- **Cluster standing** is on the account: `operator`. It is a bootstrap-and-handover role — bring a
-  cluster up, seed a hostname, hand the organization over, step out.
-- **Organization standing** is on the membership: `owner`, and whatever else an application defines.
-
-**An operator is not automatically an owner of anything.** They are separate because the operator
-who builds a cluster is not the tenant who runs on it, and the day those two are one check is the
-day an operator can read every tenant's data by accident.
-
-A gate is a **floor, not a band**. `admin` does not satisfy an `operator` gate; they are separate
-checks. A gate that is looser than its handler is a promise the platform will not keep.
-
-## 5. Roles are data, and bounded twice
-
-Roles and grants are rows, so an application can define its own. Two bounds stop that becoming a way
-to grant yourself the platform:
-
-- **A seed may grant only what the site exposes.** You cannot grant a contract the site does not
-  serve.
-- **A seed may never grant a platform domain.** Identity, fleet, builder and the rest are off the
-  table regardless of what a release asks for.
-
-**Role inheritance is same-scope only, with no cycles**, checked when written and honoured when
-read. An organization role cannot inherit a cluster role; that is the rule that keeps §4 true.
-
-**A grant-writing contract is gated by a level, never by a grant.** A caller who could be granted
-the right to write grants could grant themselves anything. That circularity is what the coarse
-levels exist to break.
-
-## 6. What cannot be exposed, and why it matters here
-
-`user` carries a password hash. A generated find returns the row, and visibility is per action, so
-**no gate subtracts a field** — which is why every `user` action is internal and why nothing in this
-platform can turn a user id into a name.
-
-This is the platform's most-repeated gap. It is six instances deep: the console shows ids, members
-cannot be named, and *"who holds this role"* is unanswerable.
-
-The fix is a collection that can declare a field hidden and enforce it at the projection as well as
-the output, which is [collections.md](./collections.md). Until then, *a screen that quietly showed
-ids as though that were the design would delete the evidence*.
-
-## 7. What must be true
-
-- **A provisional account can do exactly one thing: set its own password.** Checked ahead of every
-  level including `public`, in one place, so no contract can forget to ask. A platform where nothing
-  works until you claim the account is one where it gets claimed in the first minute.
+- **A provisional account can do exactly one thing: set its own password.** Checked in one place so
+  no contract can forget. A platform where nothing works until you claim the account is one where it
+  gets claimed in the first minute.
 - **Changing a password ends other sessions.** A credential that outlives the reason it was changed
   is not a credential that was changed.
 - **A ticket is opaque and revocable.** Never a signed claim the server cannot withdraw.
-- **A password is never read from argv**, where it is visible in `ps` and lands in a shell history.
+- **A password is never read from argv**, where it is visible in `ps` and lands in shell history.
+- **A gate looser than its handler is a promise the platform will not keep.**
 
-## 8. Open
+## 9. Open, and these block the build
 
-- **One name for the scope** (§2).
-- **Field-level visibility** (§6), which unblocks showing a person's name anywhere.
-- **`transferOwnership` exists in the store and no contract calls it.** An operator can create the
-  account to hand an organization to and cannot finish the handover, which is the operator's actual
-  job.
-- **Changing your own email has no contract at all**, because `user.update` is internal and cannot
-  be exposed for the reason in §6.
+1. **The contract rename** (§3). 174 contracts, flat to hierarchical. Nothing else in this document
+   works without it.
+2. **Revocation semantics** (§5). Cascade, or refuse to revoke what has been re-granted.
+3. **Where `**` lives.** A root role that cannot be edited, or a flag on the first account, or
+   something else. It is the one place authority enters the system.
+4. **One name for the scope field** (§7).
+5. **Field-level visibility.** `user` carries a password hash, a generated find returns the row, and
+   no gate subtracts a field — so every `user` action is internal and nothing can turn a user id into
+   a name. Six instances deep: the console shows ids, members cannot be named, *who holds this role*
+   is unanswerable. The fix is in [collections.md](./collections.md), and §2's operator with
+   `identity.user.find` depends on it.
+6. **`transferOwnership` exists in the store and no contract calls it.** An operator can create the
+   account to hand an organization to and cannot finish the handover, which is the operator's actual
+   job.
+7. **Changing your own email has no contract**, for the reason in (5).
