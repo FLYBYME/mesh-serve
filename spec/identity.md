@@ -65,17 +65,51 @@ build.part.**               everything at or below
 across 23 flat, one-word domains: `part.find`, `user.create`, `site.seed`. Two segments, and the
 first is a collection, not a place.
 
-The hierarchy falls out of the four things in [README.md](./README.md):
+### Two roots
 
 ```
-serve.site.*        serve.release.*      serve.edge.*
-build.part.*        build.version.*      build.repository.*      build.artifact.*
-identity.user.*     identity.org.*       identity.membership.*   identity.role.*
-fleet.node.*        fleet.group.*        fleet.telem.*
+identity.user.*        identity.org.*       identity.membership.*
+identity.role.*        identity.grant.*     identity.ticket.*
+
+platform.serve.site.*  platform.serve.release.*   platform.serve.edge.*
+platform.build.part.*  platform.build.version.*   platform.build.repository.*
+platform.fleet.node.*  platform.fleet.group.*     platform.fleet.telem.*
 ```
 
-That is a rename of every contract, which is mechanical and large. It is the price of wildcards
-meaning anything, and the naming is better independently of permissions: `build.part.create` says
+Everything a tenant's application declares lives outside both: `flowboard.card.create`,
+`flowboard.worktree.dispatch`.
+
+**The first thing this buys is deleting a list.** `ceilingFor` — the rule that stops a seed granting
+the platform's own contracts to a tenant — is currently a hand-maintained set of 23 domain names,
+and it exists *only* because there was no prefix to test:
+
+```ts
+export const PLATFORM_DOMAINS: ReadonlySet<string> = new Set([
+    'api', 'apiToken', 'approval', 'artifact', 'build', 'builder', 'catalog', 'cdn', 'edge',
+    'grant', 'group', 'identity', 'membership', 'node', 'organization', 'part', 'partVersion',
+    'release', 'role', 'site', 'telem', 'ticket', 'user',
+]);
+```
+
+Add a domain, forget the set, and a tenant can grant themselves a platform contract. A list that
+must be kept in step with reality is the shape every spec here exists to remove. With roots it is
+two prefixes, and a new contract is covered by construction.
+
+**The second thing is the reason there are two roots and not one.** They separate *operating the
+platform* from *deciding who may operate it*:
+
+```
+platform.**     deploy anything, build anything, run anything
+identity.**     create accounts, write roles, grant permissions
+```
+
+Under a single root those are the same permission, so anybody who can operate the cluster can also
+promote themselves — which quietly undoes §5, where a grant may only pass on what the granter
+already holds. Two roots make *"can do everything"* and *"can authorise everything"* different
+answers, and an operator normally wants the first.
+
+That is a rename of every contract, mechanical and large. It is the price of wildcards meaning
+anything, and the naming is better independently of permissions: `platform.build.part.create` says
 where a part comes from and `part.create` does not.
 
 ## 4. Roles compose
@@ -188,8 +222,8 @@ rather than validating one the request carried.
 
 ## 9. Open, and these block the build
 
-1. **The contract rename** (§3). 174 contracts, flat to hierarchical. Nothing else in this document
-   works without it.
+1. **The contract rename** (§3). 174 contracts, flat to two rooted hierarchies. Nothing else in this
+   document works without it, and it deletes `PLATFORM_DOMAINS`.
 2. **Revocation semantics** (§5). Cascade, or refuse to revoke what has been re-granted.
 3. **Where `**` lives.** A root role that cannot be edited, or a flag on the first account, or
    something else. It is the one place authority enters the system.
