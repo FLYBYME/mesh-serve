@@ -1,6 +1,6 @@
 # The CLI
 
-**Status.** Proposed, 2026-09-08. Nothing is built.
+**Status.** Proposed, 2026-09-08. Most of §1 is built.
 
 A terminal client for any site on this platform — not for this platform. Companion to
 [mcp.md](./mcp.md) and [exposure.md](./exposure.md).
@@ -23,6 +23,8 @@ subcommand is a second place a contract has to be added, and the second place is
 forgotten.
 
 > The commands are the contracts.
+
+*Note on parsing:* `commander` is used to parse the fixed, build-time subcommands (`node`, `seed`, `client`, `publish`, `dev`). It is explicitly not used for the dynamic half, because the site projection has no fixed list of subcommands (a site decides its exposure), and flattening the dynamic tree to make the parser tidy would undo the design.
 
 ## 2. It talks to a node; it is not one
 

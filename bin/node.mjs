@@ -231,46 +231,14 @@ app.use(new NetworkModule({
 }));
 app.use(new BrokerModule());
 
+try {
 await app.start();
 
-// After start, always: registerModule queues into pendingModules before it and that flush is
-// unawaited, so a module registered earlier may never be mounted.
-
-/**
- * **The fleet is always on, and the rest are switches.**
- *
- * This node registered every service directly, so the Supervisor owned nothing and
- * `supervisor.service_status` was not mounted anywhere. `node.assign` then failed with *"Local tool
- * not found: supervisor.service_status — no domain 'supervisor' is mounted"*, which is the fleet
- * correctly reporting that it has no mechanism to switch anything. Assignment was a control surface
- * over nothing.
- *
- * `fleet` stays direct because it is the thing that answers *what should I be running* — a node
- * that had to be told to run the service that receives its assignment could never receive one.
- * Same reason `identity` and `api` stay direct: without them nobody can authenticate to give the
- * order, and a node that can be switched off from the outside and not back on is a node somebody
- * drives to a datacentre for.
- *
- * Everything else goes into the Supervisor's manifest and can be started and stopped live.
- */
 await app.registerModule(new FleetService());
 
 const supervisor = new Supervisor(app, { services: [] }, repoRoot);
 await app.registerModule(new SupervisorService(supervisor));
 
-/**
- * The switchable set, built in code rather than read from a manifest file.
- *
- * A file would be a second place to keep the same list, and it would go stale the first time a
- * service moved — the paths are `dist/*` in this repository and this repository already knows them.
- * `node.provision` writes *new* entries at run time through `registerEntry`; these are the ones
- * that ship with the node.
- *
- * None of these takes a constructor argument it cannot default: the Supervisor does `new
- * ServiceClass()`, and `blobRoot`, the CDN port and the CDN URL all fall back to the environment.
- * They are exported here so a Supervisor-constructed instance lands on the same values this
- * process was started with.
- */
 process.env.MESH_BLOB_ROOT = blobRoot;
 process.env.CDN_PORT = String(cdnPort);
 process.env.CDN_URL = cdnUrl;
@@ -279,27 +247,11 @@ for (const [name, path] of [
     ['catalog', './dist/catalog/catalog.service.js'],
     ['builder', './dist/builder/builder.service.js'],
     ['cdn', './dist/cdn/cdn.service.js'],
-    /**
-     * Switchable like the rest, and that is the decision rather than an oversight.
-     *
-     * Telemetry is the one service whose absence must not break anything: a node that cannot record
-     * what happened still has to serve. Making it switchable says so — a deployment that does not
-     * want it assigns it nowhere and every other service carries on, because nothing calls into it
-     * synchronously. The cdn and api write through a sink that falls back to a process-local
-     * default when the service is not there.
-     */
     ['telem', './dist/telem/telem.service.js'],
 ]) {
     supervisor.registerEntry({ name, path, dependsOn: [] });
 }
 
-/**
- * What this node runs, asked rather than assumed.
- *
- * `node.hello` answers with the desired set, which is the whole point of the fleet: a node is dumb
- * and loads what it is told to load. **A node with no assignment yet starts everything**, because
- * the alternative is that adding the fleet silently turned every existing deployment off.
- */
 const assignment = await app.call('node.hello', { hostname: app.nodeID }).catch(() => null);
 const desired = assignment?.services ?? [];
 
@@ -311,34 +263,7 @@ for (const name of switchable) {
         process.stderr.write(`[node] could not start ${name}: ${String(error?.message ?? error)}\n`);
     });
 }
-/**
- * The `authorize` hook, without which **every scoped collection is unreachable over HTTP**.
- *
- * `api.service.ts` says it plainly: *"The usual cause is a site with no `authorize` hook. The coarse
- * gate cannot resolve a scope — only the site knows what an organization means to it."* The gate
- * resolves a caller's identity and stops there; the hook turns that caller into the **scope** the
- * request runs in, which becomes `meta.user.tenant_id` and confines every `scopedBy` collection.
- *
- * With no hook the resolved scope is always empty, so D3's `scopedBy` refuses every read and write —
- * `site.find` answered 401 for a correctly signed-in caller while `part.find` and `release.find`
- * answered 200, because those two are not scoped. Found by the first console to get past sign-in,
- * which is the third time that sentence has been written about this repository.
- *
- * **A caller-supplied organization is a request, never a grant.** The header names one; this hook
- * checks the caller is actually a member before honouring it, and refuses rather than falling back
- * to a different organization — silently acting in the wrong scope is the failure that matters.
- */
-/**
- * The rule is `resolveScope` and the hook is `membershipAuthorize`, both in
- * `src/api/methods/`, both tested. Two moves, for the same reason each time.
- *
- * F22 moved the *rule* out of the inline version that lived here: the case where a caller belongs
- * to several organizations had never been run, and the first cluster with two tenants found every
- * scoped read answering 401 for its operator. What stayed behind was the fetch — and it kept this
- * file the only place a scoped read could be reached from, so the integration test that would have
- * caught F22 could not be written without copying it. It is a library function now, and this line
- * is what the test runs too.
- */
+
 const { membershipAuthorize } = await import('../dist/api/methods/authorize.js');
 const authorize = membershipAuthorize((tool, params, options) => app.call(tool, params, options));
 
@@ -347,37 +272,9 @@ await app.registerModule(api);
 const database = app.getProvider('database');
 await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
 
-/**
- * Approvals: a call an agent asked to make, parked until a person decides (`spec/mcp.md` §7).
- *
- * Registered unconditionally rather than behind `--mcp`, because the *deciding* half is HTTP — a
- * person approves from a board or the CLI, on a node that may serve no agent surface at all. A node
- * without this still serves; `McpService` finds no `approval.check` to offer and falls back to
- * refusing destructive calls, which is what it did before any of this existed.
- */
 const { ApprovalService } = await import('../dist/approval/index.js');
 await app.registerModule(new ApprovalService());
 
-/**
- * **`--service <path>` — load a module this node did not ship with.**
- *
- * A site's contracts have to *exist in a process* before the api can serve them. `describeExposure`
- * builds a route from a contract's shape — its method, its path, its input schema — and reads those
- * from `globalContractRegistry`, which is populated at **import time** by whatever the process
- * loaded. So a site can grant twenty contracts and expose none of them, which is exactly what
- * happened:
- *
- *     [api] flowboard.localhost exposes 20 contract(s) nothing provides: card.create, card.find, …
- *
- * The platform's answer is `node.provision` + `node.assign`: the fleet clones a repository at a
- * pinned ref and the supervisor mounts it. That is right for a machine somebody else runs, and it
- * is ceremony — an allowlist, an operator role, a tag rather than a branch — for a laptop.
- *
- * **This is the development path and it is marked as one.** It takes a path, imports it, and mounts
- * the default export. No clone, no ref, no allowlist: it trusts the person who typed it, which is
- * the whole difference between this and provisioning, and the reason this must never be how a
- * deployed node gets its services.
- */
 const servicePaths = [];
 for (let i = 0; i < process.argv.length - 1; i += 1) {
     if (process.argv[i] === '--service') servicePaths.push(process.argv[i + 1]);
@@ -400,18 +297,6 @@ for (const servicePath of servicePaths) {
     process.stdout.write(`  service   ${servicePath} (development — provision it for real)\n`);
 }
 
-/**
- * **The agent surface, off unless a port is given.**
- *
- * `--mcp 5006` starts it; no flag starts nothing. Off by default because an MCP endpoint is a way
- * for something that is not a person to drive a site, and a node should not acquire one because it
- * was upgraded.
- *
- * It is handed the api's own `descriptorForHost` and `ticketCache` rather than resolving a site or
- * validating a ticket itself. That is the whole design: one exposure, two projections. If the MCP
- * computed its own view of what a site exposes, `visibility` would mean one thing over HTTP and
- * another to an agent, and the second copy is the one that goes wrong.
- */
 const mcpPort = flag('mcp', process.env.MESH_MCP_PORT ?? '');
 if (mcpPort !== '') {
     const { McpService } = await import('../dist/api/mcp.service.js');
@@ -425,18 +310,45 @@ if (mcpPort !== '') {
         },
     ));
 }
+} catch (error) {
+    if (error && error.code === 85) {
+        const match = /Index already exists with a different name: (.*)/.exec(error.message);
+        const indexName = match ? match[1] : 'unknown_index';
+        
+        let collectionName = 'unknown_collection';
+        try {
+            const { MongoClient } = await import('mongodb');
+            const client = new MongoClient(mongo, { serverSelectionTimeoutMS: 5000 });
+            await client.connect();
+            const cols = await client.db(dbName).collections();
+            for (const col of cols) {
+                const indexes = await col.indexes().catch(() => []);
+                if (indexes.some(idx => idx.name === indexName)) {
+                    collectionName = col.collectionName;
+                    break;
+                }
+            }
+            await client.close();
+        } catch (e) {
+            // ignore
+        }
 
-/**
- * **The password is not printed, and it was.**
- *
- * This banner wrote `mongo` verbatim. Against `mongodb://localhost:27017` that is harmless and it
- * is what every local run shows, so it survived. The first time this node was pointed at Atlas it
- * printed a live `mongodb+srv://user:password@…` into the systemd journal — on every boot, readable
- * by anything that can read journals, and shipped wherever logs get shipped.
- *
- * A banner exists to say *where am I pointed*, which the host and database name answer completely.
- * The credential was never part of the question.
- */
+        process.stderr.write(
+            `\nStartup failed: A legacy index exists that conflicts with the current schema.\n` +
+            `  Database:   ${dbName}\n` +
+            `  Collection: ${collectionName}\n` +
+            `  Index:      ${indexName}\n\n` +
+            `This is caused by an older version of mesh-serve that created an index with mongo's default name.\n` +
+            `To fix this, you must drop the old index so mesh-serve can create the named one.\n` +
+            `Run this in your mongo shell:\n` +
+            `  use ${dbName}\n` +
+            `  db.${collectionName}.dropIndex("${indexName}")\n\n`
+        );
+        process.exit(1);
+    }
+    throw error;
+}
+
 const safeMongo = safeUri(mongo);
 
 process.stdout.write(

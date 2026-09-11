@@ -30,51 +30,108 @@ const value = (flag, fallback) => {
  * direction for that dependency: the script points at the CLI rather than the CLI existing beside
  * the scripts.
  */
-if (command === 'node') {
-    // Argv is rewritten because node.mjs reads `process.argv` directly, and it should keep doing so:
-    // it is a program that happens to be reachable from here, not a function this file calls.
-    process.argv = [process.argv[0], process.argv[1], ...rest];
-    await import('./node.mjs');
-    /**
-     * No exit — the node runs until it is stopped, and **nothing after this may run**.
-     *
-     * This was three separate `if` statements, so a started node fell through to the last `else`,
-     * the site client ran with no `--host`, printed "Which site?" and called `process.exit`. The
-     * node had already announced itself, so the log said it was up and the process was gone: every
-     * later command failed with `Tool "identity.register" not found`, which describes a mesh
-     * discovery problem and not a dead process.
-     *
-     * One chain, so a branch that means *keep running* cannot be followed by one that means *exit*.
-     */
-} else if (command === 'seed') {
-    process.argv = [process.argv[0], process.argv[1], ...rest];
-    const { main } = await import('../dist/bring-up.js');
-    try {
-        await main();
-        process.exit(0);
-    } catch (error) {
-        process.stderr.write(`Bring-up failed: ${error instanceof Error ? error.message : String(error)}\n`);
-        process.exit(1);
-    }
-} else if (command === 'client') {
-    process.exit(await run(rest));
-} else if (command === 'publish') {
-    const { run_ } = await import('../dist/api/publish-cli.js');
-    process.exit(await run_(rest));
-} else if (command === 'dev') {
-    const root = process.cwd();
-    const descriptor = parseDescriptor(readFileSync(value('--descriptor', 'mesh.json'), 'utf8'));
+import { Command } from 'commander';
+const fixedCommands = ['node', 'seed', 'client', 'publish', 'dev'];
 
-    const { dir, files, warnings } = await writeDevPage(root, descriptor);
-    for (const warning of warnings) process.stderr.write(`note: ${warning}\n`);
-    process.stdout.write(`${String(files.length)} file(s) in ${dir}\n`);
+if (fixedCommands.includes(command)) {
+    const program = new Command(`mesh-serve ${command}`);
+    program.showHelpAfterError();
 
-    if (!rest.includes('--no-serve')) {
-        const url = await serveDev(dir, Number(value('--port', '8080')));
-        process.stdout.write(`\n  ${url}\n\nCtrl-C to stop.\n`);
-    } else {
-        process.exit(0);
+    if (command === 'node') {
+        program.description('run a node: all services, one process')
+            .option('--env <path>', 'path to .env file')
+            .option('--ws <port>', 'websocket port', '4001')
+            .option('--ws-host <host>', 'websocket host', '127.0.0.1')
+            .option('--cdn <port>', 'cdn port', '8080')
+            .option('--cdn-url <url>', 'cdn url')
+            .option('--api <port>', 'api port', '5005')
+            .option('--mongo <uri>', 'mongodb uri')
+            .option('--db <name>', 'database name', 'mesh-serve')
+            .option('--artifacts <path>', 'artifacts blob root')
+            .option('--bootstrap <nodes>', 'comma-separated bootstrap nodes')
+            .option('--id <id>', 'node ID')
+            .option('--mcp <port>', 'mcp port')
+            .option('--service <path>', 'load a module this node did not ship with', (v, p) => p.concat([v]), [])
+            .allowUnknownOption(false)
+            .action(async () => {
+                process.argv = [process.argv[0], process.argv[1], ...rest];
+                await import('./node.mjs');
+            });
+    } else if (command === 'seed') {
+        program.description('bring an empty cluster up to a hostname that answers')
+            .option('--email <email>', 'account email')
+            .option('--password <password>', 'account password')
+            .option('--set-password <password>', 'set a new password and claim a provisional account')
+            .option('--control <url>', 'the node you sign in to')
+            .option('--host <hostname>', 'the site hostname to seed')
+            .option('--repo <url>', 'git repository url or path', (v, p) => p.concat([v]), [])
+            .option('--parts <parts>', 'comma-separated list of parts')
+            .option('--org-slug <slug>', 'organization slug')
+            .option('--org-name <name>', 'organization name')
+            .option('--application <app>', 'application name')
+            .option('--title <title>', 'site title')
+            .option('--api <url>', 'the URL the served page will call')
+            .option('--policy <json>', 'site policy as JSON object')
+            .option('--ref <ref>', 'git ref to clone')
+            .option('--import-only', 'import repositories but do not compose')
+            .allowUnknownOption(false)
+            .action(async () => {
+                process.argv = [process.argv[0], process.argv[1], ...rest];
+                const { main } = await import('../dist/bring-up.js');
+                try {
+                    await main();
+                    process.exit(0);
+                } catch (error) {
+                    process.stderr.write(`Bring-up failed: ${error instanceof Error ? error.message : String(error)}\n`);
+                    process.exit(1);
+                }
+            });
+    } else if (command === 'client') {
+        program.description('generate a typed client from mesh.json')
+            .option('--descriptor <path>', 'path to descriptor')
+            .option('--out <path>', 'output path')
+            .option('--descriptor-out <path>', 'output descriptor path')
+            .allowUnknownOption(false)
+            .action(async () => {
+                process.exit(await run(rest));
+            });
+    } else if (command === 'publish') {
+        program.description('publish this checkout to a catalog')
+            .option('--bootstrap <nodes>', 'comma-separated bootstrap nodes')
+            .option('--token <token>', 'api token')
+            .option('--descriptor <path>', 'path to descriptor')
+            .option('--publisher <id>', 'publisher organization id')
+            .option('--repository <url>', 'repository url')
+            .option('--timeout <ms>', 'timeout in milliseconds')
+            .allowUnknownOption(false)
+            .action(async () => {
+                const { run_ } = await import('../dist/api/publish-cli.js');
+                process.exit(await run_(rest));
+            });
+    } else if (command === 'dev') {
+        program.description('serve this part on a dev page')
+            .option('--descriptor <path>', 'path to descriptor', 'mesh.json')
+            .option('--no-serve', 'do not serve the dev page')
+            .option('--port <port>', 'port to serve on', '8080')
+            .allowUnknownOption(false)
+            .action(async (opts) => {
+                const root = process.cwd();
+                const descriptor = parseDescriptor(readFileSync(opts.descriptor, 'utf8'));
+
+                const { dir, files, warnings } = await writeDevPage(root, descriptor);
+                for (const warning of warnings) process.stderr.write(`note: ${warning}\n`);
+                process.stdout.write(`${String(files.length)} file(s) in ${dir}\n`);
+
+                if (!opts.noServe) {
+                    const url = await serveDev(dir, Number(opts.port));
+                    process.stdout.write(`\n  ${url}\n\nCtrl-C to stop.\n`);
+                } else {
+                    process.exit(0);
+                }
+            });
     }
+
+    program.parse([process.argv[0], process.argv[1], ...rest]);
 } else {
     /**
      * **Everything else is the site's, not this file's.**

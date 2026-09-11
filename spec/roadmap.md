@@ -1896,3 +1896,6 @@ So, three habits, none of them optional:
    repositories.
 3. **The stands table carries the date it was last reconciled**, so a reader can tell stale from
    wrong.
+
+### F24: Legacy index code 85 migration
+When a cluster from an older version cannot start because an index (`email_1`) already exists under the default MongoDB name and conflicts with a named index (`uniq_user_email`), the boot aborts with `MongoServerError` code 85. We implemented a **refusal with instructions** rather than an automated migration behind a flag. Dropping an index in a production database is a destructive operation that temporarily drops read performance while the replacement index builds. The operator should review the database state and explicitly perform the drop themselves via the mongo shell. A framework-automated drop creates a period of degraded availability that the framework cannot correctly schedule or monitor, and doing it implicitly during startup is dangerous.

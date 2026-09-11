@@ -38,7 +38,19 @@ describe('mongoStore', () => {
         dbName = `mesh-serve-store-test-${String(Date.now())}`;
         client = new MongoClient(MONGO);
         await client.connect();
-        store = mongoStore(client.db(dbName));
+        
+        const db = client.db(dbName);
+        // The framework creates these indexes via defineCrud metadata.
+        // We manually create them here for the isolated store tests.
+        await db.collection('user').createIndex({ email: 1 }, { unique: true });
+        await db.collection('ticket').createIndex({ token: 1 }, { unique: true });
+        await db.collection('role').createIndex({ key: 1 }, { unique: true });
+        await db.collection('apiToken').createIndex({ tokenHash: 1 }, { unique: true });
+        await db.collection('organization').createIndex({ slug: 1 }, { unique: true });
+        await db.collection('membership').createIndex({ organizationId: 1, userId: 1 }, { unique: true });
+        await db.collection('grant').createIndex({ roleKey: 1, contract: 1 }, { unique: true });
+
+        store = mongoStore(db);
     });
 
     afterAll(async () => {
