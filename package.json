@@ -26,7 +26,8 @@
         "generate": "mesh generate",
         "build": "npm run generate && tsc -p tsconfig.json",
         "typecheck": "npm run generate && tsc -p tsconfig.check.json --noEmit",
-        "test": "npm run generate && vitest run",
+        "//test": "typecheck first, because vitest transpiles without typechecking -- so the suite could be green while the compiler was not, and was, for six errors across two files. See roadmap F31.",
+        "test": "npm run typecheck && vitest run",
         "test:watch": "vitest",
         "node": "node bin/mesh-serve.mjs node --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-dev",
         "seed": "node bin/mesh-serve.mjs seed"
