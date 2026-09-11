@@ -26,17 +26,19 @@ Not nine. The nine were domain folders, which is a filing decision, not a design
 
 | | what it answers | made of |
 | --- | --- | --- |
-| **[serving](./serving.md)** | a hostname resolves to a release, and who may call what | api, cdn, mcp |
+| **[serving](./serving.md)** | a connection resolves to a site, and who may call what | an open set of protocol projections |
 | **[building](./building.md)** | how a release comes to exist | catalog, builder |
 | **[identity](./identity.md)** | who is calling, and in which organization | identity |
 | **[fleet](./fleet.md)** | which machines run what | fleet, supervisor, telemetry |
 
 Two facts about that table matter more than the table.
 
-**Serving is one surface with three projections, not three services.** `api`, `cdn` and `mcp` answer
-the same question to a browser, an HTTP client and an agent. They do not each decide what is
-callable; they read one description and serve what is there. See [serving.md](./serving.md), which is
-the spec to read first.
+**Serving is one decision reached over many protocols, not a service per protocol.** `cdn`, `api` and
+`mcp` answer the same four questions for a browser, an HTTP client and an agent; `git-http`, `smtp`,
+`imap` and `ftp` will answer them for their own callers. **The set is open.** None of them decides
+what is callable — each reads one description and serves what it can express. See
+[serving.md](./serving.md), which is the spec to read first, and which is written so that adding the
+fourth protocol does not mean rewriting it.
 
 **Fleet is independent.** It answers *which machines run what*, and nothing in serving or building
 needs to know. Telemetry belongs inside it: metrics are about machines, and the only reason
@@ -58,7 +60,7 @@ neglect.
 
 ## Reading order
 
-1. [serving.md](./serving.md) — the one surface and its three projections. Everything else refers to it.
+1. [serving.md](./serving.md) — the four questions, and the protocols that answer them. Everything else refers to it.
 2. [identity.md](./identity.md) — who is calling, and what a scope is.
 3. [collections.md](./collections.md) — how a collection is defined, and why not with `defineCrud` alone.
 4. [building.md](./building.md) — repositories, parts, releases.

@@ -1,96 +1,134 @@
 # Serving
 
-**One surface. Three projections. No third opinion about what is callable.**
+**One decision, reached over many protocols.**
 
-A hostname resolves to a release. A release declares what it calls. A caller is answered only if the
-site exposes that contract and the caller's standing satisfies its gate. `api`, `cdn` and `mcp` are
-three ways of reaching that one decision, for three kinds of caller.
+A connection arrives. Something has to answer four questions before anything else happens:
 
-## 1. The projections
+1. **Which site?** — this address, this hostname, this port.
+2. **Which account?** — this credential, or none.
+3. **Which organization?** — resolved from the account's memberships.
+4. **May this caller call this contract here?** — the site's exposure, then the account's permissions.
 
-| projection | caller | shape |
+A **projection** is a protocol adapter that answers those four in that protocol's own terms and then
+gets out of the way. `cdn`, `api` and `mcp` are the first three. `git-http`, `imap`, `smtp` and `ftp`
+are coming. **The set is open, and this document is written for that** — a spec that says "three"
+will be wrong by the time anyone reads it.
+
+## 1. What a projection is
+
+| projection | caller | carries |
 | --- | --- | --- |
 | **cdn** | a browser | a page, its kernel, its parts, its import map |
 | **api** | an HTTP client, a CLI, a part in a page | routes with schemas |
 | **mcp** | an agent | tools with schemas |
+| **git-http** | a git client | refs and packfiles |
+| **smtp** | a sending mail server | a message for delivery |
+| **imap** | a mail client | folders and messages |
+| **ftp** | a file client | a directory tree |
 
-**None of them decides what is callable.** Each reads the site's description — the hostname's
-release, its exposed contracts, their gates — and serves what is there. So a contract added to a
-site appears as a route, a tool and a client method with nobody editing a table.
+**No projection decides what is callable.** Each reads the site's description — the hostname's
+release, its exposed contracts, their permissions — and serves what is there. A contract added to a
+site appears in every projection that can express it, with nobody editing a table.
 
 > The commands are the contracts.
 
-This was already half-true before these specs: the api and mcp already derive. It is written down
-here because the half that did not derive is where every defect came from. A hand-maintained list of
-what is callable is a second place to add a contract, and the second place is the one that gets
-forgotten.
+## 2. What every projection must do
 
-### The consequence worth stating
+These are the invariants. A projection that cannot satisfy one of them is not ready to be added.
 
-**A site is narrower than a cluster.** The node knows every contract it has mounted. A site exposes
-the subset its release declares it calls, bounded by what its grants allow. So two sites on one node
-answer different sets, and neither can reach what the other exposes by asking nicely.
+- **Resolve a site before anything else.** A connection that cannot be attributed to a site is
+  refused, not served by a default. §4.
+- **Resolve an account from the protocol's own credential**, and turn it into the same caller
+  everything else uses. §5.
+- **Never widen the exposure.** A projection serves a subset of what the site exposes. It may serve
+  less — a protocol that cannot express a contract simply does not offer it — and never more.
+- **Never resolve its own scope.** The scope comes from the gate, from memberships. A projection
+  that computes one has invented a second authorization system.
+- **Pass a refusal through whole.** A refusal carries a code and a sentence. Both reach the caller,
+  translated into the protocol's own failure shape but never replaced by it. *A status code with the
+  reason thrown away is the single most common way this platform has wasted somebody's afternoon.*
+- **Say what it cannot express.** If a site exposes something this protocol has no shape for, that is
+  a fact about the projection, recorded, not a silent omission.
 
-That is not a convenience. It is the only reason it is safe to run two tenants on one process.
+## 3. What varies, and it is more than it looks
 
-## 2. Everything scopes through identity
+The first three projections are all request/response, JSON-shaped, and carry a `Host` header and a
+bearer token. **Nothing about that generalises**, and assuming it did is the mistake this section
+exists to prevent.
 
-Every projection asks identity the same two questions, in this order, and neither is optional:
+| | cdn / api / mcp | git-http | smtp | imap / ftp |
+| --- | --- | --- | --- | --- |
+| shape | request/response | request/response | one-way delivery | stateful session |
+| payload | JSON | packfile | a message | streams |
+| site from | `Host` header | `Host` header | recipient domain, or SNI | SNI, or login, or port |
+| credential | bearer ticket | basic auth, or a token | `AUTH`, or none at all | `LOGIN` |
+| caller may be absent | yes, and must work | yes, for a public repo | **yes, and that is normal** | no |
 
-1. **Who is calling?** A ticket resolves to an account, or there is no caller.
-2. **In which organization?** The gate resolves a scope from the caller's **memberships**.
+Two of those rows are worth stating as their own problem.
 
-The answer to (2) becomes the meta that confines every scoped collection. A collection declares the
-field it is narrowed by, and a find is always within the caller's resolved scope. So *"never expose
-an unbounded find"* stops being a discipline and becomes something a contract enforces.
+## 4. Which site — the `Host` header is not general
 
-**A scope is never taken from the request.** Not from a header that is trusted, not from a path
-segment, not from a body field. The gate returns it and the request may only *claim* one:
+**Multi-tenancy on one process rests on being able to attribute a connection to a site**, and only
+the HTTP family carries a hostname in the request. SMTP, IMAP and FTP do not. So resolution is a
+chain, and a projection declares which link it uses:
 
-- **A hostname implies an organization.** Every request arrives on a host, and that host's site
-  belongs to an organization. If the caller is a member of it, that is what they meant.
-- **A header selects among the caller's own memberships**, and is checked against them. It narrows;
-  it cannot add.
-- **A path segment naming an organization is an assertion to verify**, and a mismatch is a refusal.
-  It is worth having because a URL that names the organization is one you can paste, log and reason
-  about. It is never an input.
+1. **A hostname in the protocol** — `Host`, for the HTTP family.
+2. **TLS SNI** — the client names the host during the handshake. This is the general answer for any
+   TLS-wrapped protocol, and it is why these protocols should be TLS-only.
+3. **An address's domain** — `someone@flowboard.localhost` tells SMTP which site a message is for.
+4. **A dedicated port or address** — the fallback. Honest, and it does not scale past a few sites,
+   so a projection that can only do this says so.
 
-Where a route, a query and a body all carry the same field, **the route wins**, because the route
-value is the one that was checked. A body that disagrees with a verified route is an error, not a
-value to silently discard.
+**A connection that resolves to no site is refused.** There is no default site, because a default
+site is one tenant silently receiving another's traffic.
 
-See [identity.md](./identity.md) for what a scope is made of, and [collections.md](./collections.md)
-for how a collection declares that it has one.
+## 5. Which account — every protocol has its own ceremony
 
-## 3. Why cdn and api are one thing
+`api` takes a bearer ticket. IMAP has `LOGIN`. SMTP has `AUTH`, or nothing. Git has basic auth or a
+token in a URL. None of these is the others.
 
-They were two folders and one job. `api` calls `cdn`; `cdn` calls everything `api` does and more.
-Both answer *"this hostname, this release, this caller, this contract"* — one for a document request
-and one for a call. The split produced two places that resolve `Host` → site and two opinions about
-what a site is.
+**Each projection turns its protocol's credential into a ticket, and from there everything is the
+same.** The ceremony is the adapter's; the caller is identity's. A projection must never carry its
+own notion of who somebody is, or there will be as many session models as there are ports.
 
-`mcp` is the same resolution again for an agent, and it already derives from the same description,
-which is the proof the shape works.
+**SMTP is the one that breaks the shape**, and it is worth saying now rather than discovering it:
+inbound mail is *unauthenticated by design*. Anyone may deliver to you. So a projection may have a
+site and no account at all, permanently, and the contracts it can reach must be ones that make sense
+for an anonymous caller. That is the same requirement as a browser fetching a page, which is
+reassuring — it means the rule already exists.
 
-## 4. What must be true
+## 6. One description, many renderings
 
-- **A contract reachable on a site is reachable in all three projections**, or the reason is written
-  down. A tool an agent can call and an HTTP client cannot is a surface that drifted.
-- **One description, one hash.** If a site's exposure changes, every projection changes with it and
-  a client can tell by comparing a hash rather than by diffing a list.
-- **A refusal is an answer, not an error.** It carries a code and a sentence, and every layer passes
-  both through. A projection that replaces a refusal with a status code has thrown away the only
-  part the caller can act on.
-- **Anonymous is a real caller.** A browser fetching a page has no ticket, and the serving path must
-  work for it. A collection that cannot be read without a scope cannot be on the serving path.
+A site has one exposure and one hash. Each projection renders it in its own terms: routes with
+schemas, tools with schemas, refs, folders. **A client can tell whether anything changed by
+comparing the hash rather than diffing a list.**
 
-## 5. Open
+Where a contract has no shape in a protocol, it does not appear there, and *which* contracts a
+projection can express is part of that projection's own description. So the answer to *"why can an
+agent call this and my mail client cannot"* is a fact somebody can look up.
 
-- **Bootstrap.** A cluster with no sites cannot be reached, so the node serves one site for itself.
-  Today that lives in `cdn/methods/control.ts` and reaches into five other domains, which is what
-  makes serving look like it depends on everything. Where it belongs is undecided.
+## 7. A site is narrower than a cluster
+
+The node knows every contract it has mounted. A site exposes the subset its release declares it
+calls, bounded by its grants. Two sites on one node answer different sets, and neither reaches the
+other's by asking.
+
+That is not a convenience. **It is the only reason it is safe to run two tenants in one process**,
+and it is the property every new projection has to preserve. A projection that serves from the
+node's mounted set rather than the site's exposed set has removed it.
+
+## 8. Open
+
+- **Where bootstrap lives.** A cluster with no sites cannot be reached: resolution is host → site, so
+  on a fresh node there is no route to sign in, so no site can be created. The previous answer was
+  the node serving one site for itself on `127.0.0.1`, in 414 lines that reached into five other
+  domains — which is why serving appeared to depend on everything. It needs a home chosen on
+  purpose.
+- **Whether a projection is a part.** If protocols are an open set, adding one should not mean
+  editing this package. A projection has a shape — resolve, authenticate, express, refuse — and that
+  shape is a contract somebody could implement outside.
+- **Ports and listeners as records.** Each projection needs an address to listen on, and those are
+  facts about a node. That is [fleet.md](./fleet.md)'s territory and the seam is not drawn yet.
 - **Whether `_describe` is exempt from the provisional refusal.** A provisional account is refused
-  ahead of every level including `public`, deliberately. So the description of a site is readable
-  with no ticket and with a garbage ticket, and refused with a real provisional one — being signed in
-  as the account the platform just created for you is the only state where the public endpoint
-  refuses. Defensible, surprising, and not yet decided.
+  ahead of every check, deliberately — so a site's description is readable with no credential and
+  refused with a real provisional one. Defensible, surprising, undecided.
