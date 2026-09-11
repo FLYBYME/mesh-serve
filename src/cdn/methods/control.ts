@@ -193,15 +193,7 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'node.provision', auth: 'operator' },
 ];
 
-/**
- * One narrow structural retype, not `any`.
- *
- * `broker.call<K extends keyof IServiceToolRegistry>` cannot accept a name chosen at run time.
- * `ApiService`, `McpService` and `ApprovalService` all have this shape and all solve it this way.
- */
-type Call = (tool: string, params: unknown, options?: unknown) => Promise<unknown>;
-const callable = (broker: IServiceBroker): Call =>
-    (broker as unknown as { call: Call }).call.bind(broker);
+
 
 /**
  * Long enough for identity to register on the same node, short enough that a cdn dedicated to
@@ -238,7 +230,7 @@ async function reachable(broker: IServiceBroker, waitMs: number, stopped: () => 
      * A find that answers `null` is a fine answer — it means identity is there and the organization
      * is not, which is exactly the state a first boot is in.
      */
-    const call = callable(broker);
+
     const deadline = Date.now() + waitMs;
 
     for (;;) {
@@ -256,7 +248,7 @@ async function reachable(broker: IServiceBroker, waitMs: number, stopped: () => 
          * The account is the actual precondition — the platform organization needs an owner — so it
          * is what gets waited for.
          */
-        const owner = await call('user.find_one', { query: { roles: 'operator' } }, { timeout: 1_000 })
+        const owner = await broker.call('user.find_one', { query: { roles: 'operator' } }, { timeout: 1_000 })
             .then((row) => row as { id?: string } | null, () => null);
 
         if (owner?.id !== undefined) return true;
@@ -313,7 +305,7 @@ export async function ensureControlSite(
     );
     if (!waiting) return undefined;
 
-    const call = callable(broker);
+
 
     /**
      * The platform's own organization.
@@ -327,7 +319,7 @@ export async function ensureControlSite(
      * Membership matters only for `scopedBy` collections, and a caller who needs one will be told so
      * by the gate rather than quietly given it at boot.
      */
-    const found = await call('organization.find_one', { query: { slug: PLATFORM_SLUG } }) as
+    const found = await broker.call('organization.find_one', { query: { slug: PLATFORM_SLUG } }) as
         { id: string } | null | undefined;
 
     let organizationId = found?.id;
@@ -341,7 +333,7 @@ export async function ensureControlSite(
          * rather than assumed, and if there is somehow no operator this stops rather than inventing
          * one: a platform organization owned by nobody is exactly the state F8b exists to prevent.
          */
-        const owner = await call('user.find_one', { query: { roles: 'operator' } }) as
+        const owner = await broker.call('user.find_one', { query: { roles: 'operator' } }) as
             { id: string } | null | undefined;
 
         if (owner?.id === undefined) {
@@ -351,7 +343,7 @@ export async function ensureControlSite(
             );
         }
 
-        organizationId = (await call('organization.create', {
+        organizationId = (await broker.call('organization.create', {
             slug: PLATFORM_SLUG,
             name: 'Platform',
             ownerId: owner.id,
@@ -391,15 +383,15 @@ export async function ensureControlSite(
      */
     const inPlatformScope = { meta: { tenant_id: organizationId } };
 
-    const existing = await call('site.find_one', { query: { host: options.host } }, inPlatformScope) as
+    const existing = await broker.call('site.find_one', { query: { host: options.host } }, inPlatformScope) as
         { id: string } | null | undefined;
 
     if (existing?.id !== undefined) {
-        await call('site.update', { id: existing.id, mesh, api: options.api }, inPlatformScope);
+        await broker.call('site.update', { id: existing.id, mesh, api: options.api }, inPlatformScope);
         return { siteId: existing.id, organizationId, created: false, host: options.host };
     }
 
-    const created = await call('site.create', {
+    const created = await broker.call('site.create', {
         host: options.host,
         application: 'control',
         tenantId: organizationId,

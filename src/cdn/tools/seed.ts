@@ -1,8 +1,8 @@
 /**
- * `site.seed` — import, release, compose, grant, deploy. One authenticated call.
+ * `site.seed` — import, release, compose, grant, deploy. One authenticated ctx.call.
  *
  * The pipeline this replaces is `src/bring-up.ts`, which joined the mesh as a peer and asserted its
- * own operator identity (roadmap D6). Here every step is a contract call made *as the caller*, whose
+ * own operator identity (roadmap D6). Here every step is a contract ctx.call made *as the caller*, whose
  * standing the gate already checked.
  *
  * **Idempotent, and running it twice is how you find out that it is.** Imports declare or update,
@@ -10,7 +10,7 @@
  * and deploying a release a site already serves changes nothing.
  */
 
-import { ClientError, type IServiceContext, type z } from '@flybyme/mesh';
+import { ClientError, type ICallOptions, type IServiceContext, type z } from '@flybyme/mesh';
 
 import type { CdnService } from '../cdn.service.js';
 import type { seedContract } from '../contracts/seed.contract.js';
@@ -21,7 +21,7 @@ type Input = z.infer<typeof seedContract['inputSchema']>;
 type Output = z.infer<typeof seedContract['outputSchema']>;
 
 /**
- * How long a call that clones and bundles may take.
+ * How long a ctx.call that clones and bundles may take.
  *
  * The broker's default is ten seconds, which is right for a question and wrong for work: releasing
  * mesh-core is seven clones and seven bundles, and took 22 seconds on a warm machine. The failure
@@ -70,14 +70,14 @@ export async function site_seed(
      */
     const organizationId = await ensureOrganization(ctx, input, userId, meta.user?.tenant_id ?? meta.tenant_id);
     /**
-     * Every call below runs in the caller's organization.
+     * Every ctx.call below runs in the caller's organization.
      *
      * Both spellings of the scope, because a collection is narrowed by *its own* field name —
      * `site` declares `tenantId` and `membership` declares `organizationId`, and a meta carrying
      * only one of them is refused by the other. `bring-up.ts`'s `callerFor` set both for exactly
      * this reason.
      */
-    const as = {
+    const as: ICallOptions = {
         meta: {
             ...meta,
             organizationId,
@@ -180,9 +180,9 @@ export async function site_seed(
     // ------------------------------------------------------------------ compose
 
     /**
-     * **The kernel and the parts come from the catalog, not only from this call.**
+     * **The kernel and the parts come from the catalog, not only from this ctx.call.**
      *
-     * Seeding used to compose from exactly what the same call had just released, which assumes the
+     * Seeding used to compose from exactly what the same ctx.call had just released, which assumes the
      * caller publishes the whole world. True for the first tenant on a cluster and never for the
      * second: a part name is one global namespace, so a second organization naming the framework
      * repositories is refused *No such part* (they belong to `platform`), and naming only its own
@@ -251,7 +251,7 @@ export async function site_seed(
         ?? 'console';
 
     const composed = await ctx.call('cdn.compose', {
-        // A kernel released in this call is pinned to its own caret. A seed that released none — the
+        // A kernel released in this ctx.call is pinned to its own caret. A seed that released none — the
         // second tenant, composing against the platform's kernel — takes the newest the catalog has,
         // and every part's declared kernel range is still checked by compose.
         kernel: input.kernelRange ?? (kernelVersion === undefined ? '*' : rangeFor(kernelVersion)),
@@ -274,7 +274,7 @@ export async function site_seed(
      * **`requires` and the role map come from the release row, not from what compose returned.**
      *
      * `cdn.compose` answers with the hash, the pinned parts and any problems — the union of what the
-     * parts call is written *onto the row*, which is where a site's grants are derived from. Reading
+     * parts ctx.call is written *onto the row*, which is where a site's grants are derived from. Reading
      * it off the compose output instead is `TypeError: requires is not iterable`, which is a truthful
      * error about a field that was never there.
      */
@@ -315,7 +315,7 @@ export async function site_seed(
             );
         }
         /**
-         * **`policy` is written on a reseed only when this call names one.**
+         * **`policy` is written on a reseed only when this ctx.call names one.**
          *
          * Otherwise a reseed would quietly reset a site's kind to `windowed`, and re-running a seed
          * is the ordinary way to redeploy — `site.seed` is documented as idempotent. Silently
@@ -367,7 +367,7 @@ export async function site_seed(
  *
  * Three cases, in order: one named in the input (created if new), the caller's own resolved scope,
  * or nothing — and nothing is refused rather than guessed. An operator who belongs to two
- * organizations and names neither is asking this call to pick a tenant for a hostname, which is not
+ * organizations and names neither is asking this ctx.call to pick a tenant for a hostname, which is not
  * a decision a default should make.
  */
 /**
@@ -385,7 +385,7 @@ export async function site_seed(
  */
 export async function installGrants(
     ctx: IServiceContext,
-    as: unknown,
+    as: ICallOptions,
     exposed: readonly string[],
     declaredRoles: Readonly<Record<string, readonly string[]>>,
 ): Promise<number> {
@@ -400,7 +400,7 @@ export async function installGrants(
      * service. The cost of that leniency is that a grant on a role nobody defined is inert, and inert
      * in the way that reads as policy: the caller is refused and nothing says why.
      *
-     * This is exactly F32, which was `owner` being written as a membership's `roleKey` by seven call
+     * This is exactly F32, which was `owner` being written as a membership's `roleKey` by seven ctx.call
      * sites with no row behind it — and the first version of this function repeated it, installing
      * grants for `planner` and `worker` and creating neither. Found by writing F30's stage 3 note
      * about it rather than by anything failing, because nothing fails: it just does not work.

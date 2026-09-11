@@ -57,7 +57,7 @@ export async function nodesInGroup(
     ctx: IServiceContext,
     groupName: string,
 ): Promise<(NodeRecord & { id: string })[]> {
-    const all = await ctx.call('node.find', { query: {} }) as (NodeRecord & { id: string })[];
+    const all = await ctx.call('node.find', { query: {} });
     return (all ?? []).filter((n) => (n.groups ?? []).includes(groupName));
 }
 
@@ -74,14 +74,7 @@ export async function reconcileNode(
     groups: readonly GroupRecord[],
 ): Promise<ReconcileOutcome> {
     const services = resolveDesired(node, groups);
-    const broker = ctx.broker as unknown as {
-        nodeID: string;
-        call(tool: string, input: unknown, options?: { nodeID: string }): Promise<unknown>;
-        getProvider?<T>(name: string): T;
-        registry?: { getNodes(): RegistryNode[] };
-    };
-
-    const registry = broker.getProvider?.<{ getNodes(): RegistryNode[] }>('registry') ?? broker.registry;
+    const registry = ctx.broker.registry;
     const live = (registry?.getNodes?.() ?? []).find(
         (n) => (n.available ?? true) && n.hostname === node.hostname,
     );
@@ -91,10 +84,10 @@ export async function reconcileNode(
     // than by somebody remembering it was down.
     if (live === undefined) return { hostname: node.hostname, services, applied: false };
 
-    const target = live.nodeID === broker.nodeID ? undefined : { nodeID: live.nodeID };
+    const target = live.nodeID === ctx.broker.nodeID ? undefined : { nodeID: live.nodeID };
 
     try {
-        const status = await broker.call('supervisor.service_status', {}, target) as {
+        const status = await ctx.call('supervisor.service_status', {}, target) as {
             services?: { name: string; status: string }[];
         };
 
@@ -184,7 +177,7 @@ export async function reconcileGroup(
     const nodes = await nodesInGroup(ctx, groupName);
     if (nodes.length === 0) return [];
 
-    const allGroups = (await ctx.call('group.find', { query: {} }) as GroupRecord[]) ?? [];
+    const allGroups = await ctx.call('group.find', { query: {} }) ?? [];
     const outcomes: ReconcileOutcome[] = [];
 
     for (const node of nodes) {

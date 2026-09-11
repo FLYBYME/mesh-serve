@@ -172,7 +172,7 @@ describe('seeding installs the grants, and does it once', () => {
     it('creates a grant per role and contract inside the ceiling', async () => {
         const { created, call } = recorder();
 
-        const added = await installGrants(call, undefined, exposed, { planner: ['card.find'] });
+        const added = await installGrants({ call } as unknown as any, undefined, exposed, { planner: ['card.find'] });
 
         expect(added).toBe(3);
         expect(created).toEqual([
@@ -195,7 +195,7 @@ describe('seeding installs the grants, and does it once', () => {
             { roleKey: 'owner', contract: 'card.update' },
         ]);
 
-        const added = await installGrants(call, undefined, exposed, {});
+        const added = await installGrants({ call } as unknown as any, undefined, exposed, {});
 
         expect(added).toBe(0);
         expect(created).toEqual([]);
@@ -204,7 +204,7 @@ describe('seeding installs the grants, and does it once', () => {
     it('adds only what is new when a part starts declaring more', async () => {
         const { created, call } = recorder([{ roleKey: 'owner', contract: 'card.find' }]);
 
-        const added = await installGrants(call, undefined, exposed, {});
+        const added = await installGrants({ call } as unknown as any, undefined, exposed, {});
 
         expect(added).toBe(1);
         expect(created).toEqual([{ roleKey: 'owner', contract: 'card.update' }]);
@@ -221,7 +221,7 @@ describe('seeding installs the grants, and does it once', () => {
     it('creates the role before granting to it, and never redefines `owner`', async () => {
         const { roles, call } = recorder();
 
-        await installGrants(call, undefined, exposed, { planner: ['card.find'], worker: ['card.update'] });
+        await installGrants({ call } as unknown as any, undefined, exposed, { planner: ['card.find'], worker: ['card.update'] });
 
         expect(roles).toEqual(['planner', 'worker']);
         // `owner` ships with identity (F32). A part redefining it would be changing a role the
@@ -235,7 +235,7 @@ describe('seeding installs the grants, and does it once', () => {
         let asked = 0;
         const call = async (tool: string): Promise<unknown> => { asked += 1; return []; };
 
-        expect(await installGrants(call, undefined, ['identity.register', 'telem.ingest'], {})).toBe(0);
+        expect(await installGrants({ call } as unknown as any, undefined, ['identity.register', 'telem.ingest'], {})).toBe(0);
         expect(asked).toBe(0);
     });
 });

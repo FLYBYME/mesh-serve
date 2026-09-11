@@ -213,7 +213,7 @@ export async function cdn_compose(
  * unauthenticated compose is one somebody arranged to be unauthenticated.
  */
 function callerOf(ctx: IServiceContext): string {
-    const meta = ctx.meta as { user?: { tenant_id?: string }; tenant_id?: string } | undefined;
+    const meta = ctx.meta;
     const caller = meta?.user?.tenant_id ?? meta?.tenant_id;
 
     if (caller === undefined) {

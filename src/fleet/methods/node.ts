@@ -47,7 +47,7 @@ type ProvisionOutput = z.infer<typeof nodeProvisionContract['outputSchema']>;
  * trusted-caller exemption*. Being on the mesh is not an identity.
  */
 function requireOperator(ctx: IServiceContext, action: string): void {
-    const user = ctx.meta?.user as { roles?: readonly string[] } | undefined;
+    const user = ctx.meta?.user;
 
     if (user === undefined || user === null) {
         throw new ClientError(
@@ -72,9 +72,8 @@ interface MeshRegistryNode {
     addresses?: string[];
 }
 
-function getRegistryNodes(broker: unknown): MeshRegistryNode[] {
-    const b = broker as { getProvider?<T>(name: string): T; registry?: IServiceRegistry };
-    const registry = b.getProvider?.<IServiceRegistry>('registry') ?? b.registry;
+function getRegistryNodes(broker: IServiceBroker): MeshRegistryNode[] {
+    const registry = broker.registry;
     if (registry && typeof registry.getNodes === 'function') {
         return registry.getNodes() as MeshRegistryNode[];
     }
@@ -534,13 +533,9 @@ export async function node_provision(
 
     // If target is a remote node, forward the call over the broker to run on the target
     if (targetMeshNode.nodeID !== broker.nodeID) {
-        const remoteBroker = broker as unknown as {
-            call(tool: string, input: unknown, options?: { nodeID?: string; meta?: unknown }): Promise<ProvisionOutput>;
-        };
-        return await remoteBroker.call('node.provision', input, {
+        return await ctx.call('node.provision', input, {
             nodeID: targetMeshNode.nodeID,
-            meta: ctx.meta,
-        });
+        }) as ProvisionOutput;
     }
 
     // Running locally on the target node
@@ -569,11 +564,8 @@ export async function node_provision(
 
     if (isNoop) {
         // Register with Supervisor in case it was restarted
-        const localBroker = broker as unknown as {
-            call(tool: string, input: unknown): Promise<unknown>;
-        };
         try {
-            await localBroker.call('supervisor.service_register', {
+            await ctx.call('supervisor.service_register', {
                 name: input.name,
                 path: resolvedEntry,
                 dependsOn: input.dependsOn ?? [],
@@ -669,11 +661,8 @@ export async function node_provision(
     );
 
     // Register with Supervisor
-    const localBroker = broker as unknown as {
-        call(tool: string, input: unknown): Promise<unknown>;
-    };
     try {
-        await localBroker.call('supervisor.service_register', {
+        await ctx.call('supervisor.service_register', {
             name: input.name,
             path: resolvedEntry,
             dependsOn: input.dependsOn ?? [],
