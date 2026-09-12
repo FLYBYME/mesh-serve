@@ -1,160 +1,68 @@
 /**
- * Who a caller is, and which organization they are acting in.
+ * Accounts, organizations, and the membership that joins them.
  *
- * mesh-web spec/auth.md §4 and §6. Three shapes and one join, and the join is the whole model:
- *
- *     user ──< membership >── organization
- *                  │
- *                roleKey
- *
- * **One `organizationId` per record, no ACL array.** A resource belongs to exactly one organization
- * and membership decides who reaches it. An array of principals on every row is the design that
- * cannot answer "what can this person see" without scanning everything, and cannot revoke without
- * finding every row that names them.
+ * `spec/identity.md` §1. Three collections and nothing else in this file — roles and grants arrive
+ * with the contract rename (**C1**), and adding their rows before the names they refer to exist
+ * would be a schema written against a hierarchy that is not there yet.
  */
 
-import { z } from 'zod';
+import { z } from '@flybyme/mesh';
 
+/**
+ * A person or a machine that can hold a ticket.
+ *
+ * **`passwordHash` is the reason this whole collection is sealed today**, and the reason
+ * `spec/questions.md` **A1** exists: every action is internal because one field must never leave, so
+ * nothing on this platform can turn a user id into a name. When field-level visibility lands in
+ * `defineCrud`, this is the first row to use it.
+ */
 export const UserSchema = z.object({
-    email: z.string().email(),
-    displayName: z.string().min(1),
-    /**
-     * Absent for a user who only ever signs in with a passkey.
-     *
-     * Optional rather than a separate collection, because "has a password" is a fact about a person
-     * and not a different kind of person — and a passkey-only account is the direction, not the
-     * exception (auth §4).
-     */
+    email: z.string().email().describe('Unique across the deployment. What you sign in with'),
+    displayName: z.string().min(1).describe('What a person is shown'),
+
+    /** Optional: an account can exist before it has a credential. See `provisional`. */
     passwordHash: z.string().optional(),
+
     /**
-     * Cluster-scoped roles, held everywhere in this deployment.
+     * Created by the platform because a cluster with no accounts cannot be signed into.
      *
-     * Organization roles are *not* here — they live on the membership, because they are a fact
-     * about that pairing. Enforced on createUser and updateUser: an organization-scoped role key
-     * is refused (F3).
-     */
-    roles: z.array(z.string()).default([]),
-    /** A suspended principal fails validation regardless of any live ticket. */
-    suspendedAt: z.number().optional(),
-    suspendedReason: z.string().optional(),
-    /**
-     * **The account the platform made for itself on first boot, and it may do almost nothing.**
-     *
-     * A cluster with no accounts cannot be signed into, and every contract above `public` needs a
-     * session — so something has to create the first person. The alternatives were both worse than
-     * this: a well-known default password ships a platform pre-compromised, and a tool that can
-     * write a user without being one (which is what `bring-up` does today) is then the weakest thing
-     * in the system.
-     *
-     * So identity creates one account on first boot, prints its password to the node's own stdout
-     * exactly once, and marks it `provisional`. **A provisional caller is refused by the gate at
-     * every level above `public`** — not warned, refused. `identity.set_password` is the one thing
-     * it may do, and doing it clears the flag.
-     *
-     * "You should change this" does not survive a busy week. "Nothing works until you do" does.
+     * Refused everywhere except `identity.set_password`, which clears it. Without that carve-out the
+     * first boot produces a credential that can do nothing at all, including stop being provisional
+     * — `spec/serving.md` §6.
      */
     provisional: z.boolean().optional(),
+
+    /** Platform-wide roles. Roles held in one organization live on the membership. */
+    roles: z.array(z.string()).default([]),
+
+    suspendedAt: z.number().optional(),
+    suspendedReason: z.string().optional(),
 });
 
 export type User = z.infer<typeof UserSchema>;
 
+/** Who owns things: sites, repositories, parts. Not a group of permissions. */
 export const OrganizationSchema = z.object({
     slug: z.string().min(1).describe('Stable, and what a URL or a header names'),
     name: z.string().min(1),
-    /**
-     * Who can re-own it if the last owner leaves (surfdns #29, roadmap F8b).
-     *
-     * Recorded as a field rather than inferred from memberships so the answer is always
-     * available, including when there are no owners left — which is exactly the case that broke.
-     *
-     * Enforcement rules:
-     * 1. Removing the last owner's membership does not leave the organization unadministerable:
-     *    the user recorded in `ownerId` can always re-own it (`reownOrganization`), restoring
-     *    their owner membership. Non-owners are refused.
-     * 2. Transferring ownership (`transferOwnership`) is the *only* way `ownerId` changes, and
-     *    only the current owner may initiate it.
-     */
-    ownerId: z.string().min(1),
+    ownerId: z.string().min(1).describe('The account that owns it. Transferable, one day — E1'),
 });
 
 export type Organization = z.infer<typeof OrganizationSchema>;
 
 /**
- * A person's place in an organization.
+ * An account's place in one organization.
  *
- * The join, and the only thing that grants organization-scoped anything. A role named here must be
- * a role whose scope is `organization` — a cluster role on a membership would be a second way to
- * become an operator, which is the ambiguity #26 is about. Enforced on createMembership: cluster-scoped
- * roles are refused (F3).
+ * Scoped by `organizationId`, which is also the value the gate resolves and hands to every scoped
+ * read. That it is called `organizationId` here and `tenantId` on a site is **B2**, and picking one
+ * gets harder per collection written — so this one is written the way the answer will be.
  */
 export const MembershipSchema = z.object({
     userId: z.string().min(1),
     organizationId: z.string().min(1),
-    roleKey: z.string().min(1),
+    roleKey: z.string().min(1).describe('One role per membership, for now'),
     invitedBy: z.string().optional(),
     joinedAt: z.number(),
 });
 
 export type Membership = z.infer<typeof MembershipSchema>;
-
-/**
- * A long-lived credential a machine holds.
- *
- * Fine to hold *precisely because it is revocable* (auth §4) — which is the same reason tickets are
- * opaque. It resolves to a principal and a scope, so a token is never a way to be more than the
- * person who issued it.
- */
-export const ApiTokenSchema = z.object({
-    /** Shown once, at creation. Stored hashed: unlike a ticket, nobody needs to read this back. */
-    tokenHash: z.string().min(1),
-    name: z.string().min(1).describe('What it is for, so revoking the right one is possible'),
-    userId: z.string().min(1),
-    organizationId: z.string().optional(),
-    roles: z.array(z.string()).default([]),
-    createdAt: z.number(),
-    lastUsedAt: z.number().optional(),
-    expiresAt: z.number().optional(),
-    revokedAt: z.number().optional(),
-});
-
-export type ApiToken = z.infer<typeof ApiTokenSchema>;
-
-/**
- * Which organization is this caller acting in, and may they?
- *
- * The rules surfdns got right, kept: a caller in exactly one organization is unambiguous; a caller
- * in several **must name one**, because guessing on their behalf is how data is read from the wrong
- * place silently; and an organization that exists but is not theirs answers **not found**, because
- * "it exists, but not for you" is itself a disclosure.
- */
-export type ScopeResolution =
-    | { readonly ok: true; readonly organizationId: string; readonly roleKey: string }
-    | { readonly ok: false; readonly code: 'NO_ORGANIZATION' | 'SCOPE_REQUIRED' | 'NOT_FOUND'; readonly message: string };
-
-export function resolveScope(
-    memberships: readonly Membership[],
-    requested: string | undefined,
-): ScopeResolution {
-    if (memberships.length === 0) {
-        return { ok: false, code: 'NO_ORGANIZATION', message: 'You belong to no organization.' };
-    }
-
-    if (requested === undefined) {
-        if (memberships.length === 1) {
-            const only = memberships[0]!;
-            return { ok: true, organizationId: only.organizationId, roleKey: only.roleKey };
-        }
-        return {
-            ok: false,
-            code: 'SCOPE_REQUIRED',
-            message: `You belong to ${String(memberships.length)} organizations. Name one.`,
-        };
-    }
-
-    const chosen = memberships.find((m) => m.organizationId === requested);
-    if (chosen === undefined) {
-        return { ok: false, code: 'NOT_FOUND', message: 'No such organization.' };
-    }
-
-    return { ok: true, organizationId: chosen.organizationId, roleKey: chosen.roleKey };
-}

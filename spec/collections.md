@@ -70,6 +70,38 @@ defaults rather than about features.
 generated find on a scoped collection is always within the caller's resolved scope, in mesh's database
 middleware, below anything a handler can forget.
 
+**And it is narrower than it looks, which building this found on the first boot.** `scopedBy` is for
+collections that hang off a resolved scope, **never for the ones that produce it**. A request arrives,
+the gate reads the caller's memberships to decide which organization they are in, and a scoped
+`membership` refuses that read because no scope exists yet:
+
+```
+Scoped collection "membership" requires a resolved "organizationId" scope
+```
+
+The same goes for `site`, for the reason §2 already gives: resolving a hostname happens before there
+is a caller at all. So **membership is narrowed by a hook** to the caller's own rows — stricter than
+the scope would have been — and **site is a public collection with an owner field**. See **B2**.
+
+### A hook only runs on the module that owns the collection
+
+Attaching that hook is where the second surprise is, and it is the more dangerous one.
+
+```ts
+const module = broker.getModule(domain);          // DatabaseMiddleware, domain = the collection's
+if (module) params = await module.beforeCrud(…);
+getModule(domain) { return this.modules.find(m => m.domain === domain); }
+```
+
+**A service called `identity` that mounts the `membership` collection never receives a hook for it.**
+`mountCrudHook('membership', 'find', …)` registers happily, is never asked for, and the narrowing is
+dead code that looks alive.
+
+That is the worst available failure for a narrowing hook: one that throws is found in a minute, one
+that silently does not narrow returns **every row in the collection** and looks correct until there
+are two tenants. So **one module per collection, its `domain` matching** — which leaves a service
+owning only its verbs, and that is the honest split anyway.
+
 **`unique` must declare its scope on a scoped collection, and `defineCrud` throws if it does not:**
 
 > Collection "site" is scoped by "tenantId". Unique key "host" must explicitly declare

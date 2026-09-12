@@ -1,404 +1,417 @@
 /**
- * **The CLI: a site's exposure, as subcommands.**
+ * The CLI.
  *
- * ```
- * mesh-serve --host <site> <domain> <action> [--flags]
- * ```
- *
- * The command tree is a **function of the host**. `mesh-serve` does not know what surfdns is and must
- * not — it knows how to read a descriptor, so the same binary gives a different command tree for
- * every site, none of them written down anywhere. A site exposing `domain.create` has a
- * `domain create` command *because it exposes it*, and a caller whose gate refuses it does not see
- * the command at all.
- *
- * That is what makes one client serve every project on the platform, and what makes a dedicated
- * client — surfdns's own `surf`, say — a layer over this rather than a reimplementation beside it.
- *
- * See `spec/cli.md`.
+ * `spec/cli.md`. Three commands are about the terminal — `login`, `logout`, `whoami` — and
+ * everything else is **a contract, reached by name**, with its flags taken from the contract's own
+ * input schema. A hand-written command is a second declaration of something already declared, and it
+ * drifts: `src/cli` existed in the deleted tree and the shipped CLI did not use it.
  */
 
-import { describeInput, flagFor, missingRequired, parseArgs, type Schema } from './args.js';
-import { callContract, fetchDescriptor, originOf, CliError, type Call, type Descriptor } from './descriptor.js';
-import { credentialsPath, currentHost, emailFor, forgetTicket, saveTicket, ticketFor } from './credentials.js';
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
 
-export interface Io {
-    out(line: string): void;
-    err(line: string): void;
-    /** Asked for, never taken from argv: a password in argv is in `ps` and in a history file. */
-    prompt(question: string, hidden: boolean): Promise<string>;
+import { call, Refused, type ClientOptions } from './client.js';
+import { forgetTicket, saveTicket, ticketFor } from './credentials.js';
+
+export interface Argv {
+    readonly command: string;
+    readonly rest: readonly string[];
+    readonly flags: Readonly<Record<string, string | boolean>>;
 }
 
 /**
- * Run one invocation. Returns the process exit code rather than calling `process.exit`, so this is
- * testable without a subprocess.
- */
-export async function run(argv: readonly string[], io: Io): Promise<number> {
-    // `--host` wins, then the host `login` remembered. Explicit beats remembered, always.
-    const host = valueOf(argv, '--host') ?? currentHost();
-    /**
-     * `--in-organization <id>` — which of your organizations a call acts in. Sent as `x-organization`.
-     *
-     * The api reads that header and nothing else for it, and until 2026-09-10 **nothing could send
-     * it** — so a person in two organizations could not say which one they meant, from here or from
-     * a browser (roadmap F22). A site now defaults to its own organization when you belong to it, so
-     * this is for the case that cannot: acting in an organization other than the site's.
-     *
-     * Not `--organization` or `--organization-id`: `site.seed` takes an `organization` and
-     * `membership.create` an `organizationId`, and a global flag must not swallow a contract's input.
-     */
-    const organization = valueOf(argv, '--in-organization');
-    const rest = withoutFlag(withoutFlag(argv, '--host'), '--in-organization');
-    const asJson = rest.includes('--json');
-    const words = rest.filter((a) => !a.startsWith('--'));
-    const [first, second] = words;
-
-    try {
-        if (first === undefined || first === 'help') {
-            return await help(host, io);
-        }
-
-        if (first === 'login') return await login(requireHost(host), rest, io);
-        if (first === 'logout') { forgetTicket(requireHost(host)); io.out(`Signed out of ${requireHost(host)}.`); return 0; }
-
-        const site = requireHost(host);
-        const ticket = ticketFor(site);
-        const descriptor = await fetchDescriptor(site, ticket);
-
-        if (first === 'whoami') return whoami(site, io);
-        if (first === 'set-password') return await setPassword(site, descriptor, ticket, io);
-
-        if (second === undefined) return await domainHelp(descriptor, first, io);
-
-        const call = descriptor.calls.find((c) => c.domain === first && c.action === second);
-        if (call === undefined) return await unknown(descriptor, first, second, io);
-
-        return await invoke(site, descriptor, call, rest, ticket, asJson, io, organization);
-    } catch (error) {
-        if (error instanceof CliError) {
-            io.err(error.message);
-            if (error.hint !== undefined) io.err(`\n${error.hint}`);
-            return 1;
-        }
-        io.err(error instanceof Error ? error.message : String(error));
-        return 1;
-    }
-}
-
-// ---------------------------------------------------------------------------- invoking
-
-async function invoke(
-    host: string,
-    descriptor: Descriptor,
-    call: Call,
-    argv: readonly string[],
-    ticket: string | undefined,
-    asJson: boolean,
-    io: Io,
-    organization?: string,
-): Promise<number> {
-    const schema = call.input as Schema | undefined;
-    const input = parseArgs(argv, schema);
-
-    const missing = missingRequired(input, schema);
-    if (missing.length > 0) {
-        io.err(`${call.domain} ${call.action} needs ${missing.map(flagFor).join(', ')}.\n`);
-        io.err(`  ${call.description}`);
-        for (const line of describeInput(schema)) io.err(line);
-        return 2;
-    }
-
-    const { status, body } = await callContract(host, descriptor, call, input, ticket, organization);
-
-    if (status >= 400) {
-        /**
-         * A refusal is reported as a refusal.
-         *
-         * 401 with no ticket is *sign in*, and 401 with one is *this account may not*. Collapsing
-         * them into "unauthorized" is how a person spends ten minutes re-entering a password that
-         * was never the problem.
-         */
-        const message = isRecord(body) && typeof body['message'] === 'string' ? body['message'] : String(status);
-        io.err(message);
-        if (status === 401) {
-            io.err(ticket === undefined
-                ? `\nNot signed in. Try: mesh-serve --host ${host} login`
-                : `\nSigned in as ${emailFor(host) ?? 'somebody'}, and this call needs more than that account has.`);
-        }
-        if (status === 403) io.err(`\n${call.gate?.level ?? 'A higher'} standing is required for ${call.key}.`);
-        if (isRecord(body) && body['error'] === 'ORGANIZATION_REQUIRED') {
-            io.err(`\nName one: mesh-serve --host ${host} --in-organization <id> ${call.domain} ${call.action}`);
-        }
-        return 1;
-    }
-
-    io.out(asJson ? JSON.stringify(body, null, 2) : render(body));
-    return 0;
-}
-
-/**
- * A result a person can read.
+ * Parse `--flag value` and `--flag`.
  *
- * `--json` is the escape hatch and is what anything reading this should pass. The default is for
- * eyes: an array of records becomes a table, one record becomes a list of fields, and anything else
- * is printed as it is.
+ * A flag with no value is `true`, which is what `--yes` and `--json` want. **An unknown flag is not
+ * silently dropped** — the caller of this decides, and `spec/building.md` records what silent
+ * dropping cost: `--policy '{...}'` was typed, nothing knew the flag, nothing said so, and the seed
+ * reported success having set no policy at all.
  */
-function render(body: unknown): string {
-    if (body === undefined) return 'ok';
-    if (Array.isArray(body)) {
-        if (body.length === 0) return '(none)';
-        if (!isRecord(body[0])) return body.map(String).join('\n');
+export function parseArgv(argv: readonly string[]): Argv {
+    const words: string[] = [];
+    const flags: Record<string, string | boolean> = {};
 
-        const columns = [...new Set(body.flatMap((row) => Object.keys(row as object)))]
-            .filter((c) => c !== 'createdAt' && c !== 'updatedAt')
-            .slice(0, 6);
-        const widths = columns.map((c) => Math.max(c.length, ...body.map((row) => cell(row, c).length)));
+    for (let at = 0; at < argv.length; at += 1) {
+        const word = argv[at];
+        if (word === undefined) continue;
 
-        const line = (cells: readonly string[]): string =>
-            cells.map((value, i) => value.padEnd(widths[i] ?? 0)).join('  ').trimEnd();
+        if (!word.startsWith('--')) {
+            words.push(word);
+            continue;
+        }
 
-        return [
-            line(columns),
-            line(columns.map((_, i) => '─'.repeat(widths[i] ?? 0))),
-            ...body.map((row) => line(columns.map((c) => cell(row, c)))),
-        ].join('\n');
+        const name = word.slice(2);
+        const next = argv[at + 1];
+
+        if (next === undefined || next.startsWith('--')) {
+            flags[name] = true;
+            continue;
+        }
+
+        flags[name] = next;
+        at += 1;
     }
-    if (isRecord(body)) {
-        const width = Math.max(...Object.keys(body).map((k) => k.length));
-        return Object.entries(body).map(([k, v]) => `${k.padEnd(width)}  ${short(v)}`).join('\n');
-    }
-    return String(body);
+
+    const [command = 'help', ...rest] = words;
+    return { command, rest, flags };
 }
 
-/**
- * A cell is capped, because one long value ruins every row.
- *
- * `part.find` returns a `declaration` holding the whole part descriptor — several hundred characters
- * of JSON — and one of those columns pushed every other column off the screen, which made a working
- * table useless. `--json` is there for the whole value; a table is for comparing rows.
- */
-const CELL = 32;
-
-const cell = (row: unknown, column: string): string => {
-    const value = short(isRecord(row) ? row[column] : undefined);
-    return value.length <= CELL ? value : `${value.slice(0, CELL - 1)}…`;
+const stringFlag = (flags: Argv['flags'], name: string): string | undefined => {
+    const value = flags[name];
+    return typeof value === 'string' ? value : undefined;
 };
 
-const short = (value: unknown): string => {
-    if (value === undefined || value === null) return '—';
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-};
+/**
+ * Ask for a secret without echoing it.
+ *
+ * **A password is never read from argv**, where it is visible in `ps` to every user on the machine
+ * and lands in shell history. With no tty there is an environment variable and the error names it —
+ * a script has a way through that is not *put it on the command line*.
+ */
+async function askSecret(prompt: string, envVar: string): Promise<string> {
+    const fromEnv = process.env[envVar];
+    if (typeof fromEnv === 'string' && fromEnv !== '') return fromEnv;
 
-// ---------------------------------------------------------------------------- help
-
-async function help(host: string | undefined, io: Io): Promise<number> {
-    io.out('mesh-serve — a client for one site\n');
-    io.out('  mesh-serve --host <site> <domain> <action> [--flags]\n');
-    /**
-     * Two groups, and the split is real rather than cosmetic.
-     *
-     * The first run *here* — a node, a checkout, a seed. The second talk to a site over HTTP and
-     * need a host and a ticket. A person who cannot tell which is which ends up passing `--host` to
-     * `node`, or wondering why `seed` does not appear in a site's command list.
-     */
-    io.out('  running a platform');
-    io.out('    node      run a node: all services, one process');
-    io.out('    seed      bring an empty cluster up to a hostname that answers');
-    io.out('    publish   publish this checkout to a catalog');
-    io.out('    client    generate a typed client from mesh.json');
-    io.out('    dev       serve this part on a dev page\n');
-    io.out('  talking to a site');
-    io.out('    login     sign in and keep the ticket');
-    io.out('    logout    forget it');
-    io.out('    whoami    who this machine is signed in as');
-    io.out('    set-password  set your own — and claim a first-boot account');
-    io.out('    --json    print the raw result rather than a table\n');
-
-    if (host === undefined) {
-        io.out('Everything else comes from the site itself. Pass --host to see what one offers.');
-        return 0;
-    }
-
-    const descriptor = await fetchDescriptor(host, ticketFor(host));
-    const remembered = currentHost() === host ? ' (remembered)' : '';
-    io.out(`${descriptor.application} at ${descriptor.origin ?? originOf(host)}${remembered} offers ${String(descriptor.calls.length)} call(s):\n`);
-
-    if (descriptor.calls.length === 0) {
-        io.out('  (none — this site grants nothing to this caller)\n');
-        io.out(ticketFor(host) === undefined
-            ? '  You are not signed in. A site reports what YOU may call, so signing in may show more.'
-            : '  A site grants what its parts declare they consume. This one declares nothing.');
-        return 0;
-    }
-
-    for (const domain of [...new Set(descriptor.calls.map((c) => c.domain))].sort()) {
-        const actions = descriptor.calls.filter((c) => c.domain === domain);
-        io.out(`  ${domain.padEnd(14)} ${actions.map((a) => a.action).join(', ')}`);
-    }
-    return 0;
-}
-
-async function domainHelp(descriptor: Descriptor, domain: string, io: Io): Promise<number> {
-    const calls = descriptor.calls.filter((c) => c.domain === domain);
-    if (calls.length === 0) {
-        io.err(`${descriptor.application} exposes nothing called "${domain}".`);
-        return 1;
-    }
-    for (const call of calls) {
-        io.out(`  ${domain} ${call.action}${call.destructive === true ? '  (changes state)' : ''}`);
-        io.out(`    ${call.description}`);
-        for (const line of describeInput(call.input as Schema | undefined)) io.out(line);
-        io.out('');
-    }
-    return 0;
-}
-
-async function unknown(descriptor: Descriptor, domain: string, action: string, io: Io): Promise<number> {
-    /**
-     * Absent and refused answer differently, on purpose.
-     *
-     * A descriptor is per-caller, so a command missing here may exist and be out of this account's
-     * reach. Saying "no such command" to somebody who merely needs to sign in sends them looking for
-     * a typo.
-     */
-    io.err(`${descriptor.application} does not offer "${domain} ${action}" to you.`);
-    io.err(ticketFor(descriptor.application) === undefined
-        ? '\nA site reports what YOU may call. If you are not signed in, signing in may reveal it.'
-        : '\nIt may exist and be gated above this account.');
-    return 1;
-}
-
-// ---------------------------------------------------------------------------- login
-
-async function login(host: string, argv: readonly string[], io: Io): Promise<number> {
-    /**
-     * The descriptor is fetched **before** the password is asked for.
-     *
-     * Two reasons, and the second is the one that was wrong. It finds the api the same way every
-     * other command does, so `login` cannot be the one place that insists on being told a port. And
-     * it fails *before* somebody types a password into a prompt that was never going to work —
-     * which is what "password: fetch failed" was.
-     */
-    const descriptor = await fetchDescriptor(host);
-    const issue = descriptor.calls.find((c) => c.key === 'identity.ticket_issue');
-    if (issue === undefined) {
-        throw new CliError(
-            `${descriptor.application} does not offer a way to sign in.`,
-            'A site grants what its parts declare they consume. This one does not expose '
-            + 'identity.ticket_issue, so there is no sign-in to reach.',
+    if (!stdin.isTTY) {
+        throw new Refused(
+            'NO_TTY',
+            `There is no terminal to prompt on. Set ${envVar} instead — a password on the command `
+            + `line is visible in ps and lands in shell history.`,
+            0,
         );
     }
 
-    const email = valueOf(argv, '--email') ?? await io.prompt('email: ', false);
-    const password = await io.prompt('password: ', true);
+    const rl = createInterface({ input: stdin, output: stdout, terminal: true });
 
-    const { status, body } = await callContract(host, descriptor, issue, { email, password });
+    // Suppress the echo by writing nothing for each keypress. readline still collects the line.
+    const muted = (chunk: string | Uint8Array, encoding?: BufferEncoding, done?: () => void): boolean => {
+        if (typeof done === 'function') done();
+        void chunk; void encoding;
+        return true;
+    };
 
-    if (status >= 400) {
-        io.err(status === 401
-            ? 'That email and password were not accepted.'
-            : `Sign-in failed (${String(status)}).`);
-        return 1;
+    stdout.write(prompt);
+    const original = stdout.write.bind(stdout);
+    (stdout as unknown as { write: typeof muted }).write = muted;
+
+    try {
+        const answer = await rl.question('');
+        return answer;
+    } finally {
+        (stdout as unknown as { write: typeof original }).write = original;
+        rl.close();
+        stdout.write('\n');
+    }
+}
+
+interface Whoami {
+    readonly userId: string;
+    readonly email: string;
+    readonly displayName: string;
+    readonly provisional: boolean;
+    readonly organizations: readonly {
+        readonly organizationId: string;
+        readonly slug: string;
+        readonly name: string;
+        readonly roleKey: string;
+    }[];
+    readonly permissions: readonly { readonly permission: string; readonly scope?: string }[];
+}
+
+/**
+ * **What `login` prints, and the reason it prints anything.**
+ *
+ * The previous one wrote the ticket and said nothing, which is indistinguishable from failing
+ * silently — so the person runs it again. This is `spec/identity.md` §7's answer: who you are, and
+ * the complete list of what this account can do, with scope as a column rather than as a separate
+ * question a caller has to think to ask.
+ */
+function renderWhoami(who: Whoami, host: string): string {
+    const lines = [`signed in as  ${who.email}  on ${host}`, ''];
+
+    if (who.provisional) {
+        lines.push(
+            '  This account has not been claimed. It can do nothing except set its own password:',
+            '',
+            '    mesh-serve set-password',
+            '',
+        );
+        return lines.join('\n');
     }
 
-    const answer = body as { token?: string; ticket?: string } | undefined;
-    const token = answer?.token ?? answer?.ticket;
-    if (token === undefined) {
-        io.err('Signed in, and the answer carried no ticket. That is a server bug, not yours.');
-        return 1;
+    if (who.permissions.length === 0) {
+        lines.push('  This account holds no permissions anywhere yet.', '');
+        return lines.join('\n');
     }
 
-    saveTicket(host, token, email);
-    io.out(`Signed in to ${host} as ${email}.`);
-    io.out(`Ticket stored in ${credentialsPath} (mode 0600).`);
+    /**
+     * **A scope is an organization id on the wire and a name on the screen.**
+     *
+     * The id is what a caller passes back in a header, so it has to be what `--json` carries; a
+     * person reading the list wants *Platform*. Printing the id to somebody was the first version,
+     * and it reads as a failure rather than as an answer.
+     */
+    const scopeName = (scope: string | undefined): string => {
+        if (scope === undefined) return 'everywhere';
+        const org = who.organizations.find((o) => o.organizationId === scope);
+        return org === undefined ? `in   ${scope}` : `in   ${org.name}`;
+    };
+
+    const width = Math.max(...who.permissions.map((p) => p.permission.length));
+    for (const permission of who.permissions) {
+        lines.push(`  ${permission.permission.padEnd(width)}   ${scopeName(permission.scope)}`);
+    }
+
+    lines.push('');
+    return lines.join('\n');
+}
+
+export interface RunOptions {
+    readonly out?: (text: string) => void;
+    readonly err?: (text: string) => void;
+}
+
+/**
+ * Run one command.
+ *
+ * Returns the process exit code rather than calling `process.exit`, so it can be tested and so a
+ * failure is one value rather than a thrown thing that also has to be formatted somewhere else.
+ */
+export async function run(argv: readonly string[], options: RunOptions = {}): Promise<number> {
+    const out = options.out ?? ((text) => stdout.write(text));
+    const err = options.err ?? ((text) => process.stderr.write(text));
+
+    const { command, rest, flags } = parseArgv(argv);
+
+    /** `127.0.0.1`, because that is the only site a machine that just booted has. */
+    const host = stringFlag(flags, 'host') ?? '127.0.0.1';
+    const origin = stringFlag(flags, 'origin')
+        ?? process.env['MESH_SERVE_API']
+        ?? `http://${host}:5005`;
+
+    const stored = ticketFor(host);
+    const client: ClientOptions = { host, origin, ticket: stored?.ticket };
+
+    try {
+        switch (command) {
+            case 'login': {
+                const email = stringFlag(flags, 'email') ?? await ask('email: ');
+                const password = await askSecret('password: ', 'MESH_SERVE_PASSWORD');
+
+                const issued = await call(client, 'POST', '/identity/ticket', { email, password }) as {
+                    token: string; userId: string; expiresAt: number; provisional: boolean;
+                };
+
+                const path = saveTicket(host, {
+                    ticket: issued.token,
+                    userId: issued.userId,
+                    expiresAt: issued.expiresAt,
+                });
+
+                const who = await call(
+                    { ...client, ticket: issued.token },
+                    'GET',
+                    '/identity/whoami',
+                ).catch((error: unknown) => {
+                    // A provisional account is refused by whoami, which is correct and is not a
+                    // failed login. Say what it can do instead of showing it a refusal.
+                    if (error instanceof Refused && error.code === 'PROVISIONAL_ACCOUNT') return undefined;
+                    throw error;
+                });
+
+                out('\n');
+                out(who === undefined
+                    ? renderWhoami(
+                        { userId: issued.userId, email, displayName: '', provisional: true, organizations: [], permissions: [] },
+                        host,
+                    )
+                    : renderWhoami(who as Whoami, host));
+                out(`  ticket saved to ${path}\n\n`);
+                return 0;
+            }
+
+            case 'logout': {
+                forgetTicket(host);
+                if (stored !== undefined) {
+                    // Best effort: the local ticket is gone either way, and a server that cannot be
+                    // reached must not leave a credential on disk because the call failed.
+                    await call(client, 'POST', '/identity/sign_out', { token: stored.ticket })
+                        .catch(() => undefined);
+                }
+                out(`signed out of ${host}\n`);
+                return 0;
+            }
+
+            case 'whoami': {
+                const who = await call(client, 'GET', '/identity/whoami');
+                out(flags['json'] === true ? `${JSON.stringify(who, null, 4)}\n` : renderWhoami(who as Whoami, host));
+                return 0;
+            }
+
+            case 'set-password': {
+                const password = await askSecret('new password: ', 'MESH_SERVE_NEW_PASSWORD');
+                const again = await askSecret('again: ', 'MESH_SERVE_NEW_PASSWORD');
+
+                if (password !== again) {
+                    err('Those did not match. Nothing was changed.\n');
+                    return 1;
+                }
+
+                const result = await call(client, 'POST', '/identity/password', { password }) as {
+                    claimed: boolean;
+                };
+
+                // Every other session died, including this one. Saying so beats the next command
+                // failing with a 401 that looks like something else.
+                forgetTicket(host);
+                out(result.claimed
+                    ? 'password set, account claimed — sign in again\n'
+                    : 'password set — every session ended, sign in again\n');
+                return 0;
+            }
+
+            case 'describe': {
+                const described = await call({ ...client, ticket: undefined }, 'GET', '/_describe');
+                out(`${JSON.stringify(described, null, 4)}\n`);
+                return 0;
+            }
+
+            case 'help':
+            case '--help':
+                out(usage());
+                return 0;
+
+            default:
+                return await contractCommand(client, command, rest, flags, out, err);
+        }
+    } catch (error) {
+        if (error instanceof Refused) {
+            err(`${error.message}\n`);
+            return 1;
+        }
+        throw error;
+    }
+}
+
+/**
+ * Anything that is not one of the terminal's own commands is **a contract**.
+ *
+ * `mesh-serve organization find` is `organization.find`, looked up in the site's own description —
+ * so the CLI knows what exists because the site said so, not because this file has a list. A site
+ * that exposes a contract this binary has never heard of is callable the day it is exposed.
+ */
+async function contractCommand(
+    client: ClientOptions,
+    noun: string,
+    rest: readonly string[],
+    flags: Argv['flags'],
+    out: (text: string) => void,
+    err: (text: string) => void,
+): Promise<number> {
+    const action = rest[0];
+    if (action === undefined) {
+        err(`"${noun}" needs an action: mesh-serve ${noun} find\n`);
+        return 2;
+    }
+
+    const key = `${noun}.${action}`;
+    const described = await call({ ...client, ticket: undefined }, 'GET', '/_describe') as {
+        calls: readonly { key: string; method: string; path: string; destructive: boolean }[];
+    };
+
+    const found = described.calls.find((c) => c.key === key);
+    if (found === undefined) {
+        const near = described.calls.filter((c) => c.key.startsWith(`${noun}.`)).map((c) => c.key);
+        err(near.length === 0
+            ? `${client.host} serves nothing called "${noun}". Try: mesh-serve describe\n`
+            : `${client.host} serves no "${key}". It does serve:\n${near.map((k) => `  ${k}\n`).join('')}`);
+        return 2;
+    }
+
+    /**
+     * **The contract says whether to ask, and the CLI asks.** One declaration, read by the terminal,
+     * by a UI deciding whether to confirm, and by an agent surface deciding whether to park the call
+     * for approval.
+     */
+    if (found.destructive && flags['yes'] !== true && stdin.isTTY) {
+        const answer = await ask(`${key} changes things. Continue? [y/N] `);
+        if (answer.trim().toLowerCase() !== 'y') {
+            out('nothing was done\n');
+            return 0;
+        }
+    }
+
+    const { path, query } = fillPath(found.path, flags);
+    const body = found.method === 'GET' ? undefined : bodyFrom(flags);
+    const url = query === '' ? path : `${path}?${query}`;
+
+    const result = await call(client, found.method, url, body);
+    out(`${JSON.stringify(result, null, 4)}\n`);
     return 0;
 }
 
 /**
- * **Claim the account the platform made for itself.**
+ * Put flags into the path where the route names them, and the rest into the query string.
  *
- * A provisional account is refused everywhere except this, so without a command for it the first
- * boot produces a credential that can do nothing at all — including stop being provisional. This is
- * the door in that wall.
- *
- * It is a built-in rather than an ordinary derived command because a provisional caller's descriptor
- * is nearly empty by design: the one thing it may do would be the one thing the command list could
- * not show it.
+ * `/sites/:id` with `--id x` becomes `/sites/x`, and a flag the route does not name stays a
+ * parameter. **The route wins over the body at the server too** (`spec/collections.md` §4); doing it
+ * here as well means the caller is not told about a conflict they could not have caused.
  */
-async function setPassword(
-    host: string,
-    descriptor: Descriptor,
-    ticket: string | undefined,
-    io: Io,
-): Promise<number> {
-    if (ticket === undefined) {
-        io.err(`Not signed in to ${host}. Sign in first, then set a password.`);
-        return 1;
+function fillPath(pattern: string, flags: Argv['flags']): { path: string; query: string } {
+    const used = new Set<string>();
+
+    const path = pattern.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_whole, name: string) => {
+        const value = flags[name];
+        if (typeof value !== 'string') return `:${name}`;
+        used.add(name);
+        return encodeURIComponent(value);
+    });
+
+    const params = new URLSearchParams();
+    for (const [name, value] of Object.entries(flags)) {
+        if (used.has(name) || RESERVED.has(name)) continue;
+        params.set(name, typeof value === 'boolean' ? String(value) : value);
     }
 
-    const call = descriptor.calls.find((c) => c.key === 'identity.set_password');
-    if (call === undefined) {
-        io.err(`${descriptor.application} does not expose identity.set_password.`);
-        return 1;
-    }
-
-    const password = await io.prompt('new password: ', true);
-    const again = await io.prompt('again: ', true);
-    if (password !== again) {
-        io.err('Those did not match.');
-        return 1;
-    }
-
-    const { status, body } = await callContract(host, descriptor, call, { password }, ticket);
-    if (status >= 400) {
-        io.err(isRecord(body) && typeof body['message'] === 'string' ? body['message'] : `Failed (${String(status)}).`);
-        return 1;
-    }
-
-    const claimed = isRecord(body) && body['claimed'] === true;
-    io.out(claimed
-        ? 'Password set, and this account is claimed — it can do everything its roles allow now.'
-        : 'Password set.');
-    // The ticket was issued before the flag cleared, and the flag is read from the user on every
-    // call, so it keeps working. Said out loud because "do I need to sign in again" is the next
-    // thought.
-    if (claimed) io.out('Your existing session still works.');
-    return 0;
+    return { path, query: params.toString() };
 }
 
-function whoami(host: string, io: Io): number {
-    const email = emailFor(host);
-    if (ticketFor(host) === undefined) {
-        io.out(`Not signed in to ${host}.`);
-        return 1;
+function bodyFrom(flags: Argv['flags']): Record<string, unknown> {
+    const body: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(flags)) {
+        if (RESERVED.has(name)) continue;
+        body[name] = value;
     }
-    io.out(`${email ?? '(unknown account)'} at ${host}`);
-    // Said out loud, because this is the value that makes somebody deploy to production believing
-    // they are on staging. A remembered host that is never printed is the dangerous version.
-    if (currentHost() === host) io.out('(the remembered host — pass --host to use another)');
-    return 0;
+    return body;
 }
 
-// ---------------------------------------------------------------------------- argv
+/** Flags that belong to the terminal rather than to the contract. */
+const RESERVED = new Set(['host', 'origin', 'json', 'yes', 'help']);
 
-const valueOf = (argv: readonly string[], flag: string): string | undefined => {
-    const at = argv.indexOf(flag);
-    return at === -1 ? undefined : argv[at + 1];
-};
+async function ask(prompt: string): Promise<string> {
+    const rl = createInterface({ input: stdin, output: stdout });
+    try {
+        return await rl.question(prompt);
+    } finally {
+        rl.close();
+    }
+}
 
-const withoutFlag = (argv: readonly string[], flag: string): readonly string[] => {
-    const at = argv.indexOf(flag);
-    return at === -1 ? argv : [...argv.slice(0, at), ...argv.slice(at + 2)];
-};
-
-const requireHost = (host: string | undefined): string => {
-    if (host !== undefined) return host;
-    throw new CliError(
-        'Which site?',
-        'Pass --host, or set MESH_HOST. Every command comes from a site: the api resolves one by the '
-        + 'Host header, and what you may call depends on which site and which account.',
-    );
-};
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v);
+function usage(): string {
+    return [
+        '',
+        'mesh-serve [--host <site>] <command>',
+        '',
+        '  login                 sign in, and print what this account may do',
+        '  logout                end this session',
+        '  whoami                who am I, and what may I do',
+        '  set-password          set your own password',
+        '  describe              what this site serves',
+        '',
+        '  <noun> <action>       call a contract — mesh-serve organization find',
+        '                        flags become its input: --name platform',
+        '',
+        '  --host defaults to 127.0.0.1, which is the site a fresh node serves itself on.',
+        '',
+    ].join('\n');
+}

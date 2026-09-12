@@ -1,9 +1,17 @@
 # mesh-serve
 
-**Status: specified, 2026-09-11. Nothing below is built yet.** `src/` was deleted; the previous
-implementation is in git and in `src-dump/`, and it is referenced throughout as evidence rather than
-as a design. Where a number, a schema or an error code appears here, it was read out of that tree —
-these specs describe what the thing is, checked against what it was.
+**Status: the first slice runs, 2026-09-11.** A node boots, identity mints the first account, one
+site answers on `127.0.0.1`, and `mesh-serve login` works from a terminal and prints what it did.
+38 tests. Everything else in these documents is still specification.
+
+The rest of `src/` was deleted; the previous implementation is in `src-dump/` and is referenced
+throughout as evidence rather than as a design. Where a number, a schema or an error code appears
+here, it was read out of that tree.
+
+**Three things in these specs were wrong and building found them.** They are corrected in place and
+recorded in [questions.md](./questions.md): `scopedBy` cannot be used on the collections that
+*produce* a scope (**B2**), a CRUD hook only runs on the module whose domain matches the collection,
+and a public contract must stay public for an unclaimed account (**E3**).
 
 ## What it is
 

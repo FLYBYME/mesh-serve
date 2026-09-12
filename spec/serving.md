@@ -249,9 +249,15 @@ contract: `describeExposure` refuses the entry, with `EXPOSURE_MISMATCH`.
        └─ authorize hook ─────────► may deny, may resolve a scope. May not admit.
 ```
 
-**A provisional account is refused ahead of everything.** It is the account the platform creates on
-first boot, and the one thing it may do is set its own password, which clears the flag. Named in one
-place rather than kept as a list of exceptions, because a list is a thing that grows.
+**A provisional account is refused ahead of everything except a public contract.** It is the account
+the platform creates on first boot, and the one thing it may do is set its own password, which clears
+the flag. Named in one place rather than kept as a list of exceptions, because a list is a thing that
+grows.
+
+**Public comes first, and that ordering is load-bearing** — it is the answer to **E3**. Put the
+provisional check in front of the public case and an unclaimed account cannot sign out, because
+`identity.sign_out` is public, and cannot sign in again either. *Do nothing until you set a password*
+must not also mean *and you may not use the door you came in through*.
 
 Without that carve-out the first boot produces **a locked room with no door**: the wall was built and
 the way out was not, so the credential printed at boot could do nothing at all, including stop being

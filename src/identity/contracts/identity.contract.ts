@@ -1,188 +1,103 @@
 /**
  * What identity answers over the mesh.
  *
- * Every one of these is `internal` by default and **that is deliberate**. mesh defaults a contract
- * to internal, and identity is the module a deployment authenticates through: `ticket_validate` on
- * the public internet would let anyone test tickets against it, and `revocations_since` would leak
- * who had been suspended and when.
+ * **Every action is `internal` unless this file says otherwise, and that is mesh's default rather
+ * than a choice made here.** Identity is what every deployment authenticates through:
+ * `ticket_validate` on the public internet would let anyone test tickets against it.
  *
- * Two are marked `public` because a site genuinely has to expose them — registering and asking who
- * you are — and even then it is the *site's* exposure list that decides, not this file
- * (mesh-web spec/service-modules.md §2, C3.2).
+ * Three are `public`, because each is a call that cannot require having already made it — signing
+ * in, signing out, and asking who you are. Even then it is the *site's* exposure that decides
+ * whether they are reachable, not this file (`spec/serving.md` §5).
  */
 
 import { defineContract, defineCrud, type ToolContract, z } from '@flybyme/mesh';
 
-import {
-    ApiTokenSchema,
-    MembershipSchema,
-    OrganizationSchema,
-    UserSchema,
-} from '../schema/principals.js';
-import { GrantSchema, RoleSchema } from '../schema/roles.js';
+import { MembershipSchema, OrganizationSchema, UserSchema } from '../schema/principals.js';
 import { TicketSchema, ValidationSchema } from '../schema/tickets.js';
 
-// ---------------------------------------------------------------------------- CRUD collections
+// ---------------------------------------------------------------------------- collections
 
 /**
- * Global collection of user profiles.
+ * Accounts. Global: a user is not owned by an organization, it joins one through a membership.
  *
- * Scoping: Global. A user is not owned by an organization; a user exists across the deployment
- * and joins organizations via memberships.
+ * **Sealed, every action, and it is not a preference.** The row carries `passwordHash` and nothing
+ * subtracts a field from a read, so the only way to keep it in is to let nothing out. That is
+ * `spec/questions.md` **A1**, it is the reason nothing here can turn a user id into a name, and it
+ * is the first thing to change when mesh 2 → 3 lands.
  */
 export const userCrud = defineCrud('user', UserSchema, {
     pluralPath: 'users',
     unique: [{ fields: 'email', scope: 'global' }],
-    visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
-    },
     dependencies: [],
 });
 
 export type StoredUser = z.infer<typeof userCrud.outputSchema>;
 
-/**
- * Global collection of organizations (tenants).
- *
- * Scoping: Global. Organizations are top-level tenant boundaries.
- */
+/** Organizations. Global, because an organization is the tenant boundary and cannot sit inside one. */
 export const organizationCrud = defineCrud('organization', OrganizationSchema, {
     pluralPath: 'organizations',
     unique: [{ fields: 'slug', scope: 'global' }],
-    visibility: {
-        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
-        count: 'public', create: 'public', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
-    },
+    /**
+     * `create` is published and the rest of the writes are not, which is the decision written down.
+     *
+     * Making an organization is how a signed-in account gets somewhere to own things, so refusing it
+     * means only an operator can ever create a tenant. Renaming or deleting one affects everybody
+     * inside it and wants a contract that says what happens to them — **E1**, the handover that has
+     * a store method and no contract.
+     */
+    visibility: { find: 'public', get: 'public', count: 'public', create: 'public' },
     dependencies: [],
 });
 
 export type StoredOrganization = z.infer<typeof organizationCrud.outputSchema>;
 
 /**
- * Scoped collection connecting a user to an organization.
+ * An account's place in one organization.
  *
- * Scoping: Tenant-scoped by `organizationId`. A caller in organization A cannot read
- * or write memberships of organization B.
+ * ## **`scopedBy` cannot be used here, and finding out why cost a boot**
+ *
+ * The obvious declaration is `scopedBy: 'organizationId'`, and `spec/identity.md` assumed it. It
+ * cannot work: **the scope is resolved *from* this collection.** A request arrives, the gate reads
+ * the caller's memberships to decide which organization they are in, and `scopedBy` refuses that
+ * read because no scope has been resolved yet. The node died on its first boot with
+ *
+ *     Scoped collection "membership" requires a resolved "organizationId" scope
+ *
+ * raised by bootstrap, which has no caller at all. Every path into this collection hits it:
+ * bootstrap, the gate, and `identity.whoami`.
+ *
+ * **So the narrowing is a hook rather than a declaration** — `narrowMembership` in
+ * `../identity.service.js`, which confines a read to the caller's own rows. That is a stricter
+ * filter than the scope would have been, not a looser one: `scopedBy` would have let a member read
+ * every membership of their organization, and this lets them read their own.
+ *
+ * `unique` is global for the same reason — there is no scope to be unique within — and the key is
+ * the pair, which is the rule `scope: 'scoped'` was expressing.
  */
 export const membershipCrud = defineCrud('membership', MembershipSchema, {
     pluralPath: 'memberships',
-    scopedBy: 'organizationId',
-    unique: [{ fields: 'userId', scope: 'scoped' }],
-    visibility: {
-        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
-        count: 'public', create: 'public', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'public',
-    },
+    unique: [{ fields: ['userId', 'organizationId'], scope: 'global' }],
+    visibility: { find: 'public', get: 'public', count: 'public' },
     dependencies: [],
 });
 
 export type StoredMembership = z.infer<typeof membershipCrud.outputSchema>;
 
 /**
- * Global collection of roles.
+ * Tickets. Every action internal, permanently.
  *
- * Scoping: Global. Roles are platform definitions (such as builtin roles `public` and `authenticated`).
- * The role catalogue contains no tenant data and is safe to be read globally by authenticated operators.
- */
-export const roleCrud = defineCrud('role', RoleSchema, {
-    pluralPath: 'roles',
-    unique: [{ fields: 'key', scope: 'global' }],
-    visibility: {
-        find: 'public', findOne: 'public', get: 'public', resolve: 'internal',
-        count: 'public', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
-    },
-    dependencies: [],
-});
-
-export type StoredRole = z.infer<typeof roleCrud.outputSchema>;
-
-/**
- * Global collection of role-contract grants.
- *
- * Scoping: Global. Grants define what contracts a role permits.
- */
-/**
- * **Grants stopped being internal on 2026-09-10, and the reason is F30.**
- *
- * Every action was `internal`, which was right while a gate was a level compiled into `gateFor`:
- * there was nothing here anybody needed to look at. Now **a grant row is what decides whether a
- * caller may call a contract**, seeding installs them, and an operator could neither see one nor
- * make one. A model made of data with no way to read it is a model nobody can audit.
- *
- * `find`, `create` and `delete` only. `update` stays internal deliberately: a grant is a
- * `(roleKey, contract)` pair and nothing else, so *changing* one is revoking one and making
- * another — two calls, which is also the record of what happened. `createMany` stays internal
- * because a bulk grant is the one shape nobody should reach for casually.
- *
- * Exposed **only at `operator`** (`control.ts`), and that is not a preference. A grant decides who
- * may call what, so the contract that writes one cannot itself be answered by a grant — that
- * circularity is exactly what the coarse levels exist to break.
- */
-export const grantCrud = defineCrud('grant', GrantSchema, {
-    pluralPath: 'grants',
-    unique: [{ fields: ['roleKey', 'contract'], scope: 'global' }],
-    visibility: {
-        find: 'public', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'public', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'public',
-    },
-    dependencies: [],
-});
-
-export type StoredGrant = z.infer<typeof grantCrud.outputSchema>;
-
-/**
- * Global collection of session tickets.
- *
- * Scoping: Global. Tickets authenticate a principal across the mesh.
+ * There is no version of *expose the credential table* that is right, and unlike `user` this one is
+ * not waiting on a feature.
  */
 export const ticketCrud = defineCrud('ticket', TicketSchema, {
     pluralPath: 'tickets',
     unique: [{ fields: 'token', scope: 'global' }],
-    visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
-    },
     dependencies: [],
 });
 
 export type StoredTicket = z.infer<typeof ticketCrud.outputSchema>;
 
-/**
- * Global collection of API tokens for machine-to-machine authentication.
- *
- * Scoping: Global.
- */
-export const apiTokenCrud = defineCrud('apiToken', ApiTokenSchema, {
-    pluralPath: 'api-tokens',
-    unique: [{ fields: 'tokenHash', scope: 'global' }],
-    visibility: {
-        find: 'internal', findOne: 'internal', get: 'internal', resolve: 'internal',
-        count: 'internal', create: 'internal', createMany: 'internal', update: 'internal',
-        replace: 'internal', delete: 'internal',
-    },
-    dependencies: [],
-});
-
-export type StoredApiToken = z.infer<typeof apiTokenCrud.outputSchema>;
-
-export const identityCrudCollections = [
-    userCrud,
-    organizationCrud,
-    membershipCrud,
-    roleCrud,
-    grantCrud,
-    ticketCrud,
-    apiTokenCrud,
-] as const;
-
-
-// ---------------------------------------------------------------------------- tickets
+// ---------------------------------------------------------------------------- signing in
 
 export const ticketIssueContract = defineContract({
     domain: 'identity',
@@ -198,13 +113,11 @@ export const ticketIssueContract = defineContract({
         token: z.string(),
         userId: z.string(),
         expiresAt: z.number(),
+        /** So a client can say *claim this account* instead of letting the next call refuse. */
+        provisional: z.boolean(),
     }),
     rest: { method: 'POST', path: '/identity/ticket' },
-    // Public, because signing in is the one call that cannot require being signed in. Found by the
-    // first site to expose this domain (mesh-web A6.7): `describeExposure` refused the entry, which
-    // is the check working — an internal contract must never reach the internet by accident — but
-    // the answer here is that this contract was never internal. `register` and `whoami` beside it
-    // already said so; this one was missed.
+    /** Public, because signing in is the one call that cannot require being signed in. */
     visibility: 'public',
     destructive: true,
     print: (o) => `ticket for ${o.userId}`,
@@ -220,70 +133,31 @@ export const ticketValidateContract = defineContract({
     print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
 });
 
-export const ticketRevokeContract = defineContract({
-    domain: 'identity',
-    action: 'ticket_revoke',
-    description: 'Revoke one ticket, or every ticket a principal holds.',
-    inputSchema: z.object({
-        /** One of these. A ticket, or everything belonging to a user. */
-        token: z.string().optional(),
-        userId: z.string().optional(),
-        reason: z.string().optional(),
-    }),
-    outputSchema: z.object({
-        revoked: z.number().describe('How many tickets this ended'),
-        epoch: z.number().describe('The epoch to poll from to see it'),
-    }),
-    rest: { method: 'POST', path: '/identity/ticket/revoke' },
-    destructive: true,
-    print: (o) => `revoked ${String(o.revoked)} at epoch ${String(o.epoch)}`,
-});
-
 /**
  * End **this** session, and nothing else.
  *
- * `ticket_revoke` cannot be a browser's sign-out and must stay internal: it takes a `userId`, so it
- * ends every ticket a *named person* holds. That is a real operation — an operator suspending an
- * account — and it is not one a page may perform.
+ * It takes the token rather than nothing, and the reason is worth keeping: what crosses the broker
+ * is *who* the caller is, never the credential they arrived on — an application never handles one.
+ * Making it work with no argument would mean putting a live credential in `meta`, where every
+ * handler on the mesh would receive it.
  *
- * The generator found this rather than a review. mesh-auth declared `identity.ticket_revoke` among
- * the contracts it calls, and `describeExposure` refused it: *marked internal by its own domain and
- * cannot be exposed*. The check working is the story; the extension had been posting to that path
- * since it was written.
- *
- * ## Why it takes a token and not nothing
- *
- * *No input at all* was the first draft, on the reasoning that the ticket is already on the request
- * and a contract whose only possible target is the caller cannot be pointed at anybody else. It does
- * not work: `Caller` is `{ userId, roles }`, so what crosses the broker is **who** the ticket belongs
- * to and never the ticket. Making it work would mean putting a live credential in `meta`, where every
- * handler on the mesh would receive it — and *an Application never handles a credential* is a
- * property this system spends real effort on. Weakening it so that one contract can take no argument
- * is a bad trade.
- *
- * So the token is named, and the safety comes from what a token *is*: **presenting one proves you
- * hold it, and revoking a ticket you hold is strictly less powerful than using it.** The dangerous
- * parameter on `ticket_revoke` was never `token` — it was `userId`, which acts on a person rather
- * than on a credential, and it is absent here.
- *
- * `public`, because signing out cannot require being signed in any more than signing in can: a
- * caller holding an expired or already-revoked ticket must still be able to say *I am done* and get
- * the same answer as one holding a live one.
+ * **Presenting a token proves you hold it, and revoking a ticket you hold is strictly less powerful
+ * than using it.** The dangerous parameter is `userId`, which acts on a person rather than on a
+ * credential, and it is absent here.
  */
 export const signOutContract = defineContract({
     domain: 'identity',
     action: 'sign_out',
     description: 'End the calling session.',
     inputSchema: z.object({
-        /** The ticket to end. Yours by definition: you had to hold it to send it. */
+        /** Yours by definition: you had to hold it to send it. */
         token: z.string().min(1),
     }),
     outputSchema: z.object({
         /**
-         * Always true, and deliberately not *whether a ticket was revoked*.
-         *
-         * Signing out with no ticket, an expired one, or one already revoked all answer the same,
-         * because the difference is information about a credential the caller does not hold.
+         * Always true, and deliberately not *whether a ticket was revoked*. Signing out with no
+         * ticket, an expired one, or one already revoked all answer the same, because the difference
+         * is information about a credential the caller does not hold.
          */
         signedOut: z.literal(true),
     }),
@@ -293,20 +167,14 @@ export const signOutContract = defineContract({
     print: () => 'signed out',
 });
 
+// ---------------------------------------------------------------------------- your own account
+
 /**
- * **Set your own password — and, if this account was made by the platform, claim it.**
+ * **Set your own password — and, if the platform made this account, claim it.**
  *
- * The one thing a `provisional` account may do. Identity creates one on a cluster's first boot,
- * because a platform with no accounts cannot be signed into; the gate then refuses it everywhere
- * *except this action*, and doing this clears the flag.
- *
- * Without it that account is a locked room with no door: the wall was built and the way out was
- * not, so the first boot produced a credential that could do nothing at all — including stop being
- * provisional. Found by the first person to actually run it.
- *
- * **Your own, always.** There is no `userId` in the input. Changing somebody else's password is a
- * different act with a different name and a different gate, and a contract that took an id would be
- * one missing check away from being that act.
+ * The one thing a provisional account may do. **There is no `userId` in the input**: the caller *is*
+ * the subject, and a contract that took an id would be one missing check away from being a different
+ * and far more dangerous act.
  */
 export const setPasswordContract = defineContract({
     domain: 'identity',
@@ -321,347 +189,64 @@ export const setPasswordContract = defineContract({
         claimed: z.boolean(),
     }),
     rest: { method: 'POST', path: '/identity/password' },
-    /**
-     * `user`, not `public`: you must already hold a session, which for a provisional account means
-     * the password printed at first boot. Public would let anybody set anybody's — the input has no
-     * id precisely so the caller *is* the subject, and that only holds if there is a caller.
-     */
+    /** `public` at the contract; the gate still requires a caller. A site exposes it at `user`. */
     visibility: 'public',
     destructive: true,
     print: (o) => (o.claimed ? 'password set, account claimed' : 'password set'),
 });
 
 /**
- * What changed since an API instance last looked.
+ * Who am I, and what may I do.
  *
- * **The contract that makes revocation correct** rather than likely. mesh-web spec/auth.md §3.1: the
- * mesh delivers events at-most-once, so an instance that was down when a ticket was revoked never
- * hears about it. A poll cannot be missed, only delayed.
- *
- * The event `identity.ticket_revoked` still fires, and an instance still listens — that is what
- * makes the common case immediate. This is what makes it *right*.
+ * **This is what `mesh-serve login` prints** (`spec/cli.md` §2), and the shape is from
+ * `spec/identity.md` §7: one list, per account, with scope as a column rather than as a separate
+ * question. An account in three organizations has three different answers and they belong in one
+ * response, because the alternative is a caller making three calls to find out what to try.
  */
-export const revocationsSinceContract = defineContract({
-    domain: 'identity',
-    action: 'revocations_since',
-    description: 'Revocations after a given epoch, for an API instance catching up.',
-    inputSchema: z.object({
-        epoch: z.number().describe('The last epoch this caller has seen. 0 for everything retained.'),
-        limit: z.number().optional(),
-    }),
-    outputSchema: z.object({
-        epoch: z.number().describe('The newest epoch, to poll from next time'),
-        revocations: z.array(z.object({
-            epoch: z.number(),
-            kind: z.enum(['ticket', 'principal']),
-            subject: z.string(),
-            at: z.number(),
-        })),
-        /**
-         * True when the caller's epoch is older than anything retained.
-         *
-         * It cannot be told what it missed, so it must not pretend to be current: the honest
-         * response is for it to drop its cache and re-validate, which is the one case where §3's
-         * original "drop everything on reconnect" is still the right answer.
-         */
-        truncated: z.boolean(),
-    }),
-    rest: { method: 'GET', path: '/identity/revocations' },
-    print: (o) => `${String(o.revocations.length)} revocations up to epoch ${String(o.epoch)}`,
-});
-
-// ---------------------------------------------------------------------------- principals
-
 export const whoamiContract = defineContract({
     domain: 'identity',
     action: 'whoami',
-    description: 'Who the caller is, and which organizations they belong to.',
+    description: 'The calling account, its organizations, and what it may call.',
     inputSchema: z.object({}),
     outputSchema: z.object({
         userId: z.string(),
         email: z.string(),
         displayName: z.string(),
-        roles: z.array(z.string()),
+        provisional: z.boolean(),
         organizations: z.array(z.object({
             organizationId: z.string(),
+            slug: z.string(),
             name: z.string(),
             roleKey: z.string(),
+        })),
+        /**
+         * What this account may call, and where.
+         *
+         * `scope` is `undefined` for a permission held everywhere, and an organization id otherwise.
+         * A flat list with a column, not a map keyed by organization: the caller wants to know what
+         * to try, and grouping makes them assemble that themselves.
+         */
+        permissions: z.array(z.object({
+            permission: z.string(),
+            scope: z.string().optional(),
         })),
     }),
     rest: { method: 'GET', path: '/identity/whoami' },
     visibility: 'public',
-    print: (o) => `${o.displayName} <${o.email}>`,
+    print: (o) => `${o.email} (${String(o.organizations.length)} org)`,
 });
 
-export const registerContract = defineContract({
-    domain: 'identity',
-    action: 'register',
-    description: 'Create an account.',
-    inputSchema: z.object({
-        email: z.string().email(),
-        password: z.string().min(8),
-        displayName: z.string().min(1),
-    }),
-    outputSchema: z.object({ userId: z.string() }),
-    rest: { method: 'POST', path: '/identity/register' },
-    visibility: 'public',
-    destructive: true,
-    print: (o) => `registered ${o.userId}`,
-});
-
-/**
- * Give an account a cluster-scoped role, or take one away.
- *
- * **Without this nobody can ever become an operator, and that was the state until 2026-09-07.**
- * `roles` lives on the user row, identity keeps its own store, and `user` is internal for writes —
- * so the only paths to it were a database client and a shell. Every operator-gated contract was
- * therefore unreachable by construction: the fleet console 403'd for everybody, for ever, and no
- * amount of gating or granting on the site could change it. "Manage the platform from the UI" has
- * to include *becoming somebody who may*.
- *
- * ## Who may call it
- *
- * An operator, and nobody else — the role is what grants the role. That is deliberate and it leaves
- * the obvious hole: the *first* operator cannot exist. `ensureFirstOperator` closes it: on a cluster
- * with no accounts identity creates one holding `operator`, generates a real password, prints it to
- * the node's own stdout once, and marks it `provisional` — refused everywhere above `public` until
- * somebody sets a password of their own.
- *
- * An input flag would let any caller nominate themselves, which is not a bootstrap but an
- * escalation. Naming an address in the environment (`MESH_BOOTSTRAP_OPERATOR`, removed) was the
- * earlier answer and was weaker in the way that matters: it granted the role to an account whose
- * password nobody had just chosen, so the wall did not apply to it.
- *
- * ## Cluster-scoped only
- *
- * An organization role belongs on the membership, because it is a fact about a person *in* an
- * organization. The store refuses one here rather than storing something that reads as
- * platform-wide standing — see `mongoStore.updateUser`.
- */
-export const grantRoleContract = defineContract({
-    domain: 'identity',
-    action: 'grant_role',
-    description: 'Grant or revoke a cluster-scoped role on an account.',
-    dependencies: [],
-    inputSchema: z.object({
-        /** Either identifies the account. An email is what a person has to hand. */
-        userId: z.string().min(1).optional(),
-        email: z.string().email().optional(),
-        role: z.string().min(1).describe('A cluster-scoped role key, e.g. operator'),
-        /** False revokes it. Present rather than a second contract: the check is identical. */
-        granted: z.boolean().default(true),
-    }),
-    outputSchema: z.object({
-        userId: z.string(),
-        roles: z.array(z.string()).describe('Every cluster role the account holds afterwards'),
-        changed: z.boolean(),
-    }),
-    rest: { method: 'POST', path: '/identity/roles' },
-    /**
-     * Exposable, and a site that exposes it must gate it at `operator`.
-     *
-     * `public` here means *may be exposed*, as everywhere — the handler checks the caller's role
-     * itself and does not rely on the gate, because a contract that grants platform standing is
-     * the last place to trust that a site was configured correctly.
-     */
-    visibility: 'public',
-    destructive: true,
-    print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
-});
-
-/**
- * **There is deliberately no contract here that lists the accounts on a cluster.**
- *
- * `identity.people` was written on 2026-09-10 (roadmap F13) and withdrawn the same day (freeze gate
- * V8). It was a projection over `user` — email, display name, cluster roles, `suspendedAt`,
- * `provisional`, and nothing else — gated at `operator` and checked in the handler. The projection
- * argument was sound and is not why it went.
- *
- * **It went because the capability should not exist.** A user belongs to no organization
- * (`userCrud` is global; membership is the join), so nothing could narrow it: every caller who could
- * call it saw every account on the deployment. The role it served that to is a
- * bootstrap-and-handover role, not an administration role. An operator brings a cluster up, seeds a
- * hostname, hands the organization over and steps out, and none of that needs to read the cluster's
- * accounts.
- *
- * **What a console should ask instead is who is in *this organization*, which is `membership.find`**
- * — already `scopedBy: 'organizationId'`, already exposable, and bounded by construction rather than
- * by a role check.
- *
- * Two things are worth keeping from the attempt:
- *
- * 1. **`user.find` still cannot be exposed**, and the reason is a column rather than a gate:
- *    `passwordHash` is a field of `UserSchema`, `visibility` is per-action, and no gate subtracts a
- *    field. That gap is real and is freeze gate V2. A projection contract is a workaround for it,
- *    not an answer to it, and writing a fifth one is the signal that the mechanism is missing.
- * 2. **"The handler checks the role itself rather than trusting the site record" is not the stronger
- *    guarantee it was described as.** `meta.user` is a wire field a mesh peer fills in (roadmap D6),
- *    so both rest on the same assertion. The claim appears verbatim above `grantRoleContract` and is
- *    true there in a narrower sense: it is defence against a misconfigured site, not against a peer.
- */
-
-// ---------------------------------------------------------------------------- authorization
-
-/**
- * May a caller holding these roles call this contract?
- *
- * Here rather than in the API because the answer depends on grant *records*, which live here. The
- * API asks; identity decides. That keeps the whole of "what is a role" in one module, which is what
- * lets a deployment define `author` and `compliance` without either the API or the framework
- * knowing those words.
- */
-/**
- * **Define a role, or change one — the only write that may set `inherits`.**
- *
- * `roleCrud`'s `create`/`update`/`replace` are `internal`, deliberately: a role is not an ordinary
- * row, because a generated write would store whatever it was handed and the two rules on `inherits`
- * are not expressible as a zod refinement — both need the rest of the role table to decide, and a
- * schema sees one document.
- *
- * So the rules live in `inheritanceProblem` and this is what calls it. Without a contract they would
- * have been a pure function nothing reached, which is F30's shape exactly, and writing them without
- * writing this would have repeated it in the same file that documents it.
- */
-export const roleUpsertContract = defineContract({
-    domain: 'identity',
-    action: 'role_upsert',
-    description: 'Define a role, or change one. Refuses an inheritance edge that cycles or crosses scope.',
-    inputSchema: RoleSchema,
-    outputSchema: z.object({
-        key: z.string(),
-        created: z.boolean().describe('False when this replaced a role that already existed'),
-    }),
-    rest: { method: 'POST', path: '/identity/roles/define' },
-    /**
-     * Exposable, and gated at `operator` wherever it is exposed.
-     *
-     * A contract defaults to internal, and the default is right for most of identity — a site that
-     * exposed `ticket_revoke` took itself down, which is why `control-site.test.ts` refuses a list
-     * naming an internal contract. This one is different in the way that matters: **since F30 a role
-     * and its grants decide who may call what, and an operator who cannot define a role cannot
-     * operate the platform.** The alternative is roles that exist only where somebody edited a
-     * database by hand.
-     */
-    visibility: 'public',
-    print: (o) => `${o.key} ${o.created ? 'defined' : 'updated'}`,
-});
-
-export const permitsContract = defineContract({
-    domain: 'identity',
-    action: 'permits',
-    description: 'Whether a caller holding these roles may call a contract.',
-    inputSchema: z.object({
-        roles: z.array(z.string()),
-        contract: z.string().min(1),
-        organizationId: z.string().optional(),
-    }),
-    outputSchema: z.object({ permitted: z.boolean() }),
-    rest: { method: 'POST', path: '/identity/permits' },
-    print: (o) => (o.permitted ? 'permitted' : 'denied'),
-});
-
-// ---------------------------------------------------------------------------- api tokens
-
-export const apiTokenValidateContract = defineContract({
-    domain: 'identity',
-    action: 'api_token_validate',
-    description: 'Is this API token valid, and which principal does it represent.',
-    inputSchema: z.object({
-        token: z.string().min(1),
-    }),
-    outputSchema: z.object({
-        valid: z.boolean(),
-        userId: z.string().optional(),
-        organizationId: z.string().optional(),
-        organizationSlug: z.string().optional(),
-        roles: z.array(z.string()).optional(),
-        name: z.string().optional(),
-    }),
-    rest: { method: 'POST', path: '/identity/api-token/validate' },
-    print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
-});
-
-export const apiTokenIssueContract = defineContract({
-    domain: 'identity',
-    action: 'api_token_issue',
-    description: 'Mint an API token for a principal.',
-    inputSchema: z.object({
-        name: z.string().min(1),
-        userId: z.string().min(1),
-        organizationId: z.string().optional(),
-        roles: z.array(z.string()).optional(),
-        expiresInMs: z.number().optional(),
-    }),
-    outputSchema: z.object({
-        token: z.string(),
-        tokenId: z.string(),
-        name: z.string(),
-        userId: z.string(),
-        organizationId: z.string().optional(),
-        roles: z.array(z.string()),
-        createdAt: z.number(),
-        expiresAt: z.number().optional(),
-    }),
-    rest: { method: 'POST', path: '/identity/api-token/issue' },
-    destructive: true,
-    print: (o) => `issued api token "${o.name}" for ${o.userId}`,
-});
-
-interface CrudContractSet {
-    readonly find: ToolContract;
-    readonly findOne: ToolContract;
-    readonly count: ToolContract;
-    readonly get: ToolContract;
-    readonly resolve: ToolContract;
-    readonly create: ToolContract;
-    readonly createMany: ToolContract;
-    readonly update: ToolContract;
-    readonly replace: ToolContract;
-    readonly delete: ToolContract;
-}
-
-export function extractCrudContracts(crud: CrudContractSet): readonly ToolContract[] {
-    return [
-        crud.find,
-        crud.findOne,
-        crud.count,
-        crud.get,
-        crud.resolve,
-        crud.create,
-        crud.createMany,
-        crud.update,
-        crud.replace,
-        crud.delete,
-    ];
-}
-
-export const identityContracts: readonly ToolContract[] = [
+export const allIdentityContracts: readonly ToolContract<z.ZodTypeAny, z.ZodTypeAny>[] = [
     ticketIssueContract,
     ticketValidateContract,
-    ticketRevokeContract,
     signOutContract,
     setPasswordContract,
-    revocationsSinceContract,
     whoamiContract,
-    registerContract,
-    grantRoleContract,
-    roleUpsertContract,
-    permitsContract,
-    apiTokenValidateContract,
-    apiTokenIssueContract,
 ];
 
-export const identityCrudContracts: readonly ToolContract[] = [
-    ...extractCrudContracts(userCrud),
-    ...extractCrudContracts(organizationCrud),
-    ...extractCrudContracts(membershipCrud),
-    ...extractCrudContracts(roleCrud),
-    ...extractCrudContracts(grantCrud),
-    ...extractCrudContracts(ticketCrud),
-    ...extractCrudContracts(apiTokenCrud),
-];
-
-export const allIdentityContracts: readonly ToolContract[] = [
-    ...identityContracts,
-    ...identityCrudContracts,
-];
+export const identityCrudCollections = [
+    userCrud,
+    organizationCrud,
+    membershipCrud,
+    ticketCrud,
+] as const;

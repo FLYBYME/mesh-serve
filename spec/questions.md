@@ -12,7 +12,7 @@ specific day.
 | **B** | before any collection is written | 4 |
 | **C** | before the contract rename | 3 |
 | **D** | structural — they decide how big this package is | 6 |
-| **E** | smaller, and will otherwise be forgotten | 6 |
+| **E** | smaller, and will otherwise be forgotten | 7 |
 
 ---
 
@@ -78,13 +78,36 @@ to an owner field that is now doing the work `scopedBy` did for free. What check
 
 Where: [collections.md](./collections.md) §3.3.
 
-### B2. One name for the scope field
+### B2. One name for the scope field — **and `scopedBy` is narrower than it looked**
 
-`tenantId` and `organizationId` are the same value under two names, because `site` declared one and
-`membership` declared the other and the gate had to carry both into every handler. **A migration, not a
-decision** — but it gets harder per collection written.
+**Answered in part by building it, 2026-09-11, and the answer changes two other specs.**
 
-Where: [identity.md](./identity.md) §8.
+`scopedBy` cannot be used on a collection the scope is resolved *from*. A request arrives, the gate
+reads the caller's memberships to decide which organization they are in, and `scopedBy: 'organizationId'`
+refuses that read because no scope has been resolved yet. The node died on its first boot:
+
+```
+Scoped collection "membership" requires a resolved "organizationId" scope
+```
+
+Every path into it hits the same wall — bootstrap, the gate, and `identity.whoami`. **Membership is
+narrowed by a hook instead**, to the caller's own rows, which is stricter than the scope would have
+been: `scopedBy` lets a member read every membership in their organization, the hook lets them read
+their own.
+
+The same applies to `site`, for the reason [collections.md](./collections.md) §2 already gave and
+nobody connected: *a collection that cannot be read without a scope cannot be on the serving path*.
+Resolving a hostname happens before there is a caller. **Site is a public collection with an owner
+field**, which makes **B1** block it too.
+
+So the shape is: **`scopedBy` is for collections that hang off a resolved scope, never for the ones
+that produce it.** Still open is the original question — one name, `tenantId` or `organizationId` —
+now narrowed to the collections that genuinely are scoped. `tenantId` and `organizationId` are the
+same value under two names, because `site` declared one and `membership` declared the other and the
+gate had to carry both into every handler. **A migration, not a decision** — and the slice writes
+`organizationId` everywhere, so the migration is smaller than it was.
+
+Where: [identity.md](./identity.md) §8, [collections.md](./collections.md) §1.
 
 ### B3. Asking for a hidden field: refusal or silent drop
 
@@ -201,14 +224,29 @@ The user's own sketch has `identity update --email` in it, so this is a request,
 
 Where: [cli.md](./cli.md) §1.
 
-### E3. Whether `_describe` is exempt from the provisional refusal
+### E3. Whether `_describe` is exempt from the provisional refusal — **answered**
 
-A provisional account is refused ahead of every check, deliberately. So a site's description is readable
-with no credential, readable with a garbage credential, and **refused with a real provisional one** —
-being signed in as the account the platform just created for you is the only state in which the public
-endpoint refuses.
+**Closed 2026-09-11 by a test written to assert the ordering.** The answer is broader than the
+question: **public is public, whoever is asking.** The provisional check runs *after* the public
+case, not before it.
 
-Where: [serving.md](./serving.md) §6.
+The question framed this as an oddity. It is worse than odd. `identity.sign_out` is public, so an
+unclaimed account **could not sign out**; `identity.ticket_issue` is public, so it could not sign in
+again either. A restriction meaning *do nothing until you set a password* must not also mean *and you
+may not use the door you came in through*.
+
+Where: [serving.md](./serving.md) §6, and `test/gate.test.ts`.
+
+### E7. A JSON-shaped parameter cannot survive a query string
+
+**New, 2026-09-11.** Every generated `find` takes `query`, a record, and `limit`, a number — and over
+GET both arrive as text, so `?query={"userId":"x"}` failed its own schema with *"Expected object,
+received string"*.
+
+**Part of the reason nothing passes these parameters is that nothing could.** The projection now
+parses a value that looks like JSON, a number or a boolean and leaves everything else alone —
+narrowly, so `127.0.0.1` stays a string. Whether that belongs in the projection or in the input
+schema is the open part, and it is **A4**-shaped: decided late, it lands on the wrong side.
 
 ### E4. Where a bare repository path fits
 

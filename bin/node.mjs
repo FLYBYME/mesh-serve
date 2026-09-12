@@ -2,21 +2,20 @@
 /**
  * A mesh-serve node.
  *
- * One process running all five services, reachable over the mesh and over HTTP. Not a deployment
- * story — that is the fleet's job, and it is unbuilt — but the thing that has been missing while
- * every service in this repository could only be exercised by a test that constructed it.
+ * One process: identity, the site record, and the HTTP projection. Not a deployment story — that is
+ * the fleet's job and it is unbuilt — but the thing that has to exist before any of it can be
+ * exercised by something that is not a test.
  *
  * ```
- * node bin/node.mjs --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-live
+ * node bin/node.mjs --ws 4001 --api 5005 --db mesh-serve-dev
  * ```
  *
  * Configuration comes from a `.env` beside the checkout, or `/etc/mesh/node.env`. Flags override it
- * for ports and paths; secrets are only ever in the file. See `docs/operating.md`.
+ * for ports and paths; secrets are only ever in the file.
  */
 
 import {
     BrokerModule, DatabaseModule, JSONSerializer, MeshApp, NetworkModule, RegistryModule,
-    globalContractRegistry,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
@@ -25,24 +24,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ApiService } from '../dist/api/api.service.js';
-import { FleetService } from '../dist/fleet/fleet.service.js';
-// The one list. `reconcileNode` reads it too and treats these as permanently satisfied; two copies
-// would disagree the day somebody adds a fourth, and the symptom is a node that cannot converge.
-import { CORE_SERVICES } from '../dist/fleet/schema/node.js';
-import { Supervisor } from '../dist/supervisor/Supervisor.js';
-import { SupervisorService } from '../dist/supervisor/SupervisorService.js';
+import {
+    ApiService, IdentityService, ServeService, bootstrap, collectionServices,
+} from '../dist/index.js';
 
-// Manifest paths are resolved against this, so `./dist/...` means this repository wherever it is
-// checked out — not the directory somebody happened to run the command from.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-import { createIdentityModule, mongoStore } from '../dist/identity/index.js';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => {
     const at = argv.indexOf(`--${name}`);
     return at === -1 ? fallback : argv[at + 1];
 };
+
 
 /**
  * Configuration comes from a file, not from the command line.
@@ -102,40 +95,20 @@ const loadEnvFile = () => {
     return undefined;
 };
 
+
 const envFile = loadEnvFile();
 
 const wsPort = Number(flag('ws', '4001'));
 const wsHost = flag('ws-host', '127.0.0.1');
-const cdnPort = Number(flag('cdn', '8080'));
-const cdnUrl = flag('cdn-url', process.env.CDN_URL ?? `http://127.0.0.1:${String(cdnPort)}`);
 const apiPort = Number(flag('api', '5005'));
-
-/**
- * Where the control site sends its own requests.
- *
- * The cdn creates that site (`cdn/methods/control.ts`) and knows its own origin but not the api's —
- * they are deliberately separate ports — and `site.api` must be a real origin rather than empty. The
- * node chose both numbers, so the node is what says so.
- *
- * **Set here, beside the flag, and not where `ApiService` is constructed.** That is two hundred
- * lines further down and *after* the Supervisor starts the switchable services, so the cdn had
- * already read an unset variable by the time it was assigned. The value was right and it arrived
- * late, which reads in the log as a validation error about an empty string.
- */
-process.env.MESH_CONTROL_API ??= `http://127.0.0.1:${String(apiPort)}`;
+const apiHost = flag('api-host', '127.0.0.1');
+const controlHost = flag('control-host', '127.0.0.1');
 
 const mongo = flag('mongo', process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
 const dbName = flag('db', 'mesh-serve');
-const blobRoot = flag('artifacts', process.env.MESH_BLOB_ROOT ?? './.artifacts');
-const bootstrap = (flag('bootstrap', process.env.MESH_BOOTSTRAP ?? '') || '')
+const peers = (flag('bootstrap', process.env.MESH_BOOTSTRAP ?? '') || '')
     .split(',').map((n) => n.trim()).filter((n) => n !== '');
 
-/**
- * Say where the credential is going, without printing it.
- *
- * Hoisted above the banner because the pre-flight below needs it too — a diagnostic that leaks the
- * password while explaining why the password did not work would be its own incident.
- */
 const safeUri = (uri) => uri.replace(/^(\w+(?:\+\w+)?:\/\/)([^@/]*)@/, (_all, scheme, userinfo) =>
     `${scheme}${String(userinfo).split(':')[0]}:***@`);
 
@@ -214,6 +187,7 @@ async function preflightDatabase(uri, name) {
     }
 }
 
+
 if (!await preflightDatabase(mongo, dbName)) {
     // Exit rather than hand a URI that is known not to work to the framework, which would spend
     // another 30 seconds arriving at the same conclusion less usefully.
@@ -227,229 +201,65 @@ app.use(new DatabaseModule({ uri: mongo, dbName }));
 app.use(new NetworkModule({
     port: wsPort,
     transports: [new WSTransport(new JSONSerializer(), wsPort, wsHost)],
-    bootstrapNodes: bootstrap,
+    bootstrapNodes: peers,
 }));
 app.use(new BrokerModule());
 
 await app.start();
 
-// After start, always: registerModule queues into pendingModules before it and that flush is
-// unawaited, so a module registered earlier may never be mounted.
-
 /**
- * **The fleet is always on, and the rest are switches.**
+ * The three services, registered directly.
  *
- * This node registered every service directly, so the Supervisor owned nothing and
- * `supervisor.service_status` was not mounted anywhere. `node.assign` then failed with *"Local tool
- * not found: supervisor.service_status — no domain 'supervisor' is mounted"*, which is the fleet
- * correctly reporting that it has no mechanism to switch anything. Assignment was a control surface
- * over nothing.
+ * **No supervisor, and that is honest rather than a simplification.** A supervisor is a mechanism
+ * for switching services a node was assigned; nothing here is assigned yet, so a supervisor would be
+ * a control surface over nothing — which is exactly what the last one was, and `spec/fleet.md` §1 is
+ * the record of finding that out.
  *
- * `fleet` stays direct because it is the thing that answers *what should I be running* — a node
- * that had to be told to run the service that receives its assignment could never receive one.
- * Same reason `identity` and `api` stay direct: without them nobody can authenticate to give the
- * order, and a node that can be switched off from the outside and not back on is a node somebody
- * drives to a datacentre for.
- *
- * Everything else goes into the Supervisor's manifest and can be started and stopped live.
+ * Order matters once: identity's first boot creates the account that `bootstrap` then needs.
  */
-await app.registerModule(new FleetService());
-
-const supervisor = new Supervisor(app, { services: [] }, repoRoot);
-await app.registerModule(new SupervisorService(supervisor));
-
-/**
- * The switchable set, built in code rather than read from a manifest file.
- *
- * A file would be a second place to keep the same list, and it would go stale the first time a
- * service moved — the paths are `dist/*` in this repository and this repository already knows them.
- * `node.provision` writes *new* entries at run time through `registerEntry`; these are the ones
- * that ship with the node.
- *
- * None of these takes a constructor argument it cannot default: the Supervisor does `new
- * ServiceClass()`, and `blobRoot`, the CDN port and the CDN URL all fall back to the environment.
- * They are exported here so a Supervisor-constructed instance lands on the same values this
- * process was started with.
- */
-process.env.MESH_BLOB_ROOT = blobRoot;
-process.env.CDN_PORT = String(cdnPort);
-process.env.CDN_URL = cdnUrl;
-
-for (const [name, path] of [
-    ['catalog', './dist/catalog/catalog.service.js'],
-    ['builder', './dist/builder/builder.service.js'],
-    ['cdn', './dist/cdn/cdn.service.js'],
-    /**
-     * Switchable like the rest, and that is the decision rather than an oversight.
-     *
-     * Telemetry is the one service whose absence must not break anything: a node that cannot record
-     * what happened still has to serve. Making it switchable says so — a deployment that does not
-     * want it assigns it nowhere and every other service carries on, because nothing calls into it
-     * synchronously. The cdn and api write through a sink that falls back to a process-local
-     * default when the service is not there.
-     */
-    ['telem', './dist/telem/telem.service.js'],
-]) {
-    supervisor.registerEntry({ name, path, dependsOn: [] });
+// The collections first: each is its own module so that mesh dispatches its CRUD hooks to it, and
+// a service below that calls `user.find` needs the collection already mounted to answer.
+for (const collection of collectionServices()) {
+    await app.registerModule(collection);
 }
 
-/**
- * What this node runs, asked rather than assumed.
- *
- * `node.hello` answers with the desired set, which is the whole point of the fleet: a node is dumb
- * and loads what it is told to load. **A node with no assignment yet starts everything**, because
- * the alternative is that adding the fleet silently turned every existing deployment off.
- */
-const assignment = await app.call('node.hello', { hostname: app.nodeID }).catch(() => null);
-const desired = assignment?.services ?? [];
-
-const switchable = (desired.length > 0 ? desired : ['catalog', 'builder', 'cdn'])
-    .filter((name) => !CORE_SERVICES.includes(name));
-
-for (const name of switchable) {
-    await supervisor.serviceStart(name).catch((error) => {
-        process.stderr.write(`[node] could not start ${name}: ${String(error?.message ?? error)}\n`);
-    });
-}
-/**
- * The `authorize` hook, without which **every scoped collection is unreachable over HTTP**.
- *
- * `api.service.ts` says it plainly: *"The usual cause is a site with no `authorize` hook. The coarse
- * gate cannot resolve a scope — only the site knows what an organization means to it."* The gate
- * resolves a caller's identity and stops there; the hook turns that caller into the **scope** the
- * request runs in, which becomes `meta.user.tenant_id` and confines every `scopedBy` collection.
- *
- * With no hook the resolved scope is always empty, so D3's `scopedBy` refuses every read and write —
- * `site.find` answered 401 for a correctly signed-in caller while `part.find` and `release.find`
- * answered 200, because those two are not scoped. Found by the first console to get past sign-in,
- * which is the third time that sentence has been written about this repository.
- *
- * **A caller-supplied organization is a request, never a grant.** The header names one; this hook
- * checks the caller is actually a member before honouring it, and refuses rather than falling back
- * to a different organization — silently acting in the wrong scope is the failure that matters.
- */
-/**
- * The rule is `resolveScope` and the hook is `membershipAuthorize`, both in
- * `src/api/methods/`, both tested. Two moves, for the same reason each time.
- *
- * F22 moved the *rule* out of the inline version that lived here: the case where a caller belongs
- * to several organizations had never been run, and the first cluster with two tenants found every
- * scoped read answering 401 for its operator. What stayed behind was the fetch — and it kept this
- * file the only place a scoped read could be reached from, so the integration test that would have
- * caught F22 could not be written without copying it. It is a library function now, and this line
- * is what the test runs too.
- */
-const { membershipAuthorize } = await import('../dist/api/methods/authorize.js');
-const authorize = membershipAuthorize((tool, params, options) => app.call(tool, params, options));
-
-const api = new ApiService({ port: apiPort, authorize });
-await app.registerModule(api);
-const database = app.getProvider('database');
-await app.registerModule(createIdentityModule({ store: mongoStore(database) }));
+await app.registerModule(new IdentityService());
+await app.registerModule(new ServeService());
+await app.registerModule(new ApiService({ port: apiPort, host: apiHost }));
 
 /**
- * Approvals: a call an agent asked to make, parked until a person decides (`spec/mcp.md` §7).
+ * Bring the cluster up.
  *
- * Registered unconditionally rather than behind `--mcp`, because the *deciding* half is HTTP — a
- * person approves from a board or the CLI, on a node that may serve no agent surface at all. A node
- * without this still serves; `McpService` finds no `approval.check` to offer and falls back to
- * refusing destructive calls, which is what it did before any of this existed.
+ * A cluster with no sites cannot be reached, so this runs after every module is registered and
+ * creates what is missing: the first organization, the operator's membership in it, and the control
+ * site on `127.0.0.1`. Idempotent — a restart creates nothing and says so by printing nothing.
  */
-const { ApprovalService } = await import('../dist/approval/index.js');
-await app.registerModule(new ApprovalService());
-
-/**
- * **`--service <path>` — load a module this node did not ship with.**
- *
- * A site's contracts have to *exist in a process* before the api can serve them. `describeExposure`
- * builds a route from a contract's shape — its method, its path, its input schema — and reads those
- * from `globalContractRegistry`, which is populated at **import time** by whatever the process
- * loaded. So a site can grant twenty contracts and expose none of them, which is exactly what
- * happened:
- *
- *     [api] flowboard.localhost exposes 20 contract(s) nothing provides: card.create, card.find, …
- *
- * The platform's answer is `node.provision` + `node.assign`: the fleet clones a repository at a
- * pinned ref and the supervisor mounts it. That is right for a machine somebody else runs, and it
- * is ceremony — an allowlist, an operator role, a tag rather than a branch — for a laptop.
- *
- * **This is the development path and it is marked as one.** It takes a path, imports it, and mounts
- * the default export. No clone, no ref, no allowlist: it trusts the person who typed it, which is
- * the whole difference between this and provisioning, and the reason this must never be how a
- * deployed node gets its services.
- */
-const servicePaths = [];
-for (let i = 0; i < process.argv.length - 1; i += 1) {
-    if (process.argv[i] === '--service') servicePaths.push(process.argv[i + 1]);
-}
-
-for (const servicePath of servicePaths) {
-    const resolved = path.resolve(process.cwd(), servicePath);
-    const module = await import(resolved);
-    const Service = module.default ?? module.Service;
-
-    if (typeof Service !== 'function') {
-        process.stderr.write(
-            `--service ${servicePath}: no default export to construct.\n`
-            + `  A service module default-exports its class, the way the supervisor expects to find it.\n`,
-        );
-        process.exit(2);
-    }
-
-    await app.registerModule(new Service());
-    process.stdout.write(`  service   ${servicePath} (development — provision it for real)\n`);
-}
-
-/**
- * **The agent surface, off unless a port is given.**
- *
- * `--mcp 5006` starts it; no flag starts nothing. Off by default because an MCP endpoint is a way
- * for something that is not a person to drive a site, and a node should not acquire one because it
- * was upgraded.
- *
- * It is handed the api's own `descriptorForHost` and `ticketCache` rather than resolving a site or
- * validating a ticket itself. That is the whole design: one exposure, two projections. If the MCP
- * computed its own view of what a site exposes, `visibility` would mean one thing over HTTP and
- * another to an agent, and the second copy is the one that goes wrong.
- */
-const mcpPort = flag('mcp', process.env.MESH_MCP_PORT ?? '');
-if (mcpPort !== '') {
-    const { McpService } = await import('../dist/api/mcp.service.js');
-    await app.registerModule(new McpService(
-        (host) => api.descriptorForHost(host),
-        (key) => globalContractRegistry.get(key),
-        {
-            port: Number(mcpPort),
-            ...(api.ticketCache === undefined ? {} : { tickets: api.ticketCache }),
-            ...(authorize === undefined ? {} : { authorize }),
-        },
-    ));
-}
+const brought = await bootstrap(app, {
+    host: controlHost,
+    announce: (line) => process.stdout.write(`${line}\n`),
+});
 
 /**
  * **The password is not printed, and it was.**
  *
- * This banner wrote `mongo` verbatim. Against `mongodb://localhost:27017` that is harmless and it
- * is what every local run shows, so it survived. The first time this node was pointed at Atlas it
+ * This banner wrote `mongo` verbatim. Against `mongodb://localhost:27017` that is harmless and it is
+ * what every local run shows, so it survived. The first time this node was pointed at Atlas it
  * printed a live `mongodb+srv://user:password@…` into the systemd journal — on every boot, readable
  * by anything that can read journals, and shipped wherever logs get shipped.
  *
  * A banner exists to say *where am I pointed*, which the host and database name answer completely.
  * The credential was never part of the question.
  */
-const safeMongo = safeUri(mongo);
-
 process.stdout.write(
     `\nmesh-serve is up\n` +
-    // The host it actually binds, not a hardcoded loopback: on the head this is 0.0.0.0 and
-    // printing 127.0.0.1 made a node reachable from the internet look like one that was not.
+    // The host it actually binds, not a hardcoded loopback: printing 127.0.0.1 for a node bound to
+    // 0.0.0.0 made one reachable from the internet look like one that was not.
     `  mesh      ws://${wsHost}:${String(wsPort)}\n` +
-    `  cdn       ${cdnUrl}\n` +
-    `  api       http://127.0.0.1:${String(apiPort)}\n` +
-    `  mcp       ${mcpPort === '' ? '(off — pass --mcp <port>)' : `http://127.0.0.1:${String(mcpPort)}/mcp`}\n` +
-    `  mongo     ${safeMongo}/${dbName}\n` +
-    `  artifacts ${blobRoot}\n` +
-    `  config    ${envFile ?? "(no .env found — using the environment only)"}\n\n` +
+    `  api       http://${apiHost}:${String(apiPort)}\n` +
+    `  control   ${brought.host} — ${String(brought.created.length)} thing(s) created this boot\n` +
+    `  mongo     ${safeUri(mongo)}/${dbName}\n` +
+    `  config    ${envFile ?? '(no .env found — using the environment only)'}\n\n` +
+    `  npx mesh-serve login\n\n` +
     `Ctrl-C to stop.\n`,
 );
 
