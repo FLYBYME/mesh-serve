@@ -217,15 +217,48 @@ await app.start();
  *
  * Order matters once: identity's first boot creates the account that `bootstrap` then needs.
  */
-// The collections first: each is its own module so that mesh dispatches its CRUD hooks to it, and
-// a service below that calls `user.find` needs the collection already mounted to answer.
-for (const collection of collectionServices()) {
-    await app.registerModule(collection);
-}
+/**
+ * **A failure while bringing services up is a sentence and an exit, not an unhandled rejection.**
+ *
+ * Top-level `await` in a module turns a thrown error into an unhandled rejection: node prints the
+ * whole stack and exits 1. That is the wrong output for the two things that actually go wrong here —
+ * a port in use and a database that moved — and it is especially wrong *after* the first-boot banner,
+ * which leaves somebody holding a password that is shown once, reading a stack, on a dead cluster.
+ */
+/**
+ * **The first-boot banner is held, not printed where it happens** — spec/questions.md E6.
+ *
+ * It is shown once and is not recoverable, and identity creates the account early, so printing it
+ * inline buries it under one log line per registered tool — around sixty of them. A message that has
+ * scrolled past has not been shown.
+ *
+ * Worse, a startup that then failed — a port in use — left somebody holding that password above a
+ * stack trace on a cluster that is not running. Held until the end, it is printed once everything is
+ * actually up, immediately above the command it tells you to run.
+ */
+let firstBoot;
 
-await app.registerModule(new IdentityService());
-await app.registerModule(new ServeService());
-await app.registerModule(new ApiService({ port: apiPort, host: apiHost }));
+const bringUp = async () => {
+    // The collections first: each is its own module so that mesh dispatches its CRUD hooks to it,
+    // and a service below that calls `user.find` needs the collection already mounted to answer.
+    for (const collection of collectionServices()) {
+        await app.registerModule(collection);
+    }
+
+    await app.registerModule(new IdentityService({
+        announce: (banner) => { firstBoot = banner; },
+    }));
+    await app.registerModule(new ServeService());
+    await app.registerModule(new ApiService({ port: apiPort, host: apiHost }));
+};
+
+try {
+    await bringUp();
+} catch (error) {
+    process.stderr.write(`\n${error?.message ?? String(error)}\n\n`);
+    await app.stop().catch(() => {});
+    process.exit(1);
+}
 
 /**
  * Bring the cluster up.
@@ -250,6 +283,10 @@ const brought = await bootstrap(app, {
  * A banner exists to say *where am I pointed*, which the host and database name answer completely.
  * The credential was never part of the question.
  */
+// Held from the moment identity created the account, so it lands here rather than sixty tool
+// registrations ago — and only once everything is actually running.
+if (firstBoot !== undefined) process.stdout.write(firstBoot);
+
 process.stdout.write(
     `\nmesh-serve is up\n` +
     // The host it actually binds, not a hardcoded loopback: printing 127.0.0.1 for a node bound to

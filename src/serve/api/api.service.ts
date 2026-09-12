@@ -80,7 +80,30 @@ export class ApiService extends ServiceModule {
             });
         });
 
-        await new Promise<void>((resolve) => { server.listen(this.port, this.bindHost, resolve); });
+        /**
+         * **A port already in use is an operator's problem with an obvious fix, so it gets a
+         * sentence rather than a stack.**
+         *
+         * Without this the node printed the first-boot banner — the password that is shown once and
+         * is not recoverable — and *then* died on an unhandled `EADDRINUSE` from deep inside `net`.
+         * Somebody is left holding a credential, looking at a stack trace, on a cluster that is not
+         * running. Found by starting a second node while the first was still up, which is the most
+         * ordinary thing anybody does here.
+         */
+        await new Promise<void>((resolve, reject) => {
+            server.once('error', (error: NodeJS.ErrnoException) => {
+                reject(error.code === 'EADDRINUSE'
+                    ? new Error(
+                        `Port ${String(this.port)} is already in use on ${this.bindHost}. `
+                        + `Another node is probably running — stop it, or start this one with `
+                        + `--api <port>.`,
+                    )
+                    : error);
+            });
+
+            server.listen(this.port, this.bindHost, () => { resolve(); });
+        });
+
         this.server = server;
     }
 
