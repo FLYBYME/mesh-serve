@@ -262,13 +262,18 @@ swallows its own failure.
 
 Where: [fleet.md](./fleet.md) §3.
 
-### E6. How the first-boot banner survives the log stream
+### E6. How the first-boot banner survives the log stream — **answered**
 
-It is printed once, is not recoverable, and currently scrolls past under one log line per registered
-tool. **A message that has scrolled past has not been shown.** Either registration stops logging per
-tool, or the banner is re-printed at the end of startup, or both.
+**Closed 2026-09-11.** It is printed once and is not recoverable, and it was scrolling past under one
+log line per registered tool — around sixty of them. **A message that has scrolled past has not been
+shown.**
 
-Where: [cli.md](./cli.md) §3.
+Identity now hands the banner to whoever started the node instead of printing it, and the launcher
+prints it after everything is up, immediately above the command it tells you to run. That also fixes
+the worse case found alongside it: a startup that failed *after* the banner — a port already in use —
+left somebody holding a password above a stack trace, on a cluster that was not running.
+
+Where: [cli.md](./cli.md) §3, and `bin/node.mjs`.
 
 ---
 
