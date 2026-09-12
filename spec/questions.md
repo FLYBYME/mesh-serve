@@ -3,44 +3,66 @@
 **Every unresolved decision from the other specs, in one place.** Each says which spec it belongs to,
 what depends on it, and what happens if it is answered late.
 
-They are grouped by deadline rather than by topic, because three of them stop being cheap on a
+They are grouped by deadline rather than by topic, because three of the groups stop being cheap on a
 specific day.
+
+| group | deadline | count |
+| --- | --- | --- |
+| **A** | before mesh 2 → 3, or permanent | 4 |
+| **B** | before any collection is written | 4 |
+| **C** | before the contract rename | 3 |
+| **D** | structural — they decide how big this package is | 6 |
+| **E** | smaller, and will otherwise be forgotten | 6 |
 
 ---
 
 ## A. Before mesh 2 → 3, or permanent
 
-`surfdns/architecture/the-freeze.md`: *"the version bump is the last cheap breaking change."* These
-are `defineCrud` semantics. Answered after the bump, each costs a major version.
+`surfdns/architecture/the-freeze.md`: *"the version bump is the last cheap breaking change."* These are
+`defineCrud` semantics. **Answered after the bump, each costs a major version.**
 
 ### A1. Field-level visibility — surfdns **V2**
 
-A collection must be able to declare a field unreadable, so `find` cannot return it. Today
-`visibility` is per action, no gate subtracts a field, and the workaround is a hand-written contract
-per instance — there have been five.
+A collection must be able to declare a field unreadable, so `find` cannot return it. Today `visibility`
+is per action, no gate subtracts a field, and the workaround is a hand-written contract per instance —
+there have been five.
 
-**Depends on it:** an operator holding `identity.user.find` at all; showing a person's name anywhere
-on the platform; *who holds this role* being answerable.
+**Depends on it:** an operator holding `identity.user.find` at all; showing a person's name anywhere on
+the platform; *who holds this role* being answerable. Every action on `user` is internal because one
+field must never leave, so the whole collection is sealed.
 
 **Half-answered already.** mesh now parses a projected read against a partial schema, so an output
-schema that omits a field is no longer bypassed by `fields`. What remains is declaring it, and
+schema that omits a field is no longer bypassed by `fields`. What remains is **declaring** it, and
 refusing a projection that asks for it by name.
+
+Where: [collections.md](./collections.md) §3.1.
 
 ### A2. Shaping a create input — mesh-serve **F10**
 
-The same gap on the write side. `create` and `update` must write fields that `find` must not read,
-and one declaration has to distinguish them.
+The same gap on the write side. `create` and `update` must write fields that `find` must not read, and
+one declaration has to distinguish them. Today input and output schemas both derive from one base
+schema, so there is nowhere to say it.
+
+Where: [collections.md](./collections.md) §3.2.
 
 ### A3. Pagination as a default, not a parameter — surfdns **V1**, **V4**
 
-Every generated `find` already takes `limit`, `offset`, `sort`, `search`. Nothing passes them, and
-nothing enforces a maximum. A public collection (§B1) makes this urgent rather than tidy: an unscoped
-read with no ceiling is the unbounded find this platform bans.
+Every generated `find` already takes `limit`, `offset`, `sort`, `search`. **Nothing has ever passed
+one**, and nothing enforces a maximum. A public collection (**B1**) makes this urgent rather than tidy:
+an unscoped read with no ceiling is the unbounded find this platform bans.
+
+The question is whether the default and the maximum are `defineCrud`'s or the projection's. If they are
+the projection's, every projection needs them and one will forget.
+
+Where: [collections.md](./collections.md) §1, §3.3.
 
 ### A4. What else belongs in the bump
 
 Relations and nested routing could be `defineCrud`'s or mesh-serve's. **Deciding is itself the
-deadline.** Anything left ambiguous lands on the wrong side by default.
+deadline** — anything left ambiguous lands on the wrong side by default, and `relations` is already
+declared in mesh with nothing reading it.
+
+Where: [collections.md](./collections.md) §3.4, §5.
 
 ---
 
@@ -48,23 +70,38 @@ deadline.** Anything left ambiguous lands on the wrong side by default.
 
 ### B1. What gates writes on a public collection
 
-Settled: a collection is scoped **or** public, and publishing is a contract that crosses between
-them. Not settled: reads on a public collection are open by construction, so creates and updates
-belong to an owner field that is now doing the work `scopedBy` did for free. What checks it, and
-where.
+Settled: a collection is scoped **or** public, and publishing is a contract that crosses between them.
+**Not settled:** reads on a public collection are open by construction, so creates and updates belong
+to an owner field that is now doing the work `scopedBy` did for free. What checks it, and where.
 
 **Depends on it:** the catalog, which is the first public collection and the reason this exists.
+
+Where: [collections.md](./collections.md) §3.3.
 
 ### B2. One name for the scope field
 
 `tenantId` and `organizationId` are the same value under two names, because `site` declared one and
-`membership` declared the other and meta had to carry both. A migration, not a decision — but it gets
-harder per collection written.
+`membership` declared the other and the gate had to carry both into every handler. **A migration, not a
+decision** — but it gets harder per collection written.
+
+Where: [identity.md](./identity.md) §8.
 
 ### B3. Asking for a hidden field: refusal or silent drop
 
-Recorded as a refusal naming the field, on the grounds that a caller who asks has either made a
-mistake or made an attempt. Not built.
+Recorded as a refusal naming the field, on the grounds that a caller who asks has either made a mistake
+or made an attempt. Not built, and the opposite is defensible for a projection that is merely optimistic
+about which columns it wants.
+
+Where: [collections.md](./collections.md) §3.1.
+
+### B4. Where a repository credential lives
+
+A private repository needs one. A collection readable by an organization is not where it goes, so the
+row carries a reference — and nothing says what it references. **New with the repository collection**,
+and it has to be answered before that collection is written rather than after somebody has put a token
+in a field.
+
+Where: [building.md](./building.md) §2, §8.
 
 ---
 
@@ -72,22 +109,27 @@ mistake or made an attempt. Not built.
 
 ### C1. The rename itself
 
-174 contracts, flat `domain.action`, moving to two rooted hierarchies: `identity.*` and `serve.*`,
-with a tenant's own contracts outside both. Mechanical and large.
+174 contracts, flat `domain.action`, moving to two rooted hierarchies: `identity.*` and `serve.*`, with
+a tenant's own contracts outside both. **Mechanical and large.**
 
-**Everything in [identity.md](./identity.md) depends on it** — wildcards mean nothing without a
-hierarchy — and it deletes `PLATFORM_DOMAINS`, the 23-name list maintained by hand.
+**Everything in [identity.md](./identity.md) §4 onward depends on it** — wildcards mean nothing without
+a hierarchy — and it deletes `PLATFORM_DOMAINS`, the 23-name list maintained by hand.
 
 ### C2. Revocation semantics
 
-A grant is a transfer: you may only grant what you hold. So if A grants B a permission and A later
-loses it, B's grant descends from nothing. **Cascade, or refuse to revoke what has been passed on.**
-Either is defensible; silence is not.
+A grant is a transfer: you may only grant what you hold. So if A grants B a permission and A later loses
+it, B's grant descends from nothing. **Cascade, or refuse to revoke what has been passed on.** Either is
+defensible; silence is not.
+
+Where: [identity.md](./identity.md) §6.
 
 ### C3. Where the root wildcard lives
 
-`**` enters the system once, at first boot. A role that cannot be edited, a flag on the first
-account, or something else. It is the only place authority originates.
+`**` enters the system once, at first boot. A role that cannot be edited, a flag on the first account, or
+something else. **It is the only place authority originates**, so wherever it is put is the thing an
+audit has to start from.
+
+Where: [identity.md](./identity.md) §6.
 
 ---
 
@@ -95,42 +137,53 @@ account, or something else. It is the only place authority originates.
 
 ### D1. Where bootstrap lives
 
-A cluster with no sites cannot be reached: resolution is connection → site, so on a fresh node there
-is no route to sign in and no way to create the first site. The previous answer was the node serving
-one site for itself, in 414 lines that reached into five other domains — which is the single reason
-serving appeared to depend on everything.
+A cluster with no sites cannot be reached: resolution is connection → site, so on a fresh node there is
+no route to sign in and no way to create the first site. The previous answer was the node serving one
+site for itself, in **414 lines reaching into 33 foreign contracts** — the single reason serving
+appeared to depend on everything.
 
-**This is the one with no obvious home**, which is why it got filed under whichever domain needed it.
+**This is the one with no obvious home**, which is exactly why it got filed under whichever domain
+needed it.
+
+Where: [README.md](./README.md), [serving.md](./serving.md) §3.
 
 ### D2. Whether a projection is a part
 
-If protocols are an open set — cdn, api, mcp, git-http, smtp, imap, ftp — then adding one should not
-mean editing this package. A projection has a fixed shape: resolve a site, resolve an account,
-express what it can, pass refusals through. That shape is a contract somebody could implement from
-outside.
+If protocols are an open set — cdn, api, mcp, git-http, smtp, imap, ftp — then adding one should not mean
+editing this package. A projection has a fixed shape: resolve a site, resolve an account, express what it
+can, pass refusals through. **That shape is a contract somebody could implement from outside.**
 
-**Answering yes makes this package much smaller.** Answering no means every protocol is a release.
+**Answering yes makes this package much smaller.** Answering no means every protocol is a release of
+mesh-serve.
+
+Where: [serving.md](./serving.md) §7, §10.
 
 ### D3. Whether building belongs here at all
 
-`build` has the fewest ties to serving: it produces artifacts and a release row, and serving reads
-them. It could be a separate service a node runs, or does not.
+`build` has the fewest ties to serving: it produces artifacts and a release row, and serving reads them.
+It could be a separate service a node runs, or does not.
+
+Where: [building.md](./building.md) §9.
 
 ### D4. Whether approval belongs here at all
 
-It is self-contained, calls nothing, and gates destructive agent calls. A real need, and not
-obviously this package's.
-
-### D6. Whether provisioning belongs in fleet
-
-Creating a machine is a different act from recording that one exists, and it is the part that reaches
-a cloud provider — credentials, billing, an API that is not ours. Recording and reconciling could
-stay while provisioning leaves.
+Eleven contracts, self-contained, calls nothing, and gates destructive agent calls. **A real need, and
+not obviously this package's.**
 
 ### D5. Ports and listeners as records
 
 Every projection needs an address to listen on, and those are facts about a node. That is
-[fleet.md](./fleet.md)'s territory and the seam between fleet and serving is not drawn.
+[fleet.md](./fleet.md)'s territory, and **the seam between fleet and serving is not drawn** — the ports
+table would live in fleet while the thing that binds them lives in serving, and nothing says how they
+meet.
+
+### D6. Whether provisioning belongs in fleet
+
+Creating a machine is a different act from recording that one exists, and it is the part that reaches a
+cloud provider — credentials, billing, an API that is not ours. **Recording and reconciling could stay
+while provisioning leaves.**
+
+Where: [fleet.md](./fleet.md) §5.
 
 ---
 
@@ -138,28 +191,46 @@ Every projection needs an address to listen on, and those are facts about a node
 
 ### E1. `transferOwnership` exists in the store and no contract calls it
 
-An operator can create the account to hand an organization to, and cannot finish the handover —
-which is the operator's whole job.
+An operator can create the account to hand an organization to, and cannot finish the handover — which is
+the operator's whole job.
 
 ### E2. Changing your own email has no contract
 
-Blocked by A1: `user.update` is internal and cannot be exposed while the row carries a password hash.
+Blocked by **A1**: `user.update` is internal and cannot be exposed while the row carries a password hash.
+The user's own sketch has `identity update --email` in it, so this is a request, not a nicety.
+
+Where: [cli.md](./cli.md) §1.
 
 ### E3. Whether `_describe` is exempt from the provisional refusal
 
-A provisional account is refused ahead of every check, deliberately. So a site's description is
-readable with no credential, readable with a garbage credential, and refused with a real provisional
-one — being signed in as the account the platform just created for you is the only state in which the
-public endpoint refuses.
+A provisional account is refused ahead of every check, deliberately. So a site's description is readable
+with no credential, readable with a garbage credential, and **refused with a real provisional one** —
+being signed in as the account the platform just created for you is the only state in which the public
+endpoint refuses.
+
+Where: [serving.md](./serving.md) §6.
 
 ### E4. Where a bare repository path fits
 
 Local development imports from `/home/…/.git-remotes/x.git`, a reference that resolves on exactly one
-machine. Honest for a laptop, wrong for a fleet.
+machine. **Honest for a laptop, wrong for a fleet.**
+
+Where: [building.md](./building.md) §8.
 
 ### E5. What a telemetry sink writes to
 
-Decided once and injected, rather than discovered at start through a cast into an invented shape.
+Decided once and injected, rather than discovered at start through a cast into an invented shape that
+swallows its own failure.
+
+Where: [fleet.md](./fleet.md) §3.
+
+### E6. How the first-boot banner survives the log stream
+
+It is printed once, is not recoverable, and currently scrolls past under one log line per registered
+tool. **A message that has scrolled past has not been shown.** Either registration stops logging per
+tool, or the banner is re-printed at the end of startup, or both.
+
+Where: [cli.md](./cli.md) §3.
 
 ---
 
@@ -169,20 +240,39 @@ So they are not reopened by accident. Each is argued where it lives.
 
 | | where |
 | --- | --- |
-| A connection resolves to a site; no default site, ever | [serving.md](./serving.md) §4 |
-| Site resolution is a chain: protocol host, SNI, address domain, port | serving §4 |
-| Each protocol turns its own credential into a ticket | serving §5 |
-| SMTP submission and relay are two projections, never one listener | serving §5 |
+| A connection resolves to a site; no default site, ever | [serving.md](./serving.md) §3 |
+| Site resolution is a chain: protocol host, SNI, address domain, port | serving §3 |
+| A hostname is normalised; `localhost` and `127.0.0.1` stay distinct | serving §3 |
+| `x-forwarded-host` is trusted by deployment, never by guess | serving §3 |
+| Each protocol turns its own credential into a ticket | serving §4 |
+| A token carries `agent`, so a program is never mistaken for a person | serving §4 |
+| SMTP submission and relay are two projections, never one listener | serving §4 |
+| The coarse gate always runs; a hook may only narrow | serving §2 |
+| An exposure entry declares exactly one gate, or does not compile | serving §5 |
+| A site is narrower than a cluster, and that is why two tenants are safe | serving §9 |
+| One error shape; `declared` is explicit, never inferred from a status | [errors.md](./errors.md) §2 |
+| Read the structure, not the identity — `instanceof` fails across copies | errors §3 |
 | One mechanism for permissions: account and membership, not levels | [identity.md](./identity.md) §2 |
-| A grant is a transfer — you may only grant what you hold | identity §5 |
-| Two roots, `identity.*` and `serve.*`; `serve`, not `platform` | identity §3 |
-| Uniform depth, `root.noun.action` | identity §3 |
-| `login` answers per account, with scope as a column | identity §6 |
-| A scope is resolved by the gate, never supplied by the request | identity §7 |
-| Route over query over body, because the route was verified | [collections.md](./collections.md) §2 |
-| A collection is scoped or public; publishing is a contract | collections §2 |
-| Hidden fields go in `defineCrud`, not a wrapper | collections §2 |
+| Patterns are `*` and trailing `**`, no negation, unioned | identity §3 |
+| Two roots, `identity.*` and `serve.*`; `serve`, not `platform` | identity §4 |
+| Uniform depth, `root.noun.action` | identity §4 |
+| A grant is a transfer — you may only grant what you hold | identity §6 |
+| Role inheritance is same-scope and acyclic, checked at write | identity §5 |
+| `login` answers per account, with scope as a column | identity §7 |
+| A scope is resolved by the gate, never supplied by the request | identity §8 |
+| Naming an organization you are not in answers 404, not 403 | identity §8 |
+| A ticket is a revocable row; revocation is polled by epoch | identity §9 |
+| Route over query over body, because the route was verified | [collections.md](./collections.md) §4 |
+| A collection is scoped or public; publishing is a contract | collections §3.3 |
+| Hidden fields go in `defineCrud`, not a wrapper | collections §3 |
+| `:organizationId` is an assertion to verify; `:repositoryId` is a parent | collections §3.4 |
 | Four things, not nine | [README.md](./README.md) |
-| Telemetry is part of fleet | [fleet.md](./fleet.md) §2 |
-| Fleet is independent of serving and building | fleet §4 |
-| One repository holds many parts | [building.md](./building.md) §2 |
+| One repository holds many parts, scoped to an organization | [building.md](./building.md) §2 |
+| A version is not an artifact; a release is not a deployment | building §1 |
+| A composition is refused at compose time, not in a browser | building §5 |
+| Anything that clones or bundles declares its own timeout | building §7 |
+| Telemetry is part of fleet | [fleet.md](./fleet.md) §3 |
+| Fleet is independent of serving and building | fleet §6 |
+| Desired and observed are different fields, and the gap is the product | fleet §4 |
+| The CLI is generated from the descriptor and opens no database | [cli.md](./cli.md) §1 |
+| A password is never read from argv | cli §4 |

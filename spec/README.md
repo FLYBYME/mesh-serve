@@ -1,9 +1,9 @@
 # mesh-serve
 
-**Status: being defined, 2026-09-11.** The previous specs are in git and in `spec copy/`. They
-described what had been built. These describe what it is for, which is the thing that was never
-written down — and the cost of not writing it is measurable: 24,332 lines in six days across nine
-things that were never decided to be nine things.
+**Status: specified, 2026-09-11. Nothing below is built yet.** `src/` was deleted; the previous
+implementation is in git and in `src-dump/`, and it is referenced throughout as evidence rather than
+as a design. Where a number, a schema or an error code appears here, it was read out of that tree —
+these specs describe what the thing is, checked against what it was.
 
 ## What it is
 
@@ -14,87 +14,111 @@ how a machine comes to run one, or who the caller is.
 
 ## What it is not
 
-It is not mesh. mesh is the framework underneath — the broker, the contracts, the typed tool
-registry, the database layer. It is three and a half months old and 19,930 lines. Everything
-mesh-serve needs about calling a contract, typing a result or scoping a collection is already there
-and already typed. Reaching around it is the single most common defect in this repository's history
-and it has its own record in `stuff.md`.
+It is not mesh. mesh is the framework underneath: the broker, the contracts, the typed tool registry,
+the database layer. 107 days old, 19,930 lines, 186 lines per day. mesh-serve was 24,332 lines in six
+days — 4,055 lines per day — and the difference between those two rates is the entire subject of
+`stuff.md`.
 
-**mesh is stable, not sealed, and the difference matters right now.**
-`mesh/docs/STABILITY.md` says bug fixes only — which is about mesh not drifting under three packages
-being built on it at once. `surfdns/architecture/the-freeze.md` plans **mesh 2 → 3**, and says
-*"the version bump is the last cheap breaking change"*. Its Track V is three `defineCrud` items, all
-breaking, and field-level visibility is called *"the single strongest argument for v3 being a real
-major rather than a renumbering"*.
+Everything mesh-serve needs about calling a contract, typing a result or scoping a collection is
+already in mesh and already typed. Reaching around it is the most common defect in this repository's
+history: 176 casts in mesh-serve, against 30 in mesh-core and 7 in mesh-operator.
+
+**mesh is stable, not sealed, and the difference decides where work goes.**
+
+| | says | means |
+| --- | --- | --- |
+| `mesh/docs/STABILITY.md` | bug fixes only | mesh must not drift under three packages built on it at once |
+| `surfdns/architecture/the-freeze.md` | mesh 2 → 3 is planned | *"the version bump is the last cheap breaking change"* |
+
+Its Track V is three `defineCrud` items, all breaking, and field-level visibility is called there
+*"the single strongest argument for v3 being a real major rather than a renumbering"*.
 
 So the rule is: **do not drift mesh, and do not route around it either.** Anything that belongs in
 `defineCrud` goes into the 2 → 3 bump, because after that it is permanent. See
-[collections.md](./collections.md) §2.
+[collections.md](./collections.md) §3.
 
 ## The four things
 
 Not nine. The nine were domain folders, which is a filing decision, not a design one.
 
-| | what it answers | made of |
-| --- | --- | --- |
-| **[serving](./serving.md)** | a connection resolves to a site, and who may call what | an open set of protocol projections |
-| **[building](./building.md)** | how a release comes to exist | catalog, builder |
-| **[identity](./identity.md)** | who is calling, and in which organization | identity |
-| **[fleet](./fleet.md)** | which machines run what | fleet, supervisor, telemetry |
+| | what it answers | absorbed | contracts today |
+| --- | --- | --- | --- |
+| **[serving](./serving.md)** | a connection resolves to a site, and who may call what | cdn, api, mcp | 14 |
+| **[identity](./identity.md)** | who is calling, and in which organization | identity | 61 |
+| **[building](./building.md)** | how a release comes to exist | catalog, builder | 49 |
+| **[fleet](./fleet.md)** | which machines run what | fleet, supervisor, telem | 23 |
+
+Plus `approval` (11), which is self-contained and may not belong here at all — question **D4**.
 
 Two facts about that table matter more than the table.
 
 **Serving is one decision reached over many protocols, not a service per protocol.** `cdn`, `api` and
 `mcp` answer the same four questions for a browser, an HTTP client and an agent; `git-http`, `smtp`,
 `imap` and `ftp` will answer them for their own callers. **The set is open.** None of them decides
-what is callable — each reads one description and serves what it can express. See
-[serving.md](./serving.md), which is the spec to read first, and which is written so that adding the
-fourth protocol does not mean rewriting it.
+what is callable — each reads one description and serves what it can express.
 
-**Fleet is independent.** It answers *which machines run what*, and nothing in serving or building
-needs to know. Telemetry belongs inside it: metrics are about machines, and the only reason
-`telem` was a separate domain is that it was written separately. The dependency graph already says
-so — `telem` calls nothing but itself and one wrong-direction call into `cdn`, which is the edge to
-delete.
+**Fleet is independent.** Nothing in serving or building needs to know how many nodes there are.
+Telemetry belongs inside it: metrics are about machines, and the only reason `telem` was a separate
+domain is that it was written separately. The dependency graph already says so — `telem` calls
+nothing but itself and one call into `cdn`, the single wrong-direction edge in the whole graph.
 
 ## What has no home yet
 
-**Bootstrap.** A cluster with no sites cannot be reached: the api dispatches by `Host` → site, so on
-a fresh node there is no route to `identity.ticket_issue`, so nobody can sign in, so no site can be
-created. The current answer is the node serving one site for itself on `127.0.0.1`, and it lives in
-`cdn/methods/control.ts` — 414 lines reaching into identity, catalog, builder, fleet and telemetry.
+**Bootstrap.** A cluster with no sites cannot be reached. Resolution is connection → site, so on a
+fresh node there is no route to `identity.ticket_issue`, so nobody can sign in, so no site can be
+created. The previous answer was the node serving one site for itself on `127.0.0.1`, and it lived in
+`cdn/methods/control.ts`: **414 lines reaching into 33 foreign contracts across identity, catalog,
+builder, fleet and telemetry.**
 
-That file is why `cdn` appears to depend on seventeen domains. It is not the CDN having
+That file is the entire reason `cdn` appeared to depend on everything. It is not the CDN having
 dependencies; it is orchestration filed under a domain name because it needed somewhere to live.
-Deciding where bootstrap belongs is the open question, and it is open on purpose rather than by
-neglect.
+Question **D1**, and it is open on purpose rather than by neglect.
 
 ## Reading order
 
-1. [serving.md](./serving.md) — the four questions, and the protocols that answer them. Everything else refers to it.
-2. [identity.md](./identity.md) — who is calling, and what a scope is.
-3. [collections.md](./collections.md) — how a collection is defined, and why not with `defineCrud` alone.
-4. [building.md](./building.md) — repositories, parts, releases.
-5. [fleet.md](./fleet.md) — nodes, supervision, telemetry.
+| | | read it for |
+| --- | --- | --- |
+| 1 | [serving.md](./serving.md) | the four questions, and the protocols that answer them |
+| 2 | [identity.md](./identity.md) | accounts, permissions, scope, tickets |
+| 3 | [collections.md](./collections.md) | how a collection is declared, and what `defineCrud` still lacks |
+| 4 | [errors.md](./errors.md) | the wire contract for a refusal — read before writing a projection |
+| 5 | [building.md](./building.md) | repositories, parts, versions, releases, artifacts |
+| 6 | [fleet.md](./fleet.md) | nodes, supervision, telemetry |
+| 7 | [cli.md](./cli.md) | the terminal surface, which is the same API |
+| 8 | [questions.md](./questions.md) | every open decision, grouped by deadline |
 
 ## Rules that apply everywhere
 
-These are not style. Each one is here because breaking it cost a day or more, and the evidence is in
-`stuff.md`.
+Not style. Each is here because breaking it cost a day or more, and the evidence is in `stuff.md`.
 
-- **Everything this package provides is reachable through its API and its CLI, and through nothing
-  else.** No script that opens the database. No process that joins the mesh to assert an identity.
-  A browser and a terminal make the same call.
-- **Use the typing that exists.** `ctx.call` is generic over the tool registry. `ctx.meta` is
-  `IMeshMeta`. `broker.getProvider` is typed. A cast in front of any of them is a bug.
-- **A scope is resolved, never supplied.** The gate returns it, from the caller's memberships. A
-  request that carries one is making a claim to be checked, not stating a fact to be used.
-- **Absent means internal.** A contract is not reachable because it exists. Publishing one is a
-  decision somebody writes down.
-- **Name the reader, or do not add the field.** A field nothing reads is a promise nothing keeps,
-  and this repository has produced that shape more than any other.
-- **A prefix, not a list.** Two roots — `identity.*` and `serve.*` — with a tenant's own contracts
-  outside both. Every rule about *this platform's own* becomes a prefix test, and the 23-name
-  `PLATFORM_DOMAINS` set that had to be kept in step with reality goes away. Not `platform.*`:
-  that word is an organization slug on every cluster this has run on. See
-  [identity.md](./identity.md) §3.
+1. **Everything this package provides is reachable through its API and its CLI, and nothing else.**
+   No script that opens the database. No process that joins the mesh to assert an identity. A browser
+   and a terminal make the same call.
+2. **Use the typing that exists.** `ctx.call` is generic over `IServiceToolRegistry`. `ctx.meta` is
+   `IMeshMeta`, which its own comment says domain services should augment. `broker.getProvider<T>` is
+   typed and `onStart(broker)` hands it to you. **A cast in front of any of them is a bug**, not a
+   style preference — see [collections.md](./collections.md) §6.
+3. **A scope is resolved, never supplied.** The gate returns it from the caller's memberships. A
+   request that carries one is making a claim to be checked, not stating a fact to be used.
+4. **Absent means internal.** A contract is not reachable because it exists. Publishing one is a
+   decision somebody writes down.
+5. **Name the reader, or do not add the field.** A field nothing reads is a promise nothing keeps,
+   and this repository has produced that shape more than any other — `relations` and `populate` are
+   declared in `defineCrud` and consumed nowhere.
+6. **A prefix, not a list.** Two roots, `identity.*` and `serve.*`, with a tenant's own contracts
+   outside both. Every rule about *this platform's own* becomes a prefix test, and the 23-name
+   `PLATFORM_DOMAINS` set kept in step by hand goes away. Not `platform.*` — that word is an
+   organization slug on every cluster this has run on. [identity.md](./identity.md) §4.
+7. **A gate looser than its handler is a promise the platform will not keep.**
+8. **A refusal carries a code and a sentence, and both reach the caller.** [errors.md](./errors.md).
+
+## How to read these documents
+
+- **must / must not** is a conformance requirement. A build that violates one is wrong, not
+  stylistically unusual.
+- **A bold claim followed by a paragraph** is an argued decision. The paragraph is the argument, kept
+  so it is not re-litigated from memory.
+- **A question id in bold — `A1`, `D3`** — points at [questions.md](./questions.md). Nothing is
+  decided in two places.
+- **Where a spec says *today*, it is describing `src-dump/`**, the deleted implementation, and the
+  statement is evidence rather than a plan.
