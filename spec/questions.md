@@ -101,13 +101,23 @@ Resolving a hostname happens before there is a caller. **Site is a public collec
 field**, which makes **B1** block it too.
 
 So the shape is: **`scopedBy` is for collections that hang off a resolved scope, never for the ones
-that produce it.** Still open is the original question — one name, `tenantId` or `organizationId` —
-now narrowed to the collections that genuinely are scoped. `tenantId` and `organizationId` are the
-same value under two names, because `site` declared one and `membership` declared the other and the
-gate had to carry both into every handler. **A migration, not a decision** — and the slice writes
-`organizationId` everywhere, so the migration is smaller than it was.
+that produce it.**
 
-Where: [identity.md](./identity.md) §8, [collections.md](./collections.md) §1.
+**The name is settled at `organizationId`, and the duplication turns out to be mesh's.** Every
+collection in this package declares `organizationId`, and the gate writes the resolved scope under
+*two* keys in meta — because `IMeshMeta` declares `tenant_id` as required and mesh's database
+middleware resolves a scope by looking for the `scopedBy` field name on `meta.user`. One is the
+framework's name and one is the platform's, and satisfying both means writing the value twice.
+
+The alternative was to scope everything by `tenantId` and let mesh's spelling win. Rejected:
+`organizationId` is the word this platform uses in routes, in the membership row, and in what an
+operator reads, and a data model should not be renamed to match a field in a framework's metadata.
+
+**So B2 is no longer this platform disagreeing with itself.** What remains belongs in the mesh
+2 → 3 bump as part of **A4**: `IMeshMeta` should carry the resolved scope under one name a collection
+can choose. Written in one place, `callerMeta`, with the argument beside it.
+
+Where: `src/serve/methods/gate.ts`, [identity.md](./identity.md) §8.
 
 ### B3. Asking for a hidden field: refusal or silent drop
 

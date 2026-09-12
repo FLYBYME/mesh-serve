@@ -15,6 +15,7 @@
 export { IdentityService, FIRST_BOOT_EMAIL, type IdentityServiceOptions } from './identity/identity.service.js';
 export { ServeService } from './serve/serve.service.js';
 export { ApiService, type ApiServiceOptions } from './serve/api/api.service.js';
+export { BuildService, type BuildServiceOptions } from './build/build.service.js';
 
 // ---------------------------------------------------------------------------- collections
 //
@@ -33,12 +34,17 @@ export { bootstrap, CONTROL_CONTRACTS, type BootstrapOptions, type BootstrapResu
 
 export * from './identity/contracts/identity.contract.js';
 export * from './serve/contracts/site.contract.js';
+export * from './build/contracts/build.contract.js';
 
 // ---------------------------------------------------------------------------- records
 
 export * from './identity/schema/principals.js';
 export * from './identity/schema/tickets.js';
 export * from './serve/schema/site.js';
+export * from './build/schema/artifact.js';
+export * from './build/schema/catalog.js';
+export * from './build/schema/descriptor.js';
+export * from './build/schema/source.js';
 
 // ---------------------------------------------------------------------------- the pure work
 //
@@ -52,3 +58,6 @@ export * from './serve/methods/errors.js';
 export * from './serve/methods/gate.js';
 export * from './serve/methods/hostname.js';
 export * from './serve/methods/routes.js';
+export * from './build/methods/blobs.js';
+export * from './build/methods/content.js';
+export * from './build/methods/source.js';

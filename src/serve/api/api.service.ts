@@ -17,7 +17,7 @@ import {
 
 import { describeSite, describedCallSummary, type SiteDescription } from '../methods/descriptor.js';
 import { errorResponse, refuse, type ErrorResponse } from '../methods/errors.js';
-import { gate, SCOPE_HEADER, type Caller } from '../methods/gate.js';
+import { callerMeta, gate, SCOPE_HEADER, type Caller } from '../methods/gate.js';
 import { hostOf } from '../methods/hostname.js';
 import { decodeQuery, matchRoute, mergeInput, routeTable, type Route } from '../methods/routes.js';
 import { gateOf, type Site } from '../schema/site.js';
@@ -200,13 +200,14 @@ export class ApiService extends ServiceModule {
 
         // 6. The call. From here the contract's own failures are the caller's answer.
         try {
-            const result = await callContract(broker, call.key, parsed.data, {
-                user: caller === undefined ? undefined : {
-                    id: caller.userId,
-                    tenant_id: decision.resolvedScope ?? '',
-                    roles: [...caller.roles],
-                },
-            });
+            // One value under two names, for the reason written out in `callerMeta`. Built there
+            // rather than here so the duplication exists in exactly one place.
+            const result = await callContract(
+                broker,
+                call.key,
+                parsed.data,
+                callerMeta(caller, decision.resolvedScope),
+            );
 
             send(response, { status: 200, body: result as Record<string, unknown> });
         } catch (error) {
@@ -274,7 +275,19 @@ export class ApiService extends ServiceModule {
         broker: IServiceBroker,
         userId: string,
     ): Promise<readonly { readonly organizationId: string }[]> {
-        return broker.call('membership.find', { query: { userId }, limit: 100 });
+        /**
+         * **The meta is required, not decorative.**
+         *
+         * `membership` is narrowed by a hook to `meta.user.id`, so a call without it reads the
+         * caller as nobody and returns no rows — which resolves no scope, which refuses every scoped
+         * read with a message about a missing scope rather than a missing caller. The symptom points
+         * at the collection being read and the cause is one call above it.
+         *
+         * There is no scope to pass here, and that is the point: this is the read that produces one.
+         */
+        return broker.call('membership.find', { query: { userId }, limit: 100 }, {
+            meta: { user: { id: userId, tenant_id: '' } },
+        });
     }
 }
 

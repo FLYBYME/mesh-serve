@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 
 import { visibilityOf, type ToolContract, type z } from '@flybyme/mesh';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import { gateOf, type Site } from '../schema/site.js';
 
@@ -122,9 +123,13 @@ function shapeHashOf(calls: readonly DescribedCall[]): string {
 /**
  * The description as JSON, for a client that is not this process.
  *
- * The zod schemas become JSON Schema at the projection boundary rather than here, because a git
- * client and a mail client want neither — this keeps the schemas as schemas for anything that can
- * use them directly.
+ * **The input schema travels, and that is what makes a generated client possible.** A caller that
+ * only receives a method and a path has to be told separately what to send, which is a second
+ * declaration of something already declared — and it drifts. With the schema, `--limit 5` becomes a
+ * number and `--partIds x` becomes an array because the contract says those are their types, and
+ * nothing about the CLI has to know what a release is.
+ *
+ * JSON Schema rather than the zod object, because the reader is not this process.
  */
 export function describedCallSummary(call: DescribedCall): Record<string, unknown> {
     return {
@@ -135,5 +140,21 @@ export function describedCallSummary(call: DescribedCall): Record<string, unknow
         gate: call.gate,
         destructive: call.destructive,
         errors: call.errors,
+        input: jsonSchema(call.input),
     };
+}
+
+/**
+ * A zod schema as JSON Schema, or `undefined` if it will not convert.
+ *
+ * **A description is not worth failing over.** A contract whose input cannot be expressed still has a
+ * route, a gate and a name, and a client that cannot pre-shape its arguments can still send them and
+ * be told by the schema on the way in.
+ */
+function jsonSchema(schema: z.ZodTypeAny): unknown {
+    try {
+        return zodToJsonSchema(schema, { $refStrategy: 'none' });
+    } catch {
+        return undefined;
+    }
 }

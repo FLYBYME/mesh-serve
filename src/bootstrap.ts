@@ -77,6 +77,30 @@ export const CONTROL_CONTRACTS: readonly ExposedContract[] = [
     { key: 'site.get', auth: 'user', errors: [] },
     { key: 'site.count', auth: 'user', errors: [] },
     { key: 'site.create', auth: 'user', errors: [] },
+
+    // Building: register a repository, import it, release it, compose, deploy.
+    { key: 'repository.find', auth: 'user', errors: [] },
+    { key: 'repository.get', auth: 'user', errors: [] },
+    { key: 'repository.create', auth: 'user', errors: [] },
+    { key: 'repository.delete', auth: 'user', errors: [] },
+
+    { key: 'part.find', auth: 'user', errors: [] },
+    { key: 'part.get', auth: 'user', errors: [] },
+
+    { key: 'version.find', auth: 'user', errors: [] },
+    { key: 'version.get', auth: 'user', errors: [] },
+
+    { key: 'artifact.find', auth: 'user', errors: [] },
+    { key: 'artifact.get', auth: 'user', errors: [] },
+
+    { key: 'release.find', auth: 'user', errors: [] },
+    { key: 'release.get', auth: 'user', errors: [] },
+
+    { key: 'build.import_repository', auth: 'user', errors: [] },
+    { key: 'build.release_part', auth: 'user', errors: [] },
+    { key: 'build.release_repository', auth: 'user', errors: [] },
+    { key: 'release.compose', auth: 'user', errors: [] },
+    { key: 'release.deploy', auth: 'user', errors: [] },
 ];
 
 /**

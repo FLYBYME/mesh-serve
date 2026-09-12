@@ -22,6 +22,50 @@ export const SCOPE_HEADER = 'x-organization';
  */
 export const PASSWORD_ACTION = 'identity.set_password';
 
+/**
+ * The caller and the resolved scope, as the meta every handler receives.
+ *
+ * ## Why one value is written under two names — question **B2**, answered by building it
+ *
+ * mesh's `IMeshMeta` declares `user: { id, tenant_id, roles? }`, with `tenant_id` **required**, and
+ * its database middleware resolves a collection's scope by looking for the `scopedBy` field name on
+ * `meta.user` — trying the field as written, then its snake_case form.
+ *
+ * So a collection declaring `scopedBy: 'organizationId'` needs `meta.user.organizationId`, and mesh
+ * needs `tenant_id` regardless. **One is the framework's name and one is the platform's**, and the
+ * only way to satisfy both is to write the value twice.
+ *
+ * The alternative was to scope every collection by `tenantId` and let mesh's spelling win. It was
+ * rejected: `organizationId` is the word this platform uses everywhere else — in routes, in the
+ * membership row, in what an operator reads — and a data model should not be renamed to match a
+ * field name in a framework's metadata.
+ *
+ * **So it is written here, once, with this note.** The duplication is mesh's interface rather than
+ * this platform's disagreement with itself, which is what B2 originally described. It belongs in the
+ * mesh 2 → 3 bump as part of **A4**: `IMeshMeta` should carry the resolved scope under one name a
+ * collection can choose.
+ */
+export function callerMeta(
+    caller: Caller | undefined,
+    resolvedScope: string | undefined,
+): Record<string, unknown> {
+    if (caller === undefined) return {};
+
+    const scope = resolvedScope ?? '';
+
+    return {
+        user: {
+            id: caller.userId,
+            /** mesh's own name, required by `IMeshMeta`. */
+            tenant_id: scope,
+            /** This platform's name, which is what every `scopedBy` in this package declares. */
+            organizationId: scope,
+            roles: [...caller.roles],
+            ...(caller.agent === undefined ? {} : { agent: caller.agent }),
+        },
+    };
+}
+
 /** Who is calling, as established by the ticket. Never taken from the request body. */
 export interface Caller {
     readonly userId: string;

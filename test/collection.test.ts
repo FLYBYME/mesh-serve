@@ -68,7 +68,10 @@ describe('a collection is its own module', () => {
 
     it('registers every collection this package serves, each under its own domain', () => {
         const domains = collectionServices().map((s) => s.domain).sort();
-        expect(domains).toEqual(['membership', 'organization', 'site', 'ticket', 'user']);
+        expect(domains).toEqual([
+            'artifact', 'membership', 'organization', 'part', 'release',
+            'repository', 'site', 'ticket', 'user', 'version',
+        ]);
     });
 
     /**

@@ -1,8 +1,13 @@
 # mesh-serve
 
-**Status: the first slice runs, 2026-09-11.** A node boots, identity mints the first account, one
-site answers on `127.0.0.1`, and `mesh-serve login` works from a terminal and prints what it did.
-38 tests. Everything else in these documents is still specification.
+**Status: identity, serving and building run, 2026-09-12.** A node boots, identity mints the first
+account, one site answers on `127.0.0.1`, and `mesh-serve login` works from a terminal. A repository
+is registered, imported, built into content-addressed artifacts, composed into a release, and
+deployed to a hostname — all from the CLI, against real repositories. 55 tests.
+
+**Not built:** serving a release as a page (the CDN projection), fleet, approval, and every
+projection except HTTP. The gate still uses coarse levels, because permissions need the contract
+rename first (**C1**).
 
 The rest of `src/` was deleted; the previous implementation is in `src-dump/` and is referenced
 throughout as evidence rather than as a design. Where a number, a schema or an error code appears

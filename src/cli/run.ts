@@ -12,11 +12,15 @@ import { stdin, stdout } from 'node:process';
 
 import { call, Refused, type ClientOptions } from './client.js';
 import { forgetTicket, saveTicket, ticketFor } from './credentials.js';
+import { decodeQueryValue } from '../serve/methods/routes.js';
+
+/** A flag's value: a string, a bare `--flag`, or a flag given more than once. */
+export type FlagValue = string | boolean | string[];
 
 export interface Argv {
     readonly command: string;
     readonly rest: readonly string[];
-    readonly flags: Readonly<Record<string, string | boolean>>;
+    readonly flags: Readonly<Record<string, FlagValue>>;
 }
 
 /**
@@ -29,7 +33,7 @@ export interface Argv {
  */
 export function parseArgv(argv: readonly string[]): Argv {
     const words: string[] = [];
-    const flags: Record<string, string | boolean> = {};
+    const flags: Record<string, FlagValue> = {};
 
     for (let at = 0; at < argv.length; at += 1) {
         const word = argv[at];
@@ -48,12 +52,74 @@ export function parseArgv(argv: readonly string[]): Argv {
             continue;
         }
 
-        flags[name] = next;
+        /**
+         * **A flag given twice is a list**, which is how a terminal says *array* without anybody
+         * inventing a separator.
+         *
+         * A contract taking `partIds: string[]` was unreachable from the CLI: the last value won and
+         * the schema refused a string where it wanted an array. Comma-splitting was the obvious
+         * alternative and is wrong — a value containing a comma is then unrepresentable, and the
+         * user's own rule about this platform is *no comma separated shit*.
+         */
+        const existing = flags[name];
+        flags[name] = existing === undefined || typeof existing === 'boolean'
+            ? next
+            : [...(Array.isArray(existing) ? existing : [existing]), next];
+
         at += 1;
     }
 
     const [command = 'help', ...rest] = words;
     return { command, rest, flags };
+}
+
+/** One property of a contract's input, as the site's description carries it. */
+interface InputProperty {
+    readonly type?: string;
+    readonly items?: unknown;
+}
+
+/**
+ * A flag's value, shaped for the contract that will receive it.
+ *
+ * **The shape comes from the contract**, which is the whole reason the site's description carries the
+ * input schema. `--limit 5` is a number and `--partIds x` is an array of one because those contracts
+ * say so, and nothing in this file knows what a limit or a release is.
+ *
+ * Without the schema a single `--partIds x` was refused with *"Expected array, received string"* —
+ * true, unhelpful, and unfixable from the terminal without inventing a separator.
+ *
+ * Repeating a flag still makes a list, and it is the better habit for a value that might contain
+ * anything. Falling back to the query-string decoder covers a contract whose schema did not travel.
+ */
+function flagValue(value: FlagValue, declared: InputProperty | undefined): unknown {
+    const type = declared?.type;
+
+    if (type === 'array') {
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'boolean') return [];
+        // A single value is a list of one. It is what the person meant, and the alternative is
+        // telling them their argument has the wrong shape for a shape they cannot type.
+        const decoded = decodeQueryValue(value);
+        return Array.isArray(decoded) ? decoded : [value];
+    }
+
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'boolean') return value;
+
+    if (type === 'string') return value;
+    if (type === 'number' || type === 'integer') return Number(value);
+    if (type === 'boolean') return value === 'true';
+
+    return decodeQueryValue(value);
+}
+
+/** The declared properties of a contract's input, if the description carried a schema. */
+function propertiesOf(input: unknown): Readonly<Record<string, InputProperty>> {
+    if (typeof input !== 'object' || input === null) return {};
+    const properties = (input as { properties?: unknown }).properties;
+    if (typeof properties !== 'object' || properties === null) return {};
+    return properties as Record<string, InputProperty>;
 }
 
 const stringFlag = (flags: Argv['flags'], name: string): string | undefined => {
@@ -316,7 +382,9 @@ async function contractCommand(
 
     const key = `${noun}.${action}`;
     const described = await call({ ...client, ticket: undefined }, 'GET', '/_describe') as {
-        calls: readonly { key: string; method: string; path: string; destructive: boolean }[];
+        calls: readonly {
+            key: string; method: string; path: string; destructive: boolean; input?: unknown;
+        }[];
     };
 
     const found = described.calls.find((c) => c.key === key);
@@ -341,8 +409,11 @@ async function contractCommand(
         }
     }
 
-    const { path, query } = fillPath(found.path, flags);
-    const body = found.method === 'GET' ? undefined : bodyFrom(flags);
+    // The contract's own declaration of what it takes. Every flag is shaped by it.
+    const declared = propertiesOf(found.input);
+
+    const { path, query } = fillPath(found.path, flags, declared);
+    const body = found.method === 'GET' ? undefined : bodyFrom(flags, declared);
     const url = query === '' ? path : `${path}?${query}`;
 
     const result = await call(client, found.method, url, body);
@@ -357,7 +428,11 @@ async function contractCommand(
  * parameter. **The route wins over the body at the server too** (`spec/collections.md` §4); doing it
  * here as well means the caller is not told about a conflict they could not have caused.
  */
-function fillPath(pattern: string, flags: Argv['flags']): { path: string; query: string } {
+function fillPath(
+    pattern: string,
+    flags: Argv['flags'],
+    declared: Readonly<Record<string, InputProperty>>,
+): { path: string; query: string } {
     const used = new Set<string>();
 
     const path = pattern.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_whole, name: string) => {
@@ -370,17 +445,24 @@ function fillPath(pattern: string, flags: Argv['flags']): { path: string; query:
     const params = new URLSearchParams();
     for (const [name, value] of Object.entries(flags)) {
         if (used.has(name) || RESERVED.has(name)) continue;
-        params.set(name, typeof value === 'boolean' ? String(value) : value);
+
+        // Shaped first, then encoded. A list or an object becomes JSON, which is exactly what
+        // `decodeQuery` parses on the other side — one encoding, decided in one place.
+        const shaped = flagValue(value, declared[name]);
+        params.set(name, typeof shaped === 'string' ? shaped : JSON.stringify(shaped));
     }
 
     return { path, query: params.toString() };
 }
 
-function bodyFrom(flags: Argv['flags']): Record<string, unknown> {
+function bodyFrom(
+    flags: Argv['flags'],
+    declared: Readonly<Record<string, InputProperty>>,
+): Record<string, unknown> {
     const body: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(flags)) {
         if (RESERVED.has(name)) continue;
-        body[name] = value;
+        body[name] = flagValue(value, declared[name]);
     }
     return body;
 }

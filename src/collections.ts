@@ -10,6 +10,9 @@
  * inside the service that owns the behaviour.
  */
 
+import {
+    artifactCrud, partCrud, releaseCrud, repositoryCrud, versionCrud,
+} from './build/contracts/build.contract.js';
 import { CollectionService, ownRowsOnly } from './collection.js';
 import {
     membershipCrud, organizationCrud, ticketCrud, userCrud,
@@ -58,5 +61,25 @@ export function collectionServices(): CollectionService[] {
          * and is not answered. Until it is, `site.create` is reachable only where a site exposes it.
          */
         new CollectionService(siteCrud),
+
+        /**
+         * Building. **Four of the five are `scopedBy: 'organizationId'` and need no hook** — unlike
+         * membership and site, nothing resolves a repository before there is a caller, so the scope
+         * already exists by the time any of these is read.
+         */
+        new CollectionService(repositoryCrud),
+        new CollectionService(partCrud),
+        new CollectionService(versionCrud),
+        new CollectionService(releaseCrud),
+
+        /**
+         * **Artifacts are not scoped, and that is a decision rather than an omission.**
+         *
+         * An artifact is named by the hash of its contents, so two organizations that built the same
+         * bytes produce the same digest and there is nothing to keep apart. Scoping it would store
+         * the same megabyte twice to preserve a boundary the content does not have. What is scoped
+         * is the *version* pointing at it, which is what says whose build it was.
+         */
+        new CollectionService(artifactCrud),
     ];
 }

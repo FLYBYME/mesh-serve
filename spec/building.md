@@ -6,8 +6,12 @@ version is built into an artifact, and a release names a set of versions that co
 `catalog` and `builder` were two domains. Catalog reads and writes only its own rows; builder reads
 catalog and writes into it. **Builder is catalog's writer**, and they are one thing.
 
-**None of this is built.** Where this document says *today*, it is describing `src-dump/`, the deleted
-implementation — 4,542 lines across those two domains — and the statement is evidence, not a plan.
+**Status: built and running, 2026-09-12.** A repository is registered, imported, released and
+composed, and a hostname is pointed at the result — from the CLI, against real repositories. What
+is **not** built is serving the release: a site records which one it has, and nothing yet turns that
+into a page. That is the CDN projection.
+
+Two things here were wrong and building found them, both recorded in §2 and §5.
 
 ---
 
@@ -63,6 +67,20 @@ repository      organizationId    scope, and what makes the namespace work
 ```
 
 Scoped by `organizationId`. `name` unique scoped, not global — **that is the whole fix.**
+
+### A part names another part by name, not by id
+
+**Found on the first import.** A descriptor writes `requiredParts: [{ id: "auth", version: "^0.1" }]`,
+and `auth` there is a *name inside that repository* — the author knows their `identity` part needs
+their `auth` part, and cannot know the row id a cluster they have never seen will mint.
+
+So a part row stores those as names, and the platform resolves them at the moment they are needed:
+when bundling, to find the specifier the provider declares itself importable as, and when composing,
+to check the required part is actually in the release. **The failure then names both parts**, which
+an id could not do.
+
+The `version` range is read and **not yet honoured** — `compose` pins the newest built version.
+Declaring it now means the descriptors people write today do not have to change when it is.
 
 ### What it fixes
 
@@ -171,6 +189,20 @@ machine.**
 **A composition is refused at compose time, not in a browser.** A release naming a part it does not
 have, or a part whose `requiredParts` entry is unmet, fails when it is built. **The failure moves from
 a blank page to a build**, which is the whole point of composing at all.
+
+Three refusals, all exercised against real repositories:
+
+| asking for | answer |
+| --- | --- |
+| an extension as the kernel | *"ui is an extension, not a kernel"* |
+| a part with no built version | *"identity has no built version. Release it before composing it"* |
+| a part whose required part is absent | *"identity requires auth, which this release does not compose"* |
+
+**A part required by another must declare an `import` specifier**, and the message says so. That one
+was found by `mesh-core`, whose `identity` part requires `auth` and whose `auth` declares no
+specifier — so there is no name to mark external and bundling would inline it, which is the 94%
+duplication the framework external exists to prevent. The repository is wrong and the builder now
+says which line.
 
 ### The import map is the composition boundary
 

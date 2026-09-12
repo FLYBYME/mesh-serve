@@ -25,7 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-    ApiService, IdentityService, ServeService, bootstrap, collectionServices,
+    ApiService, BuildService, IdentityService, ServeService, bootstrap, collectionServices,
 } from '../dist/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -106,6 +106,10 @@ const controlHost = flag('control-host', '127.0.0.1');
 
 const mongo = flag('mongo', process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
 const dbName = flag('db', 'mesh-serve');
+// Where artifact bytes live. The record is in the database and the bytes are here, because a
+// document store is the wrong place for a megabyte of JavaScript and the two have different
+// lifetimes: the record is the truth, the bytes are a cache that may be gone and rebuilt.
+const blobRoot = flag('artifacts', process.env.MESH_BLOB_ROOT ?? './.artifacts');
 const peers = (flag('bootstrap', process.env.MESH_BOOTSTRAP ?? '') || '')
     .split(',').map((n) => n.trim()).filter((n) => n !== '');
 
@@ -249,12 +253,26 @@ const bringUp = async () => {
         announce: (banner) => { firstBoot = banner; },
     }));
     await app.registerModule(new ServeService());
+    await app.registerModule(new BuildService({ blobRoot }));
     await app.registerModule(new ApiService({ port: apiPort, host: apiHost }));
 };
 
 try {
     await bringUp();
 } catch (error) {
+    /**
+     * **The banner still has to be printed, and holding it nearly lost it.**
+     *
+     * Identity creates the account before the api binds its port, so a startup that fails in between
+     * has already minted a credential that is shown once and is not recoverable. Held and not printed
+     * on this path, it is never shown at all — and the account now exists, so a retry finds one and
+     * mints nothing. The password would be gone with the only copy in a variable.
+     *
+     * Printed before the failure rather than after, because the failure is what the person will act
+     * on and the credential is what they will need once they have.
+     */
+    if (firstBoot !== undefined) process.stdout.write(firstBoot);
+
     process.stderr.write(`\n${error?.message ?? String(error)}\n\n`);
     await app.stop().catch(() => {});
     process.exit(1);
@@ -295,6 +313,7 @@ process.stdout.write(
     `  api       http://${apiHost}:${String(apiPort)}\n` +
     `  control   ${brought.host} — ${String(brought.created.length)} thing(s) created this boot\n` +
     `  mongo     ${safeUri(mongo)}/${dbName}\n` +
+    `  artifacts ${blobRoot}\n` +
     `  config    ${envFile ?? '(no .env found — using the environment only)'}\n\n` +
     `  npx mesh-serve login\n\n` +
     `Ctrl-C to stop.\n`,

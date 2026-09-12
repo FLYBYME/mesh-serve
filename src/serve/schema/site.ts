@@ -58,6 +58,18 @@ export const SiteSchema = z.object({
      */
     organizationId: z.string().min(1),
 
+    /**
+     * The release this hostname serves, if any.
+     *
+     * **Set by `release.deploy` and by nothing else.** It is not part of a general site update,
+     * because *change what this hostname serves* is the one write on this collection that must name
+     * itself — a rollback is pointing it at an earlier row, and that act deserves a record.
+     *
+     * Absent means a site that answers contracts and serves no page, which is what the control site
+     * is and will stay.
+     */
+    releaseId: z.string().min(1).optional(),
+
     title: z.string().default(''),
     description: z.string().default(''),
 
