@@ -1,0 +1,32 @@
+import { MeshError } from '@flybyme/mesh';
+import { IdentityService } from '../identity.service.js';
+import type { IServiceContext } from '@flybyme/mesh';
+
+import type { SetPasswordInput, SetPasswordOutput } from '../contracts/user.contract.js';
+import { hashPassword } from '../methods/hash.js';
+
+export async function setPassword(
+    this: IdentityService,
+    input: SetPasswordInput,
+    ctx: IServiceContext
+): Promise<SetPasswordOutput> {
+    const userId = ctx.meta?.user?.id;
+    if (userId === undefined) {
+        throw new MeshError({ message: 'No caller.', code: 'UNAUTHENTICATED', status: 401 });
+    }
+    const user = await ctx.call('identity.user.resolve', { id: userId });
+    if (user === undefined) {
+        throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
+    }
+    const passwordHash = await hashPassword(input.password);
+    const wasProvisional = user.provisional === true;
+    await ctx.call('identity.user.update', {
+        id: userId,
+        passwordHash,
+        ...(wasProvisional ? { provisional: false } : {}),
+    });
+
+    ctx.logger.debug(`set password for user "${userId}"`, { id: userId, claimed: wasProvisional });
+
+    return { ok: true, claimed: wasProvisional };
+}
