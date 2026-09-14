@@ -57,3 +57,23 @@ export const siteResolveApiHostContract = defineContract({
 
 export type ResolveApiHostInput = z.infer<typeof siteResolveApiHostContract.inputSchema>;
 export type ResolveApiHostOutput = z.infer<typeof siteResolveApiHostContract.outputSchema>;
+
+export const resolveByIdInputSchema = z.object({
+    id: z.string().min(1).describe('The site id'),
+}).describe('One site, by id, for a caller who does not yet know its tenant');
+
+export const resolveByIdOutputSchema = siteCrud.get.outputSchema;
+
+export const siteResolveByIdContract = defineContract({
+    domain: 'serve.cdn',
+    action: 'resolveById',
+    description: 'One site, by id, for a caller who does not yet know its tenant.',
+    inputSchema: resolveByIdInputSchema,
+    outputSchema: resolveByIdOutputSchema,
+    rest: { method: 'GET', path: '/sites/id/:id' },
+    visibility: 'public',
+    print: (o) => `${o.host} (${o.tenantId})`,
+});
+
+export type ResolveByIdInput = z.infer<typeof siteResolveByIdContract.inputSchema>;
+export type ResolveByIdOutput = z.infer<typeof siteResolveByIdContract.outputSchema>;

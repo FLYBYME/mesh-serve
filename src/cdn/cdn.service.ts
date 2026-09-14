@@ -8,11 +8,13 @@ import {
     siteCrud,
     siteResolveHostContract,
     siteResolveApiHostContract,
+    siteResolveByIdContract,
     type Site
 } from './contracts/site.contract.js';
 
 import { resolveHost } from './tools/resolveHost.js';
 import { resolveApiHost } from './tools/resolveApiHost.js';
+import { resolveById } from './tools/resolveById.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
 
@@ -36,6 +38,7 @@ export class CdnService extends ServiceModule {
         this.mountCrud(siteCrud);
         this.mountTool(siteResolveHostContract, resolveHost);
         this.mountTool(siteResolveApiHostContract, resolveApiHost);
+        this.mountTool(siteResolveByIdContract, resolveById);
     }
 
 

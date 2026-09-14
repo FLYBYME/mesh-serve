@@ -3,10 +3,12 @@ import http from 'node:http';
 import { Database, globalContractRegistry, isPublicContract, MeshError, ServiceModule } from '@flybyme/mesh';
 import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
-import { exposeCrud, type Expose } from './contracts/expose.contract.js';
+import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
 import { buildDescriptor } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
+import { add } from './tools/add.js';
+import { remove } from './tools/remove.js';
 import type { Site } from '../cdn/contracts/site.contract.js';
 
 interface Caller {
@@ -30,11 +32,17 @@ const DEFAULT_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
 
 /**
  * Always exposed on DEFAULT_API_HOST, tied to no site and no tenant -- this is how a fresh install
- * gets anyone in at all. Kept minimal on purpose: registering, logging in, and asking who you are.
- * Anything else (e.g. operator-only cluster management) goes through explicit expose rows once
- * something needs it, not seeded broadly here.
+ * gets anyone in at all, plus the two calls that let an operator start configuring real sites
+ * without needing anything pre-seeded by hand. Kept otherwise minimal on purpose: register, log in,
+ * ask who you are. Anything else goes through explicit expose rows once something needs it.
  */
-const DEFAULT_EXPOSED_CONTRACTS = ['identity.user.register', 'identity.ticket.issue', 'identity.whoami'];
+const DEFAULT_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
+    { contract: 'identity.user.register' },
+    { contract: 'identity.ticket.issue' },
+    { contract: 'identity.whoami' },
+    { contract: 'serve.expose.add', role: 'operator' },
+    { contract: 'serve.expose.remove', role: 'operator' },
+];
 
 export class ApiService extends ServiceModule {
     public readonly domain = 'serve.api';
@@ -47,6 +55,8 @@ export class ApiService extends ServiceModule {
 
         this.mountCrud(exposeCrud);
         this.mountCrud(wantCrud);
+        this.mountTool(exposeAddContract, add);
+        this.mountTool(exposeRemoveContract, remove);
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
@@ -63,11 +73,13 @@ export class ApiService extends ServiceModule {
         const db = this.broker.getProvider<Database>('database');
         const repo = db.repo(exposeCrud.get.outputSchema, 'serve.expose');
 
-        for (const contract of DEFAULT_EXPOSED_CONTRACTS) {
+        for (const { contract, role } of DEFAULT_EXPOSED_CONTRACTS) {
             const existing = await repo.findOne({ contract, siteId: { $exists: false } });
             if (existing === undefined) {
-                this.broker.logger.info(`Exposing "${contract}" on the default host (${DEFAULT_API_HOST})...`);
-                await repo.create({ contract });
+                this.broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on the default host (${DEFAULT_API_HOST})...`);
+                // Passing role: undefined explicitly (rather than omitting the key) stores it as
+                // null, which the schema's z.string().optional() then rejects on the next read.
+                await repo.create(role !== undefined ? { contract, role } : { contract });
             }
         }
     }

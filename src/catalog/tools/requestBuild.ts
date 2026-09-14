@@ -34,10 +34,12 @@ export async function requestBuild(
         }
     }
 
+    // Passing drivers: undefined explicitly (rather than omitting the key) stores null, which the
+    // schema's z.array(z.string()).optional() then rejects on the next read.
     return ctx.call('serve.artifact.create', {
         tenantId: part.tenantId,
         partId: part.id,
         ref: input.ref,
-        drivers: input.drivers,
+        ...(input.drivers !== undefined ? { drivers: input.drivers } : {}),
     });
 }
