@@ -105,6 +105,19 @@ export class IdentityService extends ServiceModule {
             });
         }
 
+        // Checked every boot, independent of role creation above: an install that already had the
+        // role from before this existed would otherwise never get these grants. identity.permits
+        // has no superuser bypass -- operator is powerless without an explicit grant per root domain,
+        // and there is no single pattern that means "everything" (matchesContract only does an exact
+        // key or a "<prefix>.*" wildcard).
+        for (const contract of ['identity.*', 'serve.*']) {
+            const existing = await broker.call('identity.grant.find_one', { query: { roleKey: 'operator', contract } });
+            if (existing === undefined) {
+                broker.logger.info(`Granting operator "${contract}"...`);
+                await broker.call('identity.grant.create', { roleKey: 'operator', contract });
+            }
+        }
+
         const userCount = await broker.call('identity.user.count', { query: {} });
         if (userCount > 0) {
             broker.logger.debug('User count > 0, skipping operator creation.');
