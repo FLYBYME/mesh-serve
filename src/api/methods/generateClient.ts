@@ -17,6 +17,20 @@ function pascalCase(key: string): string {
         .join('');
 }
 
+/**
+ * A JS identifier from an arbitrary string -- `id` is a site's `application` field, which follows
+ * the "org-slug/part-name" convention (part.contract.ts), so "acme/blog" must become a valid export
+ * name (`acmeBlogApi`), not `acme/blogApi`, which is a syntax error, not merely a lint complaint.
+ */
+function camelIdentifier(raw: string): string {
+    const parts = raw.split(/[^a-zA-Z0-9]+/).filter((p) => p.length > 0);
+    if (parts.length === 0) return 'client';
+    const [first, ...rest] = parts;
+    const identifier = (first as string).charAt(0).toLowerCase() + (first as string).slice(1)
+        + rest.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+    return /^[0-9]/.test(identifier) ? `_${identifier}` : identifier;
+}
+
 function isEmptyObjectSchema(schema: unknown): boolean {
     if (typeof schema !== 'object' || schema === null) return false;
     const s = schema as { type?: string; properties?: Record<string, unknown> };
@@ -77,7 +91,7 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
         '',
         ...interfaces,
         '',
-        'export const ' + id + 'Api = defineApi({',
+        'export const ' + camelIdentifier(id) + 'Api = defineApi({',
         `    id: ${JSON.stringify(id)},`,
         `    exposure: ${JSON.stringify(descriptor.exposure)},`,
         `    shapeHash: ${JSON.stringify(descriptor.shapeHash)},`,
