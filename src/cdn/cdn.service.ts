@@ -14,9 +14,11 @@ import {
 import { resolveHost } from './tools/resolveHost.js';
 import { resolveApiHost } from './tools/resolveApiHost.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
+import type { Release } from '../catalog/contracts/release.contract.js';
 
 interface WebAssetRequest {
     kernel?: string;
+    drivers: string[];
     theme?: string;
     css: string[];
     js: string[];
@@ -50,6 +52,7 @@ export class CdnService extends ServiceModule {
 
         this.server = http.createServer(async (req, res) => {
             try {
+                this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
                 await this.handleRequest(req, res);
             } catch (err) {
                 if (err instanceof MeshError) {
@@ -60,6 +63,8 @@ export class CdnService extends ServiceModule {
                     res.statusCode = 500;
                     res.end('Internal Server Error');
                 }
+
+                this.broker.logger.debug(`Response: ${res.statusCode} ${res.statusMessage}`);
             }
         });
 
@@ -162,30 +167,16 @@ export class CdnService extends ServiceModule {
         return result.valid ? token : undefined;
     }
 
-    private async generateHtml(site: Site, req: http.IncomingMessage): Promise<string> {
-        const html: string[] = [];
-
-        if (!site.releaseHash) {
-            throw new MeshError({
-                code: 'Not Found',
-                message: 'Site not deployed',
-                status: 404,
-            });
-        }
-
-        const release = await this.broker.call('serve.release.getRelease', { hash: site.releaseHash });
-
+    private async resolveWebRequest(release: Release, req: http.IncomingMessage): Promise<WebAssetRequest> {
         const webRequest: WebAssetRequest = {
+            kernel: undefined,
+            drivers: [],
+            theme: undefined,
             css: [],
             js: []
         }
 
         for (const part of release.parts) {
-            // Drivers never get their own tag -- they're compiled into the kernel artifact by the
-            // builder, not fetched separately, so there is nothing here for a driver entry to do.
-            if (part.kind === 'driver') {
-                continue;
-            }
 
             const artifact = await this.broker.call('serve.artifact.getArtifact', { hash: part.artifactHash });
 
@@ -193,6 +184,14 @@ export class CdnService extends ServiceModule {
                 const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
                 if (entry) {
                     webRequest.kernel = `${part.artifactHash}/${entry.url}`;
+                }
+                continue;
+            }
+
+            if (part.kind === 'driver') {
+                const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
+                if (entry) {
+                    webRequest.drivers.push(`${part.artifactHash}/${entry.url}`);
                 }
                 continue;
             }
@@ -223,7 +222,25 @@ export class CdnService extends ServiceModule {
             });
         }
 
+        return webRequest;
+    }
+
+    private async generateHtml(site: Site, req: http.IncomingMessage): Promise<string> {
+        const html: string[] = [];
+
+        if (!site.releaseHash) {
+            throw new MeshError({
+                code: 'Not Found',
+                message: 'Site not deployed',
+                status: 404,
+            });
+        }
+
+        const release = await this.broker.call('serve.release.getRelease', { hash: site.releaseHash });
+
         const ticket = await this.resolveTicket(req);
+
+        const webRequest = await this.resolveWebRequest(release, req);
 
         const themeVars = Object.entries(site.theme)
             .map(([name, value]) => `${name}: ${value};`)

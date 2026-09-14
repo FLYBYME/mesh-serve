@@ -1,12 +1,24 @@
 import http from 'node:http';
 
-import { MeshError, ServiceModule } from '@flybyme/mesh';
-import type { IServiceBroker } from '@flybyme/mesh';
+import { globalContractRegistry, isPublicContract, MeshError, ServiceModule } from '@flybyme/mesh';
+import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
-import { exposeCrud } from './contracts/expose.contract.js';
+import { exposeCrud, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
 import { buildDescriptor } from './methods/descriptor.js';
+import { matchPath } from './methods/route.js';
 import type { Site } from '../cdn/contracts/site.contract.js';
+
+interface Caller {
+    readonly userId?: string;
+    readonly roles: readonly string[];
+}
+
+interface Route {
+    readonly row: Expose;
+    readonly contract: ToolContract;
+    readonly params: Record<string, string>;
+}
 
 export class ApiService extends ServiceModule {
     public readonly domain = 'serve.api';
@@ -32,6 +44,7 @@ export class ApiService extends ServiceModule {
 
         this.server = http.createServer(async (req, res) => {
             try {
+                this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
                 await this.handleRequest(req, res);
             } catch (err) {
                 if (err instanceof MeshError) {
@@ -43,6 +56,7 @@ export class ApiService extends ServiceModule {
                     res.statusCode = 500;
                     res.end('Internal Server Error');
                 }
+                this.broker.logger.debug(`Response: ${res.statusCode} ${res.statusMessage}`);
             }
         });
 
@@ -85,8 +99,136 @@ export class ApiService extends ServiceModule {
         return site;
     }
 
-    private async handleDescribe(site: Site, res: http.ServerResponse): Promise<void> {
-        const rows = await this.broker.call('serve.expose.find', { query: { siteId: site.id } });
+    /**
+     * This runs before any caller is known, but resolveCallerScope (DatabaseMiddleware.js) doesn't
+     * actually need a caller -- it falls back to a bare meta.tenant_id when meta.user is absent. The
+     * site we already resolved names its own tenant, so that's what scopes this read: no bypass, no
+     * caller required, just the tenant context this request is already known to be serving.
+     */
+    private async resolveExposeRows(siteId: string, tenantId: string): Promise<Expose[]> {
+        return this.broker.call('serve.expose.find', { query: { siteId } }, { meta: { tenant_id: tenantId } });
+    }
+
+    /**
+     * Bearer token could be a user ticket or an api token -- there is no prefix marking which, so
+     * both are tried. Absent or unrecognized means anonymous, not an error: whether that's good
+     * enough is the gate step's job, not this one's.
+     */
+    private async resolveCaller(req: http.IncomingMessage): Promise<Caller | undefined> {
+        const header = req.headers.authorization;
+        if (header === undefined || !header.startsWith('Bearer ')) {
+            return undefined;
+        }
+        const token = header.slice('Bearer '.length).trim();
+        if (token === '') {
+            return undefined;
+        }
+
+        const ticket = await this.broker.call('identity.ticket.validate', { token });
+        if (ticket.valid) {
+            return { userId: ticket.userId, roles: ticket.roles ?? [] };
+        }
+
+        const apiToken = await this.broker.call('identity.apiToken.validate', { token });
+        if (apiToken.valid) {
+            return { userId: apiToken.userId, roles: apiToken.roles ?? [] };
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Finds the one exposed row+contract matching this request. A row naming a gone or non-public
+     * contract is skipped rather than 500ing -- the same "reject internal" defense in depth as
+     * methods/descriptor.ts's buildDescriptor, checked again here rather than trusted from there.
+     */
+    private findRoute(rows: readonly Expose[], req: http.IncomingMessage): Route | undefined {
+        const method = (req.method ?? 'GET').toUpperCase();
+        const urlPath = (req.url ?? '/').split('?')[0] ?? '/';
+
+        for (const row of rows) {
+            const contract = globalContractRegistry.get(row.contract);
+            if (contract === undefined || !isPublicContract(contract)) continue;
+            if (contract.rest.method !== method) continue;
+
+            const params = matchPath(contract.rest.path, urlPath);
+            if (params !== undefined) {
+                return { row, contract, params };
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * role is a coarse, direct role check; permission calls identity.permits, which is itself
+     * keyed by role+contract (an explicit identity.grant) -- a finer check than merely holding a
+     * role. Neither set on the row means public. No caller at all is only a problem once the row
+     * actually demands one.
+     */
+    private async checkGate(row: Expose, caller: Caller | undefined): Promise<void> {
+        if (row.role === undefined && row.permission === undefined) {
+            return;
+        }
+
+        if (caller === undefined) {
+            throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
+        }
+
+        if (row.role !== undefined && !caller.roles.includes(row.role)) {
+            throw new MeshError({ message: `Requires role "${row.role}".`, code: 'FORBIDDEN', status: 403 });
+        }
+
+        if (row.permission !== undefined) {
+            const result = await this.broker.call('identity.permits', {
+                roles: [...caller.roles],
+                contract: row.contract,
+            });
+            if (!result.permitted) {
+                throw new MeshError({ message: `Not permitted to call "${row.contract}".`, code: 'FORBIDDEN', status: 403 });
+            }
+        }
+    }
+
+    private readBody(req: http.IncomingMessage): Promise<string> {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            req.on('data', (chunk: Buffer) => { data += chunk.toString('utf-8'); });
+            req.on('end', () => resolve(data));
+            req.on('error', reject);
+        });
+    }
+
+    private async parseInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
+        const method = (req.method ?? 'GET').toUpperCase();
+
+        if (method === 'GET' || method === 'DELETE') {
+            const url = new URL(req.url ?? '/', 'http://localhost');
+            const query: Record<string, unknown> = {};
+            for (const [key, value] of url.searchParams) {
+                query[key] = value;
+            }
+            return { ...query, ...params };
+        }
+
+        const raw = await this.readBody(req);
+        if (raw.trim() === '') {
+            return { ...params };
+        }
+
+        let body: unknown;
+        try {
+            body = JSON.parse(raw);
+        } catch {
+            throw new MeshError({ message: 'Malformed JSON body.', code: 'BAD_REQUEST', status: 400 });
+        }
+        if (typeof body !== 'object' || body === null) {
+            throw new MeshError({ message: 'Body must be a JSON object.', code: 'BAD_REQUEST', status: 400 });
+        }
+
+        return { ...(body as Record<string, unknown>), ...params };
+    }
+
+    private async handleDescribe(site: Site, rows: readonly Expose[], res: http.ServerResponse): Promise<void> {
         const descriptor = buildDescriptor(site.apiHost, rows);
 
         res.setHeader('Content-Type', 'application/json');
@@ -98,11 +240,43 @@ export class ApiService extends ServiceModule {
         const hostname = await this.resolveHostname(req);
         const site = await this.resolveSite(hostname);
 
-        if (req.url === '/api/_describe') {
-            return this.handleDescribe(site, res);
+        const rows = await this.resolveExposeRows(site.id, site.tenantId);
+
+        const urlPath = (req.url ?? '/').split('?')[0];
+        if (urlPath === '/api/_describe') {
+            return this.handleDescribe(site, rows, res);
         }
 
-        res.statusCode = 404;
-        res.end('Not Found');
+        const route = this.findRoute(rows, req);
+        if (route === undefined) {
+            res.statusCode = 404;
+            res.end('Not Found');
+            return;
+        }
+
+        const caller = await this.resolveCaller(req);
+        await this.checkGate(route.row, caller);
+
+        const input = await this.parseInput(req, route.params);
+
+        // Tools like identity.whoami read ctx.meta.user.id, so an anonymous ctx.call is not the
+        // same call a caller made -- tenant_id has no real "current org" resolver yet (a known gap
+        // from way back), so the site's own owning tenant stands in: this request is being served
+        // within that site's tenant context, absent any other notion of one.
+        const meta = caller?.userId !== undefined
+            ? { user: { id: caller.userId, tenant_id: site.tenantId, roles: [...caller.roles] } }
+            : undefined;
+
+        // route.row.contract is a domain.action key validated at runtime (findRoute already
+        // confirmed globalContractRegistry has a matching public contract for it) -- the broker's
+        // own generic can't know that statically, so this crosses the boundary the same way mesh's
+        // own generated CLI does for identical dynamic dispatch.
+        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta });
+
+        const descriptor = buildDescriptor(site.apiHost, rows);
+        res.setHeader('x-exposure-shape', descriptor.shapeHash);
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 200;
+        res.end(JSON.stringify(result));
     }
 }

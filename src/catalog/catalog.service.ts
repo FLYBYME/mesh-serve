@@ -38,7 +38,9 @@ export class CatalogService extends ServiceModule {
         this.broker = broker;
 
         this.watchInterval = setInterval(() => {
-            this.watchRelease();
+            this.watchRelease().catch((err) => {
+                this.broker.logger.error('watchRelease tick failed', err);
+            });
         }, 1000 * 60);// 60 seconds
     }
 
@@ -48,23 +50,32 @@ export class CatalogService extends ServiceModule {
         }
     }
 
+    /**
+     * Scans for pending artifacts across every tenant -- there is no single tenant this job runs
+     * as, so there is no meta.tenant_id that could ever be correct here. This is exactly the case
+     * Database.repo() exists for, unlike every other call in this file (each of which resolves one
+     * specific artifact/part/repo that already names its own tenant).
+     */
     private async watchRelease(): Promise<void> {
-        const pending = await this.broker.call('serve.artifact.find', { query: { status: 'pending' } });
+        const db = this.broker.getProvider<Database>('database');
+        const repo = db.repo(artifactCrud.get.outputSchema, 'serve.artifact');
+        const pending = await repo.find({ query: { status: 'pending' } });
         for (const artifact of pending) {
-            await this.buildArtifact(artifact);
+            await this.buildArtifact(artifactCrud.get.outputSchema.parse(artifact));
         }
     }
 
     private async resolveDrivers(artifact: Artifact): Promise<{ part: Part; repo: Repo }[]> {
+        const meta = { tenant_id: artifact.tenantId };
         const resolved: { part: Part; repo: Repo }[] = [];
         for (const key of artifact.drivers ?? []) {
             const driverPart = await this.broker.call('serve.part.find_one', {
                 query: { key, tenantId: artifact.tenantId },
-            });
+            }, { meta });
             if (driverPart === undefined) {
                 throw new Error(`No driver part "${key}".`);
             }
-            const driverRepo = await this.broker.call('serve.repo.resolve', { id: driverPart.repoId });
+            const driverRepo = await this.broker.call('serve.repo.resolve', { id: driverPart.repoId }, { meta });
             if (driverRepo === undefined) {
                 throw new Error(`No repo "${driverPart.repoId}" for driver "${key}".`);
             }
@@ -74,22 +85,23 @@ export class CatalogService extends ServiceModule {
     }
 
     private async buildArtifact(artifact: Artifact): Promise<void> {
+        const meta = { tenant_id: artifact.tenantId };
 
         await this.broker.call('serve.artifact.update', {
             id: artifact.id,
             status: 'running',
-        });
+        }, { meta });
 
         try {
             const part = await this.broker.call('serve.part.resolve', {
                 id: artifact.partId,
-            });
+            }, { meta });
             if (part === undefined) {
                 throw new Error(`No part "${artifact.partId}".`);
             }
             const repo = await this.broker.call('serve.repo.resolve', {
                 id: part.repoId,
-            });
+            }, { meta });
             if (repo === undefined) {
                 throw new Error(`No repo "${part.repoId}".`);
             }
@@ -108,7 +120,7 @@ export class CatalogService extends ServiceModule {
                 hash,
                 assets,
                 duration,
-            });
+            }, { meta });
 
             this.broker.emit('serve.artifact.built', {
                 tenantId: artifact.tenantId,
@@ -126,7 +138,7 @@ export class CatalogService extends ServiceModule {
                 id: artifact.id,
                 status: 'failed',
                 error,
-            });
+            }, { meta });
 
             this.broker.emit('serve.artifact.buildFailed', {
                 tenantId: artifact.tenantId,

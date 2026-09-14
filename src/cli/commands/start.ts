@@ -32,7 +32,7 @@ const startInputSchema = z.object({
     apiPort: z.coerce.number().default(5005).describe('ApiService REST+SSE http port'),
     cdnPort: z.coerce.number().default(3123).describe('CdnService frontend http port'),
     db: z.string().optional(),
-    logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+    logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
 });
 
 export const startCommand: MetaCommand<z.infer<typeof startInputSchema>> = {
