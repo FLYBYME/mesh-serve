@@ -9,12 +9,14 @@ import {
     siteResolveHostContract,
     siteResolveApiHostContract,
     siteResolveByIdContract,
+    siteDeployContract,
     type Site
 } from './contracts/site.contract.js';
 
 import { resolveHost } from './tools/resolveHost.js';
 import { resolveApiHost } from './tools/resolveApiHost.js';
 import { resolveById } from './tools/resolveById.js';
+import { deploy } from './tools/deploy.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
 
@@ -39,6 +41,7 @@ export class CdnService extends ServiceModule {
         this.mountTool(siteResolveHostContract, resolveHost);
         this.mountTool(siteResolveApiHostContract, resolveApiHost);
         this.mountTool(siteResolveByIdContract, resolveById);
+        this.mountTool(siteDeployContract, deploy);
     }
 
 

@@ -77,3 +77,29 @@ export const siteResolveByIdContract = defineContract({
 
 export type ResolveByIdInput = z.infer<typeof siteResolveByIdContract.inputSchema>;
 export type ResolveByIdOutput = z.infer<typeof siteResolveByIdContract.outputSchema>;
+
+export const deployInputSchema = z.object({
+    siteId: z.string().min(1).describe('The serve.site to deploy to'),
+    releaseHash: z.string().min(1).describe('The serve.release to serve'),
+}).describe('Point a site at a release it is not currently serving');
+
+export const deployOutputSchema = z.object({
+    site: siteCrud.get.outputSchema,
+    wantsAdded: z.array(z.string()).describe('Contract keys this release\'s parts want that the site\'s previous release did not'),
+    wantsRemoved: z.array(z.string()).describe('Contract keys the site\'s previous release wanted that this one does not'),
+}).describe('The result of a deploy');
+
+export const siteDeployContract = defineContract({
+    domain: 'serve.cdn',
+    action: 'deploy',
+    description: 'Point a site at a release it is not currently serving.',
+    inputSchema: deployInputSchema,
+    outputSchema: deployOutputSchema,
+    rest: { method: 'POST', path: '/sites/:siteId/deploy' },
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${o.site.host} -> ${o.site.releaseHash}`,
+});
+
+export type DeployInput = z.infer<typeof siteDeployContract.inputSchema>;
+export type DeployOutput = z.infer<typeof siteDeployContract.outputSchema>;
