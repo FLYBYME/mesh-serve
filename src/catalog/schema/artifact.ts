@@ -4,6 +4,7 @@ export const artifactAssetSchema = z.object({
   url: z.string().describe('Where this asset lives under /assets/:artifactHash/, relative to the artifact, e.g. "main.a1b2c3.js"'),
   name: z.string().describe('Filename, for Content-Disposition and display'),
   fileExtension: z.string().optional().describe('Lowercased extension including the dot, e.g. ".css"; used to pick out CSS/JS entrypoints'),
+  integrity: z.string().optional().describe('"sha384-<base64>" digest of this file\'s exact bytes, for a <script>/<link integrity=...> attribute'),
 }).describe('One file inside an artifact');
 
 export const artifactSchema = z.object({

@@ -108,9 +108,14 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
     const files = (await walk(outDir)).sort();
 
     const hasher = crypto.createHash('sha256');
+    // Read once per file, reused for both the overall content hash and each file's own SRI digest
+    // below -- the alternative is reading every file twice.
+    const contents = new Map<string, Buffer>();
     for (const relPath of files) {
+        const content = await fs.readFile(path.join(outDir, relPath));
+        contents.set(relPath, content);
         hasher.update(relPath);
-        hasher.update(await fs.readFile(path.join(outDir, relPath)));
+        hasher.update(content);
     }
     const hash = hasher.digest('hex');
 
@@ -124,6 +129,7 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
         url: relPath,
         name: path.basename(relPath),
         fileExtension: path.extname(relPath) || undefined,
+        integrity: `sha384-${crypto.createHash('sha384').update(contents.get(relPath) as Buffer).digest('base64')}`,
     }));
 
     return { hash, assets };

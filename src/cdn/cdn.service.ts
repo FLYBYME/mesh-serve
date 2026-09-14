@@ -20,19 +20,36 @@ import { deploy } from './tools/deploy.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
 
-interface WebAssetRequest {
-    kernel?: string;
-    drivers: string[];
-    theme?: string;
-    css: string[];
-    js: string[];
+/** One servable file, with the digest a <script>/<link integrity=...> attribute checks against. */
+interface WebAsset {
+    url: string;
+    integrity?: string;
 }
+
+interface WebAssetRequest {
+    kernel?: WebAsset;
+    theme?: WebAsset;
+    css: WebAsset[];
+    js: WebAsset[];
+}
+
+/** What resolveWebRequest actually hands back once it has confirmed a kernel exists -- kernel is
+ * required here so a caller never has to re-check what was already validated. */
+type ResolvedWebAssetRequest = WebAssetRequest & { kernel: WebAsset };
+
+/** No scheme/protocol concept exists anywhere else in mesh-serve yet; apiHost/mcpHost are stored
+ * bare (matching resolveApiHost's exact-match lookup). Same env-var convention as API_PORT/
+ * SERVER_PORT/DEFAULT_API_HOST. */
+const PUBLIC_SCHEME = process.env.PUBLIC_SCHEME || 'https';
 
 export class CdnService extends ServiceModule {
     public readonly domain = 'serve.cdn';
 
     private server?: http.Server;
     private broker!: IServiceBroker;
+    /** Keyed by release hash -- immutable and content-addressed, so a cached entry can never go
+     * stale. Unbounded for now; revisit with an eviction policy if it ever matters. */
+    private webRequestCache = new Map<string, ResolvedWebAssetRequest>();
 
     constructor() {
         super();
@@ -117,6 +134,8 @@ export class CdnService extends ServiceModule {
         return hostname;
     }
 
+    /** Maintenance is handled in handleRequest (a redirect, not a thrown error) -- this only
+     * resolves the hostname to a site. */
     private async resolveSite(hostname: string): Promise<Site> {
 
         const site = await this.broker.call('serve.cdn.resolveHost', { host: hostname });
@@ -125,14 +144,6 @@ export class CdnService extends ServiceModule {
                 code: 'Not Found',
                 message: 'Site not found',
                 status: 404,
-            });
-        }
-
-        if (site.maintenance) {
-            throw new MeshError({
-                code: 'Service Unavailable',
-                message: 'Site under maintenance',
-                status: 503,
             });
         }
 
@@ -173,10 +184,21 @@ export class CdnService extends ServiceModule {
         return result.valid ? token : undefined;
     }
 
-    private async resolveWebRequest(release: Release, req: http.IncomingMessage): Promise<WebAssetRequest> {
+    /**
+     * A release is immutable and content-addressed (its own hash), so the shape this resolves to
+     * can never change once computed -- cached by release.hash rather than re-walking every part's
+     * artifact on every single page load. No `kind: 'driver'` branch: buildKernel bakes drivers
+     * into the kernel's own single JS bundle, so compose.ts never emits a separate driver entry in
+     * release.parts -- there is nothing to resolve here for them.
+     */
+    private async resolveWebRequest(release: Release): Promise<ResolvedWebAssetRequest> {
+        const cached = this.webRequestCache.get(release.hash);
+        if (cached !== undefined) {
+            return cached;
+        }
+
         const webRequest: WebAssetRequest = {
             kernel: undefined,
-            drivers: [],
             theme: undefined,
             css: [],
             js: []
@@ -189,15 +211,7 @@ export class CdnService extends ServiceModule {
             if (part.kind === 'kernel') {
                 const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
                 if (entry) {
-                    webRequest.kernel = `${part.artifactHash}/${entry.url}`;
-                }
-                continue;
-            }
-
-            if (part.kind === 'driver') {
-                const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
-                if (entry) {
-                    webRequest.drivers.push(`${part.artifactHash}/${entry.url}`);
+                    webRequest.kernel = { url: `${part.artifactHash}/${entry.url}`, integrity: entry.integrity };
                 }
                 continue;
             }
@@ -205,22 +219,23 @@ export class CdnService extends ServiceModule {
             if (part.kind === 'theme') {
                 const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.css');
                 if (entry) {
-                    webRequest.theme = `${part.artifactHash}/${entry.url}`;
+                    webRequest.theme = { url: `${part.artifactHash}/${entry.url}`, integrity: entry.integrity };
                 }
                 continue;
             }
 
             for (const asset of artifact.assets ?? []) {
                 if (asset.fileExtension === '.css') {
-                    webRequest.css.push(`${part.artifactHash}/${asset.url}`);
+                    webRequest.css.push({ url: `${part.artifactHash}/${asset.url}`, integrity: asset.integrity });
                 }
                 if (asset.fileExtension === '.js') {
-                    webRequest.js.push(`${part.artifactHash}/${asset.url}`);
+                    webRequest.js.push({ url: `${part.artifactHash}/${asset.url}`, integrity: asset.integrity });
                 }
             }
         }
 
-        if (webRequest.kernel === undefined) {
+        const { kernel } = webRequest;
+        if (kernel === undefined) {
             throw new MeshError({
                 code: 'Not Found',
                 message: 'Release has no kernel',
@@ -228,7 +243,9 @@ export class CdnService extends ServiceModule {
             });
         }
 
-        return webRequest;
+        const resolved: ResolvedWebAssetRequest = { ...webRequest, kernel };
+        this.webRequestCache.set(release.hash, resolved);
+        return resolved;
     }
 
     private async generateHtml(site: Site, req: http.IncomingMessage): Promise<string> {
@@ -246,11 +263,15 @@ export class CdnService extends ServiceModule {
 
         const ticket = await this.resolveTicket(req);
 
-        const webRequest = await this.resolveWebRequest(release, req);
+        const webRequest = await this.resolveWebRequest(release);
 
         const themeVars = Object.entries(site.theme)
             .map(([name, value]) => `${name}: ${value};`)
             .join(' ');
+
+        const integrityAttr = (asset: WebAsset): string => asset.integrity ? ` integrity="${asset.integrity}"` : '';
+        const scriptTag = (asset: WebAsset): string => `<script type="module" src="/assets/${asset.url}"${integrityAttr(asset)}></script>`;
+        const styleTag = (asset: WebAsset): string => `<link rel="stylesheet" href="/assets/${asset.url}"${integrityAttr(asset)}>`;
 
         html.push(`<!DOCTYPE html>`);
         html.push(`<html>`);
@@ -260,14 +281,20 @@ export class CdnService extends ServiceModule {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${site.title}</title>
       ${site.description ? `<meta name="description" content="${site.description}">` : ''}
+      ${site.canonical ? `<link rel="canonical" href="${site.canonical}">` : ''}
+      ${site.image ? `<meta property="og:image" content="${site.image}">` : ''}
+      ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
+      <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.apiHost}">
+      <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.mcpHost}">
       ${themeVars ? `<style>:root { ${themeVars} }</style>` : ''}
-      ${webRequest.theme ? `<link rel="stylesheet" href="/assets/${webRequest.theme}">` : ''}
-      ${webRequest.css.map((style) => `<link rel="stylesheet" href="/assets/${style}">`).join('')}
+      ${webRequest.theme ? styleTag(webRequest.theme) : ''}
+      ${webRequest.css.map(styleTag).join('')}
     </head>
     <body>
       <script
         type="module"
-        src="/assets/${webRequest.kernel}"
+        src="/assets/${webRequest.kernel.url}"
+        ${integrityAttr(webRequest.kernel)}
         data-application="${site.application}"
         data-api="${site.apiHost}"
         data-mcp="${site.mcpHost}"
@@ -275,12 +302,31 @@ export class CdnService extends ServiceModule {
         ${site.open ? `data-open='${JSON.stringify(site.open)}'` : ''}
         ${ticket !== undefined ? `data-ticket="${ticket}"` : ''}
       ></script>
-      ${webRequest.js.map((script) => `<script type="module" src="/assets/${script}"></script>`).join('')}
+      ${webRequest.js.map(scriptTag).join('')}
     </body>
   </html>
 `);
 
         return html.join('')
+    }
+
+    /** Content-Security-Policy for the HTML document: every asset URL is deterministic and
+     * same-origin by the time this runs, and nothing here is an inline <script> (data travels via
+     * data-* attributes) -- so script-src can be strict. style-src allows 'unsafe-inline' for the
+     * one inline <style> block (theme CSS vars); low severity, not worth an external per-request
+     * stylesheet to avoid it. */
+    private contentSecurityPolicy(site: Site): string {
+        const api = `${PUBLIC_SCHEME}://${site.apiHost}`;
+        const mcp = `${PUBLIC_SCHEME}://${site.mcpHost}`;
+        const mcpWs = `wss://${site.mcpHost}`;
+        return [
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            `connect-src 'self' ${api} ${mcp} ${mcpWs}`,
+            "img-src 'self' data: https:",
+            "font-src 'self'",
+        ].join('; ');
     }
 
     private async serveAssets(site: Site, req: http.IncomingMessage, res: http.ServerResponse) {
@@ -338,15 +384,17 @@ export class CdnService extends ServiceModule {
         // set content length header.
         res.setHeader('Content-Length', asset.contentLength);
 
-        // set content encoding header if the asset is compressed.
-        if (asset.fileExtension === '.gz') {
-            res.setHeader('Content-Encoding', 'gzip');
-        }
-
         // send file.
         res.end(fileContent);
     }
 
+
+    /** siteSchema.maintenance's own description says what this is: "redirect all traffic to
+     * /.well-known/maintenance" -- previously just a thrown 503 with no redirect and no page. */
+    private maintenancePage(site: Site): string {
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${site.title} -- under maintenance</title></head>`
+            + `<body><h1>${site.title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
+    }
 
     private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
 
@@ -354,6 +402,23 @@ export class CdnService extends ServiceModule {
 
         const site = await this.resolveSite(hostname);
 
+        const pathname = (req.url ?? '/').split('?')[0];
+
+        if (pathname === '/.well-known/maintenance') {
+            const page = this.maintenancePage(site);
+            res.setHeader('Content-Type', 'text/html');
+            res.setHeader('Content-Length', Buffer.byteLength(page));
+            res.statusCode = 200;
+            res.end(page);
+            return;
+        }
+
+        if (site.maintenance) {
+            res.statusCode = 302;
+            res.setHeader('Location', '/.well-known/maintenance');
+            res.end();
+            return;
+        }
 
         if (site.releaseHash === undefined) {
             throw new MeshError({
@@ -374,6 +439,7 @@ export class CdnService extends ServiceModule {
         const html = await this.generateHtml(site, req);
         res.setHeader('Content-Type', 'text/html');
         res.setHeader('Content-Length', Buffer.byteLength(html));
+        res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site));
         res.statusCode = 200;
         res.end(html);
 
