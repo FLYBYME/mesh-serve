@@ -31,7 +31,7 @@ const startInputSchema = z.object({
     wsPort: z.coerce.number().default(6005).describe('Mesh peer transport port -- unrelated to the api/cdn http ports below'),
     apiPort: z.coerce.number().default(5005).describe('ApiService REST+SSE http port'),
     cdnPort: z.coerce.number().default(3123).describe('CdnService frontend http port'),
-    db: z.string().optional(),
+    db: z.string().optional().describe('Database name, e.g. "test-001" -- not a connection string; use MONGODB_URI for that'),
     logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
 });
 
@@ -57,8 +57,8 @@ export const startCommand: MetaCommand<z.infer<typeof startInputSchema>> = {
         node.use(new RegistryModule({ ttl: 5000 })); // Short TTL for faster repro
         node.use(new NetworkModule({ transports: [transport] }));
 
-        const dbConfig: { uri?: string } = {};
-        if (args.db) dbConfig.uri = args.db;
+        const dbConfig: { dbName?: string } = {};
+        if (args.db) dbConfig.dbName = args.db;
         node.use(new DatabaseModule(dbConfig));
 
         node.use(new BrokerModule());
