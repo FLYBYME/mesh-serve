@@ -5,10 +5,12 @@ import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybym
 
 import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
+import { generateClientContract } from './contracts/generateClient.contract.js';
 import { buildDescriptor } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
 import { add } from './tools/add.js';
 import { remove } from './tools/remove.js';
+import { generateClient } from './tools/generateClient.js';
 import type { Site } from '../cdn/contracts/site.contract.js';
 
 interface Caller {
@@ -57,6 +59,7 @@ export class ApiService extends ServiceModule {
         this.mountCrud(wantCrud);
         this.mountTool(exposeAddContract, add);
         this.mountTool(exposeRemoveContract, remove);
+        this.mountTool(generateClientContract, generateClient);
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {

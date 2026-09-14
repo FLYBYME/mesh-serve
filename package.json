@@ -34,6 +34,7 @@
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.4.1",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
+        "json-schema-to-typescript": "^16.0.0",
         "zod": "^3.25.76",
         "zod-to-json-schema": "^3.25.2"
     },

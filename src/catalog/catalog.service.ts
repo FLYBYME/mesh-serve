@@ -1,9 +1,9 @@
-import type { IServiceBroker } from '@flybyme/mesh';
-import { Database, ServiceModule } from '@flybyme/mesh';
+import type { IServiceBroker, IServiceContext } from '@flybyme/mesh';
+import { Database, MeshError, ServiceModule } from '@flybyme/mesh';
 
 import { repoCrud, type Repo } from './contracts/repo.contract.js';
 import { partCrud, type Part } from './contracts/part.contract.js';
-import { compositionCrud } from './contracts/composition.contract.js';
+import { compositionCrud, compositionComposeContract } from './contracts/composition.contract.js';
 import { artifactCrud, artifactGetArtifactContract, artifactGetAssetContract, artifactRequestBuildContract, type Artifact } from './contracts/artifact.contract.js';
 import { releaseCrud, releaseGetReleaseContract } from './contracts/release.contract.js';
 
@@ -11,6 +11,7 @@ import { getArtifact } from './tools/getArtifact.js';
 import { getAsset } from './tools/getAsset.js';
 import { getRelease } from './tools/getRelease.js';
 import { requestBuild } from './tools/requestBuild.js';
+import { compose } from './tools/compose.js';
 import { buildPart, buildKernel } from './methods/build.js';
 
 export class CatalogService extends ServiceModule {
@@ -32,6 +33,51 @@ export class CatalogService extends ServiceModule {
         this.mountTool(artifactGetAssetContract, getAsset);
         this.mountTool(artifactRequestBuildContract, requestBuild);
         this.mountTool(releaseGetReleaseContract, getRelease);
+        this.mountTool(compositionComposeContract, compose);
+
+        this.mountCrudHook('serve.part', 'create', {
+            before: async (input, ctx) => {
+                const { tenantId } = input as { tenantId: string };
+                await this.validatePartKey(input as { key: string }, tenantId, ctx);
+                return input;
+            },
+        });
+
+        this.mountCrudHook('serve.part', 'update', {
+            before: async (input, ctx) => {
+                const { id, key } = input as { id: string; key?: string };
+                if (key === undefined) {
+                    return input;
+                }
+                const part = await ctx.call('serve.part.resolve', { id });
+                if (part === undefined) {
+                    throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
+                }
+                await this.validatePartKey({ key }, part.tenantId, ctx);
+                return input;
+            },
+        });
+    }
+
+    /**
+     * key is "org-slug/part-name" -- the org's own slug, not whatever the caller feels like typing,
+     * so a part built by one org can't claim another org's namespace.
+     */
+    private async validatePartKey(input: { key: string }, tenantId: string, ctx: IServiceContext): Promise<void> {
+        const org = await ctx.call('identity.organization.resolve', { id: tenantId });
+        if (org === undefined) {
+            throw new MeshError({ message: `No organization "${tenantId}".`, code: 'NOT_FOUND', status: 404 });
+        }
+        const slash = input.key.indexOf('/');
+        const prefix = slash === -1 ? undefined : input.key.slice(0, slash);
+        const name = slash === -1 ? undefined : input.key.slice(slash + 1);
+        if (prefix !== org.slug || name === undefined || name.length === 0) {
+            throw new MeshError({
+                message: `key must be "${org.slug}/<part-name>", got "${input.key}".`,
+                code: 'BAD_REQUEST',
+                status: 400,
+            });
+        }
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
@@ -108,7 +154,7 @@ export class CatalogService extends ServiceModule {
 
             const startedAt = Date.now();
 
-            const { hash, assets } = part.kind === 'kernel'
+            const { hash, assets, wants } = part.kind === 'kernel'
                 ? await buildKernel(part, repo, artifact.ref, await this.resolveDrivers(artifact))
                 : await buildPart(part, repo, artifact.ref);
 
@@ -121,6 +167,11 @@ export class CatalogService extends ServiceModule {
                 assets,
                 duration,
             }, { meta });
+
+            // wants is resolved from the repo at build time (mesh.wants.json), not hand-edited --
+            // refreshed on every successful build so it tracks the part's current code, same as
+            // hash/assets do on the artifact.
+            await this.broker.call('serve.part.update', { id: part.id, wants }, { meta });
 
             this.broker.emit('serve.artifact.built', {
                 tenantId: artifact.tenantId,

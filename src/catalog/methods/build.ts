@@ -68,6 +68,23 @@ async function runEsbuild(entryPointFiles: string[], outDir: string): Promise<vo
     });
 }
 
+/**
+ * mesh.wants.json, sibling to the part's entry point: a plain JSON array of contract keys this
+ * part's code calls, e.g. ["identity.whoami", "serve.cdn.find"]. Absent means the part declares
+ * nothing -- not an error, since not every part calls the mesh at all.
+ */
+async function readWants(repoDir: string, part: Part): Promise<string[]> {
+    const file = path.join(repoDir, part.path, 'mesh.wants.json');
+    if (!(await exists(file))) {
+        return [];
+    }
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as unknown;
+    if (!Array.isArray(raw) || !raw.every((v) => typeof v === 'string')) {
+        throw new Error(`${file} must be a JSON array of contract key strings.`);
+    }
+    return raw;
+}
+
 async function walk(dir: string, base: string = dir): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const files: string[] = [];
@@ -117,14 +134,15 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
  * stores the result under its content hash. Does not touch serve.artifact -- the caller records the
  * outcome.
  */
-export async function buildPart(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
+export async function buildPart(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
     const repoDir = await ensureRepoCheckout(repo, ref);
     const entry = path.join(repoDir, part.path, part.entryPoint);
+    const wants = await readWants(repoDir, part);
 
     const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
     try {
         await runEsbuild([entry], buildTmpDir);
-        return await hashAndStoreOutput(buildTmpDir);
+        return { ...await hashAndStoreOutput(buildTmpDir), wants };
     } finally {
         await fs.rm(buildTmpDir, { recursive: true, force: true });
     }
@@ -145,14 +163,16 @@ export async function buildKernel(
     kernelRepo: Repo,
     ref: string,
     drivers: readonly { part: Part; repo: Repo }[],
-): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
+): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
     const kernelDir = await ensureRepoCheckout(kernelRepo, ref);
     const kernelEntry = path.join(kernelDir, kernelPart.path, kernelPart.entryPoint);
+    const wants = new Set(await readWants(kernelDir, kernelPart));
 
     const driverEntries: string[] = [];
     for (const { part, repo } of drivers) {
         const driverDir = await ensureRepoCheckout(repo, repo.defaultBranch);
         driverEntries.push(path.join(driverDir, part.path, part.entryPoint));
+        for (const w of await readWants(driverDir, part)) wants.add(w);
     }
 
     const synthDir = path.join(os.tmpdir(), `mesh-kernel-entry-${crypto.randomUUID()}`);
@@ -168,7 +188,7 @@ export async function buildKernel(
     const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
     try {
         await runEsbuild([synthEntry], buildTmpDir);
-        return await hashAndStoreOutput(buildTmpDir);
+        return { ...await hashAndStoreOutput(buildTmpDir), wants: [...wants] };
     } finally {
         await fs.rm(synthDir, { recursive: true, force: true });
         await fs.rm(buildTmpDir, { recursive: true, force: true });
