@@ -8,7 +8,12 @@ import { membershipCrud } from './contracts/membership.contract.js';
 import { roleCrud, roleUpsertContract } from './contracts/role.contract.js';
 import { grantCrud } from './contracts/grant.contract.js';
 import {
-    ticketCrud, ticketIssueContract, ticketValidateContract, ticketRevokeContract, ticketSignOutContract,
+    ticketCrud,
+    ticketIssueContract,
+    ticketValidateContract,
+    ticketRevokeContract,
+    ticketSignOutContract,
+    ticketResolveContract,
 } from './contracts/ticket.contract.js';
 import { apiTokenCrud, apiTokenIssueContract, apiTokenValidateContract } from './contracts/apiToken.contract.js';
 import { whoamiContract, permitsContract } from './contracts/identity.contract.js';
@@ -25,6 +30,8 @@ import { issueApiToken } from './tools/issueApiToken.js';
 import { validateApiToken } from './tools/validateApiToken.js';
 import { whoami } from './tools/whoami.js';
 import { permits } from './tools/permits.js';
+import { resolveTicket } from './tools/resolveTicket.js';
+
 import { hashPassword } from './methods/hash.js';
 
 export class IdentityService extends ServiceModule {
@@ -53,6 +60,7 @@ export class IdentityService extends ServiceModule {
         this.mountTool(apiTokenValidateContract, validateApiToken);
         this.mountTool(whoamiContract, whoami);
         this.mountTool(permitsContract, permits);
+        this.mountTool(ticketResolveContract, resolveTicket);
 
         this.mountCrudHook('identity.organization', 'create', {
             before: async (input, ctx) => {

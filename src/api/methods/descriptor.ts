@@ -1,0 +1,77 @@
+import crypto from 'node:crypto';
+
+import { globalContractRegistry, isPublicContract } from '@flybyme/mesh';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+
+import type { Expose } from '../contracts/expose.contract.js';
+
+export interface DescribedCall {
+    readonly key: string;
+    readonly domain: string;
+    readonly action: string;
+    readonly description: string;
+    readonly method: string;
+    readonly path: string;
+    readonly gate: string;
+    readonly input: unknown;
+    readonly output: unknown;
+    readonly destructive?: boolean;
+    readonly stream?: boolean;
+}
+
+export interface ExposureDescriptor {
+    readonly host: string;
+    readonly base: string;
+    readonly exposure: string;
+    readonly shapeHash: string;
+    readonly calls: readonly DescribedCall[];
+}
+
+function gateOf(row: Expose): string {
+    if (row.permission !== undefined) return `permission:${row.permission}`;
+    if (row.role !== undefined) return row.role;
+    return 'public';
+}
+
+/**
+ * Joins a site's serve.expose rows against the live contract registry. A row naming a contract that
+ * no longer exists, or one that isn't (or is no longer) public, is silently dropped -- defense in
+ * depth: describeExposure's own write path already refuses to expose an internal contract, but a
+ * stale row is checked again here rather than trusted.
+ */
+export function buildDescriptor(host: string, rows: readonly Expose[]): ExposureDescriptor {
+    const calls: DescribedCall[] = [];
+
+    for (const row of rows) {
+        const contract = globalContractRegistry.get(row.contract);
+        if (contract === undefined || !isPublicContract(contract)) {
+            continue;
+        }
+
+        calls.push({
+            key: row.contract,
+            domain: contract.domain,
+            action: contract.action,
+            description: contract.description,
+            method: contract.rest.method,
+            path: contract.rest.path,
+            gate: gateOf(row),
+            input: zodToJsonSchema(contract.inputSchema),
+            output: zodToJsonSchema(contract.outputSchema),
+            destructive: contract.destructive,
+            stream: contract.rest.isStream,
+        });
+    }
+
+    calls.sort((a, b) => a.key.localeCompare(b.key));
+
+    const shapeHash = crypto.createHash('sha256')
+        .update(JSON.stringify(calls.map((c) => ({ key: c.key, method: c.method, path: c.path, input: c.input, output: c.output }))))
+        .digest('hex');
+
+    const exposure = crypto.createHash('sha256')
+        .update(JSON.stringify(calls.map((c) => ({ key: c.key, gate: c.gate }))))
+        .digest('hex');
+
+    return { host, base: '/api', exposure, shapeHash, calls };
+}

@@ -1,0 +1,19 @@
+import { z } from 'zod';
+
+export const artifactAssetSchema = z.object({
+  url: z.string().describe('Where this asset lives under /assets/:artifactHash/, relative to the artifact, e.g. "main.a1b2c3.js"'),
+  name: z.string().describe('Filename, for Content-Disposition and display'),
+  fileExtension: z.string().optional().describe('Lowercased extension including the dot, e.g. ".css"; used to pick out CSS/JS entrypoints'),
+}).describe('One file inside an artifact');
+
+export const artifactSchema = z.object({
+  tenantId: z.string().describe('The organization that owns this artifact'),
+  partId: z.string().describe('The serve.part this is a build of'),
+  ref: z.string().describe('The git ref (commit, branch, or tag) this was built from'),
+  drivers: z.array(z.string()).optional().describe('serve.part (kind: driver) keys baked into this build; only set when the part being built is kind: kernel -- the same kernel part with a different driver set is a different artifact'),
+  status: z.enum(['pending', 'running', 'success', 'failed']).default('pending').describe('Where this build attempt is'),
+  hash: z.string().optional().describe('Content hash of the built output; set once status is success'),
+  assets: z.array(artifactAssetSchema).optional().describe('Every file this artifact serves; set once status is success'),
+  error: z.string().optional().describe('What went wrong; set once status is failed'),
+  duration: z.number().optional().describe('How long this build took in seconds'),
+}).describe('One attempt to build a part at a git ref, and its output once it succeeds');

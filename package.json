@@ -28,12 +28,11 @@
         "typecheck": "npm run generate && tsc -p tsconfig.check.json --noEmit",
         "//test": "typecheck first, because vitest transpiles without typechecking -- so the suite could be green while the compiler was not, and was, for six errors across two files. See roadmap F31.",
         "test": "npm run typecheck && vitest run",
-        "test:watch": "vitest",
-        "node": "node bin/mesh-serve.mjs node --ws 4001 --cdn 8080 --api 5005 --db mesh-serve-dev",
-        "seed": "node bin/mesh-serve.mjs seed"
+        "test:watch": "vitest"
     },
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.4.1",
+        "commander": "^15.0.0",
         "esbuild": "^0.28.2",
         "zod": "^3.25.76",
         "zod-to-json-schema": "^3.25.2"

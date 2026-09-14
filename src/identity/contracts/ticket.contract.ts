@@ -1,4 +1,4 @@
-import { defineContract, defineCrud, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { ticketSchema } from '../schema/ticket.js';
 
@@ -10,6 +10,24 @@ export const ticketCrud = defineCrud('identity.ticket', ticketSchema, {
 });
 
 export type Ticket = z.infer<typeof ticketCrud.outputSchema>;
+
+export const TicketRevokedEventSchema = z.object({
+    id: z.string().describe('The id of the ticket that was revoked'),
+    userId: z.string().describe('Whose ticket this is'),
+    tokenId: z.string().describe('The token that was revoked'),
+    revokedAt: z.number().describe('When the ticket was revoked, as a unix timestamp in milliseconds'),
+    revokedReason: z.string().optional().describe('The reason for revocation'),
+});
+
+export const ticketRevokedEvent = defineEvent(
+    'identity.ticket.revoked',
+    TicketRevokedEventSchema,
+    {
+        scopedBy: 'userId',
+    }
+);
+
+export type TicketRevokedEvent = z.infer<typeof TicketRevokedEventSchema>;
 
 export const issueInputSchema = z.object({
     email: z.string().email().describe('The account signing in'),
@@ -108,3 +126,30 @@ export const ticketSignOutContract = defineContract({
 
 export type SignOutInput = z.infer<typeof ticketSignOutContract.inputSchema>;
 export type SignOutOutput = z.infer<typeof ticketSignOutContract.outputSchema>;
+
+
+/**
+ * Resolve a ticket to a user
+ */
+
+export const ticketResolveInputSchema = z.object({
+    token: z.string().min(1).describe('The ticket to resolve'),
+}).describe('Resolve a ticket to a user');
+
+export const ticketResolveOutputSchema = z.object({
+    ticket: ticketSchema.optional().describe('The ticket, if it exists and is valid'),
+}).describe('The result of resolving a ticket');
+
+export const ticketResolveContract = defineContract({
+    domain: 'identity.ticket',
+    action: 'resolve',
+    description: 'Resolve a ticket to a user',
+    inputSchema: ticketResolveInputSchema,
+    outputSchema: ticketResolveOutputSchema,
+    rest: { method: 'POST', path: '/identity/ticket/resolve' },
+    print: (o) => (o.ticket !== undefined ? `resolved: ${o.ticket.userId}` : 'invalid'),
+});
+
+export type TicketResolveInput = z.infer<typeof ticketResolveContract.inputSchema>;
+export type TicketResolveOutput = z.infer<typeof ticketResolveContract.outputSchema>;
+

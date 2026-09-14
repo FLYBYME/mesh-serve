@@ -12,6 +12,8 @@ export async function signOut(
     if (ticket !== undefined && ticket.revokedAt === undefined) {
         await ctx.call('identity.ticket.update', { id: ticket.id, revokedAt: new Date() });
 
+        ctx.emit('identity.user.signed_out', { userId: ticket.userId });
+
         ctx.logger.debug(`signed out ticket "${input.token}"`, { id: ticket.userId, token: input.token });
     } else {
         ctx.logger.debug(`ticket "${input.token}" not found or already revoked`, { token: input.token });

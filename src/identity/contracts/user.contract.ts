@@ -1,4 +1,4 @@
-import { defineContract, defineCrud, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { userSchema } from '../schema/user.js';
 
@@ -10,6 +10,20 @@ export const userCrud = defineCrud('identity.user', userSchema, {
 });
 
 export type User = z.infer<typeof userCrud.outputSchema>;
+
+export const userSignedOutEventSchema = z.object({
+    userId: z.string().describe('The id of the account that was signed out'),
+});
+
+export const userSignedOutEvent = defineEvent(
+    'identity.user.signed_out',
+    userSignedOutEventSchema,
+    {
+        scopedBy: 'userId',
+    }
+);
+
+export type UserSignedOutEvent = z.infer<typeof userSignedOutEventSchema>;
 
 export const registerInputSchema = z.object({
     email: z.string().email().describe('The email address for the new account'),

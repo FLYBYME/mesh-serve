@@ -1,0 +1,118 @@
+import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
+
+import { artifactSchema } from '../schema/artifact.js';
+
+export const artifactCrud = defineCrud('serve.artifact', artifactSchema, {
+    pluralPath: 'artifacts',
+    scopedBy: 'tenantId',
+    visibility: {},
+    dependencies: ['serve.part'],
+});
+
+export type Artifact = z.infer<typeof artifactCrud.outputSchema>;
+
+export const artifactBuiltEventSchema = z.object({
+    tenantId: z.string().describe('The organization that owns this artifact'),
+    artifact: artifactCrud.get.outputSchema.describe('The artifact that finished building'),
+    hash: z.string().describe('The content hash of the built output'),
+    assets: z.array(z.object({
+        url: z.string(),
+        name: z.string(),
+        fileExtension: z.string().optional(),
+    })).describe('Every file this artifact serves'),
+}).describe('An artifact finished building successfully');
+
+export const artifactBuiltEvent = defineEvent(
+    'serve.artifact.built',
+    artifactBuiltEventSchema,
+    { scopedBy: 'tenantId' },
+);
+
+export type ArtifactBuiltEvent = z.infer<typeof artifactBuiltEventSchema>;
+
+export const artifactBuildFailedEventSchema = z.object({
+    tenantId: z.string().describe('The organization that owns this artifact'),
+    artifact: artifactCrud.get.outputSchema.describe('The artifact that failed to build'),
+    error: z.string().describe('What went wrong'),
+}).describe('An artifact failed to build');
+
+export const artifactBuildFailedEvent = defineEvent(
+    'serve.artifact.buildFailed',
+    artifactBuildFailedEventSchema,
+    { scopedBy: 'tenantId' },
+);
+
+export type ArtifactBuildFailedEvent = z.infer<typeof artifactBuildFailedEventSchema>;
+
+export const getArtifactInputSchema = z.object({
+    hash: z.string().min(1).describe('The artifact hash a release pins'),
+}).describe('One artifact, by hash, for an anonymous connection');
+
+export const getArtifactOutputSchema = artifactCrud.get.outputSchema;
+
+export const artifactGetArtifactContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'getArtifact',
+    description: 'One artifact, by hash, for an anonymous connection.',
+    inputSchema: getArtifactInputSchema,
+    outputSchema: getArtifactOutputSchema,
+    rest: { method: 'GET', path: '/artifacts/:hash' },
+    visibility: 'public',
+    print: (o) => `${o.hash ?? o.id} (${o.status})`,
+});
+
+export type GetArtifactInput = z.infer<typeof artifactGetArtifactContract.inputSchema>;
+export type GetArtifactOutput = z.infer<typeof artifactGetArtifactContract.outputSchema>;
+
+export const getAssetInputSchema = z.object({
+    artifactHash: z.string().min(1).describe('The artifact hash a file lives under'),
+    path: z.string().min(1).describe('The path to the asset within that artifact'),
+}).describe('Get one file out of a built artifact by path');
+
+export const getAssetOutputSchema = z.object({
+    name: z.string().describe('The name of the asset'),
+    path: z.string().describe('The path to the asset'),
+    contentType: z.string().describe('The content type of the asset'),
+    contentLength: z.number().describe('The content length of the asset'),
+    lastModified: z.string().describe('The last modified date of the asset'),
+    eTag: z.string().optional().describe('The ETag of the asset'),
+    fileExtension: z.string().optional().describe('The file extension of the asset'),
+    size: z.number().optional().describe('The size of the asset in bytes'),
+}).describe('Artifact asset file');
+
+export const artifactGetAssetContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'getAsset',
+    description: 'Get one file out of a built artifact by path.',
+    inputSchema: getAssetInputSchema,
+    outputSchema: getAssetOutputSchema,
+    rest: { method: 'GET', path: '/artifacts/:artifactHash/assets/:path' },
+    visibility: 'public',
+    print: (o) => `${o.name} ${o.path}`,
+});
+
+export type GetAssetInput = z.infer<typeof artifactGetAssetContract.inputSchema>;
+export type GetAssetOutput = z.infer<typeof artifactGetAssetContract.outputSchema>;
+
+export const requestBuildInputSchema = z.object({
+    partId: z.string().min(1).describe('The serve.part to build -- kernel, driver, application, extension, and theme are all queued the same way'),
+    ref: z.string().min(1).describe('The git ref to build at'),
+    drivers: z.array(z.string()).optional().describe('serve.part (kind: driver) keys to bake in; only valid when partId names a kind: kernel part'),
+}).describe('Queue a build of one part at one ref');
+
+export const requestBuildOutputSchema = artifactCrud.get.outputSchema;
+
+export const artifactRequestBuildContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'requestBuild',
+    description: 'Queue a build of one part at one ref.',
+    inputSchema: requestBuildInputSchema,
+    outputSchema: requestBuildOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/requestBuild' },
+    visibility: 'public',
+    destructive: true,
+    print: (o) => `${o.id} (${o.status})`,
+});
+
+export type RequestBuildInput = z.infer<typeof artifactRequestBuildContract.inputSchema>;
+export type RequestBuildOutput = z.infer<typeof artifactRequestBuildContract.outputSchema>;

@@ -24,6 +24,13 @@ export async function revokeTicket(
             revokedAt: now,
             ...(input.reason === undefined ? {} : { revokedReason: input.reason }),
         });
+        ctx.emit('identity.ticket.revoked', {
+            id: ticket.id,
+            userId: ticket.userId,
+            tokenId: ticket.token,
+            revokedAt: now.getTime(),
+            revokedReason: input.reason,
+        });
         revoked += 1;
     }
 
