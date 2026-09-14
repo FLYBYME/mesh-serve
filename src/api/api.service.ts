@@ -10,8 +10,7 @@ import { matchPath } from './methods/route.js';
 import type { Site } from '../cdn/contracts/site.contract.js';
 
 interface Caller {
-    readonly userId?: string;
-    readonly roles: readonly string[];
+    readonly userId: string;
 }
 
 interface Route {
@@ -112,7 +111,9 @@ export class ApiService extends ServiceModule {
     /**
      * Bearer token could be a user ticket or an api token -- there is no prefix marking which, so
      * both are tried. Absent or unrecognized means anonymous, not an error: whether that's good
-     * enough is the gate step's job, not this one's.
+     * enough is the gate step's job, not this one's. Only the account id is kept -- roles are never
+     * trusted from a ticket's own payload (which could be long-lived and stale); the gate step
+     * re-resolves them fresh from identity.role/identity.membership on every call.
      */
     private async resolveCaller(req: http.IncomingMessage): Promise<Caller | undefined> {
         const header = req.headers.authorization;
@@ -125,13 +126,13 @@ export class ApiService extends ServiceModule {
         }
 
         const ticket = await this.broker.call('identity.ticket.validate', { token });
-        if (ticket.valid) {
-            return { userId: ticket.userId, roles: ticket.roles ?? [] };
+        if (ticket.valid && ticket.userId !== undefined) {
+            return { userId: ticket.userId };
         }
 
         const apiToken = await this.broker.call('identity.apiToken.validate', { token });
-        if (apiToken.valid) {
-            return { userId: apiToken.userId, roles: apiToken.roles ?? [] };
+        if (apiToken.valid && apiToken.userId !== undefined) {
+            return { userId: apiToken.userId };
         }
 
         return undefined;
@@ -160,12 +161,14 @@ export class ApiService extends ServiceModule {
     }
 
     /**
-     * role is a coarse, direct role check; permission calls identity.permits, which is itself
-     * keyed by role+contract (an explicit identity.grant) -- a finer check than merely holding a
-     * role. Neither set on the row means public. No caller at all is only a problem once the row
-     * actually demands one.
+     * role is a coarse, direct role check (identity.hasRole); permission calls identity.permits, a
+     * finer check against the role's own permission patterns. Both resolve the caller's effective
+     * roles fresh, combining global account roles with their membership role in this site's own
+     * tenant -- account roles are king, so a membership role can never stand in for a global one.
+     * Neither role nor permission set on the row means public. No caller at all is only a problem
+     * once the row actually demands one.
      */
-    private async checkGate(row: Expose, caller: Caller | undefined): Promise<void> {
+    private async checkGate(row: Expose, caller: Caller | undefined, tenantId: string): Promise<void> {
         if (row.role === undefined && row.permission === undefined) {
             return;
         }
@@ -174,15 +177,28 @@ export class ApiService extends ServiceModule {
             throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
         }
 
-        if (row.role !== undefined && !caller.roles.includes(row.role)) {
-            throw new MeshError({ message: `Requires role "${row.role}".`, code: 'FORBIDDEN', status: 403 });
+        // identity.membership is scopedBy: 'userId', which resolveCallerScope special-cases from
+        // meta.user.id -- hasRole/permits resolve that account's own membership internally via
+        // ctx.call, which inherits whatever meta this entry call carries, so it has to be set here.
+        const meta = { user: { id: caller.userId, tenant_id: tenantId } };
+
+        if (row.role !== undefined) {
+            const result = await this.broker.call('identity.hasRole', {
+                userId: caller.userId,
+                role: row.role,
+                organizationId: tenantId,
+            }, { meta });
+            if (!result.granted) {
+                throw new MeshError({ message: `Requires role "${row.role}".`, code: 'FORBIDDEN', status: 403 });
+            }
         }
 
         if (row.permission !== undefined) {
             const result = await this.broker.call('identity.permits', {
-                roles: [...caller.roles],
+                userId: caller.userId,
                 contract: row.contract,
-            });
+                organizationId: tenantId,
+            }, { meta });
             if (!result.permitted) {
                 throw new MeshError({ message: `Not permitted to call "${row.contract}".`, code: 'FORBIDDEN', status: 403 });
             }
@@ -255,16 +271,15 @@ export class ApiService extends ServiceModule {
         }
 
         const caller = await this.resolveCaller(req);
-        await this.checkGate(route.row, caller);
+        await this.checkGate(route.row, caller, site.tenantId);
 
         const input = await this.parseInput(req, route.params);
 
         // Tools like identity.whoami read ctx.meta.user.id, so an anonymous ctx.call is not the
-        // same call a caller made -- tenant_id has no real "current org" resolver yet (a known gap
-        // from way back), so the site's own owning tenant stands in: this request is being served
-        // within that site's tenant context, absent any other notion of one.
-        const meta = caller?.userId !== undefined
-            ? { user: { id: caller.userId, tenant_id: site.tenantId, roles: [...caller.roles] } }
+        // same call a caller made. tenant_id is the site's own owning tenant -- this request is
+        // being served within that site's org context.
+        const meta = caller !== undefined
+            ? { user: { id: caller.userId, tenant_id: site.tenantId } }
             : undefined;
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already

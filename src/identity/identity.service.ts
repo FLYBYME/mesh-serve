@@ -6,7 +6,6 @@ import { userCrud, userRegisterContract, userSetPasswordContract, userGrantRoleC
 import { organizationCrud } from './contracts/organization.contract.js';
 import { membershipCrud } from './contracts/membership.contract.js';
 import { roleCrud, roleUpsertContract } from './contracts/role.contract.js';
-import { grantCrud } from './contracts/grant.contract.js';
 import {
     ticketCrud,
     ticketIssueContract,
@@ -16,7 +15,7 @@ import {
     ticketResolveContract,
 } from './contracts/ticket.contract.js';
 import { apiTokenCrud, apiTokenIssueContract, apiTokenValidateContract } from './contracts/apiToken.contract.js';
-import { whoamiContract, permitsContract } from './contracts/identity.contract.js';
+import { whoamiContract, permitsContract, hasRoleContract } from './contracts/identity.contract.js';
 
 import { register } from './tools/register.js';
 import { setPassword } from './tools/setPassword.js';
@@ -30,6 +29,7 @@ import { issueApiToken } from './tools/issueApiToken.js';
 import { validateApiToken } from './tools/validateApiToken.js';
 import { whoami } from './tools/whoami.js';
 import { permits } from './tools/permits.js';
+import { hasRole } from './tools/hasRole.js';
 import { resolveTicket } from './tools/resolveTicket.js';
 
 import { hashPassword } from './methods/hash.js';
@@ -44,7 +44,6 @@ export class IdentityService extends ServiceModule {
         this.mountCrud(organizationCrud);
         this.mountCrud(membershipCrud);
         this.mountCrud(roleCrud);
-        this.mountCrud(grantCrud);
         this.mountCrud(ticketCrud);
         this.mountCrud(apiTokenCrud);
 
@@ -60,6 +59,7 @@ export class IdentityService extends ServiceModule {
         this.mountTool(apiTokenValidateContract, validateApiToken);
         this.mountTool(whoamiContract, whoami);
         this.mountTool(permitsContract, permits);
+        this.mountTool(hasRoleContract, hasRole);
         this.mountTool(ticketResolveContract, resolveTicket);
 
         this.mountCrudHook('identity.organization', 'create', {
@@ -84,37 +84,31 @@ export class IdentityService extends ServiceModule {
             },
         });
 
-        this.mountCrudHook('identity.grant', 'create', {
-            before: async (input, ctx) => {
-                const { roleKey } = input as { roleKey: string };
-                const role = await ctx.call('identity.role.find_one', { query: { key: roleKey } });
-                if (role === undefined) {
-                    throw new MeshError({ message: `No role "${roleKey}".`, code: 'NOT_FOUND', status: 404 });
-                }
-                return input;
-            },
-        });
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
+        // Checked every boot, independent of whether the role already existed: an install that had
+        // the role from before permissions lived on it would otherwise never get these. identity.permits
+        // has no superuser bypass and no pattern means "everything" (matchesContract only does an
+        // exact key or a "<prefix>.*" wildcard), so operator is powerless without these explicitly.
+        const operatorPermissions = ['identity.*', 'serve.*'];
         const roles = await broker.call('identity.role.find', { query: {} });
-        if (roles.every((r) => r.key !== 'operator')) {
+        const existingOperator = roles.find((r) => r.key === 'operator');
+
+        if (existingOperator === undefined) {
             broker.logger.info('No operator role found, creating one...');
             await broker.call('identity.role.create', {
                 key: 'operator', name: 'Operator', scope: 'global', builtin: true, inherits: [],
+                permissions: operatorPermissions,
             });
-        }
-
-        // Checked every boot, independent of role creation above: an install that already had the
-        // role from before this existed would otherwise never get these grants. identity.permits
-        // has no superuser bypass -- operator is powerless without an explicit grant per root domain,
-        // and there is no single pattern that means "everything" (matchesContract only does an exact
-        // key or a "<prefix>.*" wildcard).
-        for (const contract of ['identity.*', 'serve.*']) {
-            const existing = await broker.call('identity.grant.find_one', { query: { roleKey: 'operator', contract } });
-            if (existing === undefined) {
-                broker.logger.info(`Granting operator "${contract}"...`);
-                await broker.call('identity.grant.create', { roleKey: 'operator', contract });
+        } else {
+            const missing = operatorPermissions.filter((p) => !existingOperator.permissions.includes(p));
+            if (missing.length > 0) {
+                broker.logger.info(`Granting operator ${missing.join(', ')}...`);
+                await broker.call('identity.role.update', {
+                    id: existingOperator.id,
+                    permissions: [...existingOperator.permissions, ...missing],
+                });
             }
         }
 

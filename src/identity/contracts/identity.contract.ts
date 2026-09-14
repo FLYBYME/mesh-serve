@@ -30,10 +30,10 @@ export type WhoamiInput = z.infer<typeof whoamiContract.inputSchema>;
 export type WhoamiOutput = z.infer<typeof whoamiContract.outputSchema>;
 
 export const permitsInputSchema = z.object({
-    roles: z.array(z.string()).describe('The caller\'s roles to check'),
-    contract: z.string().min(1).describe('The contract key being called, e.g. serve.site.deploy'),
-    organizationId: z.string().optional().describe('The organization this call is scoped to, if any'),
-}).describe('Whether a caller holding these roles may call a contract');
+    userId: z.string().min(1).describe('The account making the call'),
+    contract: z.string().min(1).describe('The contract key being called, e.g. serve.expose.create'),
+    organizationId: z.string().optional().describe('The organization this call is happening in, if any -- account roles are king: an org-scoped role only ever comes from identity.membership, and can never stand in for a global one'),
+}).describe('Whether this account may call a contract, in this organization context; roles are resolved fresh, never trusted from a caller-supplied list');
 
 export const permitsOutputSchema = z.object({
     permitted: z.boolean().describe('True only on an explicit grant; anything else is a refusal'),
@@ -42,13 +42,37 @@ export const permitsOutputSchema = z.object({
 export const permitsContract = defineContract({
     domain: 'identity',
     action: 'permits',
-    description: 'Whether a caller holding these roles may call a contract, in this organization.',
+    description: 'Whether this account may call a contract, in this organization.',
     inputSchema: permitsInputSchema,
     outputSchema: permitsOutputSchema,
     rest: { method: 'POST', path: '/identity/permits' },
-    dependencies: ['identity.grant', 'identity.role'],
+    dependencies: ['identity.role', 'identity.membership', 'identity.user'],
     print: (o) => (o.permitted ? 'permitted' : 'denied'),
 });
 
 export type PermitsInput = z.infer<typeof permitsContract.inputSchema>;
 export type PermitsOutput = z.infer<typeof permitsContract.outputSchema>;
+
+export const hasRoleInputSchema = z.object({
+    userId: z.string().min(1).describe('The account to check'),
+    role: z.string().min(1).describe('The role key required'),
+    organizationId: z.string().optional().describe('The organization this call is happening in, if any'),
+}).describe('Whether this account effectively holds a role, in this organization context');
+
+export const hasRoleOutputSchema = z.object({
+    granted: z.boolean().describe('True if the account holds this role directly or via same-scope inheritance'),
+}).describe('Whether the role is held');
+
+export const hasRoleContract = defineContract({
+    domain: 'identity',
+    action: 'hasRole',
+    description: 'Whether this account effectively holds a role, in this organization.',
+    inputSchema: hasRoleInputSchema,
+    outputSchema: hasRoleOutputSchema,
+    rest: { method: 'POST', path: '/identity/hasRole' },
+    dependencies: ['identity.role', 'identity.membership', 'identity.user'],
+    print: (o) => (o.granted ? 'granted' : 'denied'),
+});
+
+export type HasRoleInput = z.infer<typeof hasRoleContract.inputSchema>;
+export type HasRoleOutput = z.infer<typeof hasRoleContract.outputSchema>;
