@@ -1,17 +1,23 @@
-import type { MetaCommand } from '../metaCommand.js';
+import type { Command as CommanderCommand } from 'commander';
 
-export const helpCommand: MetaCommand = {
-    name: 'help',
-    description: 'Show this message',
-    run(_input, { session, commands }) {
-        console.log('Meta commands:');
-        for (const command of commands) {
-            const names = [command.name, ...(command.aliases ?? [])].join('/');
-            console.log(`  ${names.padEnd(12)} ${command.description}`);
-        }
-        console.log('');
-        console.log('Anything else is run as "<domain> <action> [--flag value...]" -- add --help to any of those for its flags.');
-        console.log('');
-        console.log(`Connected to ${session.apiHost} -- ${session.descriptor?.calls.length ?? 0} calls available.`);
-    },
-};
+import { BaseCommand } from '../core/BaseCommand.js';
+import { CommandRegistry } from '../core/CommandRegistry.js';
+import type { Session } from '../session.js';
+
+export class HelpCommand extends BaseCommand {
+    public readonly name = 'help';
+    public readonly description = 'Show this message';
+
+    constructor(private readonly registry: CommandRegistry, private readonly program: CommanderCommand, private readonly session: Session) {
+        super();
+    }
+
+    public register(program: CommanderCommand): void {
+        program.command(this.name).description(this.description).action(async () => this.execute());
+    }
+
+    protected async execute(): Promise<void> {
+        this.registry.printHelp(this.program);
+        this.logger.info(`Current host: ${this.session.apiHost}${this.session.credential !== undefined ? ' (logged in)' : ''}`);
+    }
+}

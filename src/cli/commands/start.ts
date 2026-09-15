@@ -1,3 +1,4 @@
+import type { Command as CommanderCommand } from 'commander';
 import {
     BrokerModule,
     DatabaseModule,
@@ -5,11 +6,11 @@ import {
     NetworkModule,
     RegistryModule,
     z,
-    type IServiceBroker,
-    type IServiceRegistry
 } from '@flybyme/mesh';
-import type { MetaCommand } from '../metaCommand.js';
 import { WSTransport } from '@flybyme/mesh/node';
+
+import { BaseCommand } from '../core/BaseCommand.js';
+import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { IdentityService } from '../../identity/identity.service.js';
 import { CdnService } from '../../cdn/cdn.service.js';
 import { CatalogService } from '../../catalog/catalog.service.js';
@@ -22,10 +23,6 @@ const LogLevelMap: Record<string, LogLevel> = {
     debug: LogLevel.DEBUG,
 };
 
-/**
- * Start mesh node with all services running.
- */
-
 const startInputSchema = z.object({
     nodeID: z.string().default('node-1'),
     wsPort: z.coerce.number().default(6005).describe('Mesh peer transport port -- unrelated to the api/cdn http ports below'),
@@ -35,11 +32,19 @@ const startInputSchema = z.object({
     logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
 });
 
-export const startCommand: MetaCommand<z.infer<typeof startInputSchema>> = {
-    name: 'start',
-    description: 'Start mesh node with all services running',
-    input: startInputSchema,
-    async run(args) {
+export class StartCommand extends BaseCommand {
+    public readonly name = 'start';
+    public readonly description = 'Start mesh node with all services running';
+
+    public register(program: CommanderCommand): void {
+        const sub = program.command(this.name).description(this.description);
+        ZodToCliMapper.applyOptions(sub, startInputSchema);
+        sub.action(async (opts: Record<string, unknown>) => {
+            this.execute(startInputSchema.parse(ZodToCliMapper.parseOptions(opts, startInputSchema)));
+        });
+    }
+
+    protected async execute(args: z.infer<typeof startInputSchema>): Promise<void> {
         const logger = new Logger(LogLevelMap[args.logLevel]);
         const serializer = new JSONSerializer();
 
@@ -63,7 +68,6 @@ export const startCommand: MetaCommand<z.infer<typeof startInputSchema>> = {
 
         node.use(new BrokerModule());
 
-
         await node.registerModule(new IdentityService());
         await node.registerModule(new CdnService());
         await node.registerModule(new CatalogService());
@@ -71,11 +75,6 @@ export const startCommand: MetaCommand<z.infer<typeof startInputSchema>> = {
 
         await node.start();
 
-        const broker = node.getProvider<IServiceBroker>('broker');
-        const registry = node.getProvider<IServiceRegistry>('registry');
-
-        //await registry.waitForService('serve.api', 5000);
-        console.log('All services started successfully');
-
-    },
-};
+        this.logger.info('All services started successfully');
+    }
+}

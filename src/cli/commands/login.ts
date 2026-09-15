@@ -1,55 +1,55 @@
 import readline from 'node:readline';
-import { z } from 'zod';
+import type { Command as CommanderCommand } from 'commander';
+import { MeshCallError } from '@flybyme/mesh-web/net';
 
-import type { MetaCommand } from '../metaCommand.js';
+import { BaseCommand } from '../core/BaseCommand.js';
+import { buildClient } from '../client.js';
 import { persistSession } from '../session.js';
-import { ensureDescriptor } from '../ensureDescriptor.js';
 import { question, questionHidden } from '../prompt.js';
+import type { Session } from '../session.js';
 
-// Always a string from dispatchMeta (a scalar schema reads the whole remaining line, never
-// undefined) -- an empty string is what "bare login, no token" looks like once it gets here.
-const loginInputSchema = z.string();
+export class LoginCommand extends BaseCommand {
+    public readonly name = 'login';
+    public readonly description = 'login [token] to attach a credential directly, or bare "login" to sign in with email/password';
 
-export const loginCommand: MetaCommand<string> = {
-    name: 'login',
-    description: 'login <token> to attach a credential directly, or bare "login" to sign in with email/password',
-    input: loginInputSchema,
-    async run(token, ctx) {
-        const { session, client } = ctx;
+    constructor(private readonly session: Session) {
+        super();
+    }
 
-        if (token.trim() !== '') {
-            session.credential = token.trim();
-            await persistSession(session);
-            console.log('Credential set.');
+    public register(program: CommanderCommand): void {
+        program
+            .command(this.name)
+            .description(this.description)
+            .argument('[token]', 'Attach this bearer token directly instead of prompting for email/password')
+            .action(async (token?: string) => this.execute(token));
+    }
+
+    protected async execute(token?: string): Promise<void> {
+        if (token !== undefined && token.trim() !== '') {
+            this.session.credential = token.trim();
+            await persistSession(this.session);
+            this.logger.info('Credential set.');
             return;
         }
 
-        const descriptor = await ensureDescriptor(session, client);
-        const issueCall = descriptor.calls.find((call) => call.key === 'identity.ticket.issue');
-        if (issueCall === undefined) {
-            console.error(`"identity.ticket.issue" is not exposed at ${session.apiHost} -- cannot sign in interactively here. Use "login <token>" instead.`);
-            return;
-        }
-
-        const rl = ctx.rl ?? readline.createInterface({ input: process.stdin, output: process.stdout });
+        const client = buildClient(this.session);
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         try {
             const email = await question(rl, 'Email: ');
             const password = await questionHidden(rl, 'Password: ');
 
-            const result = await client.call(session, issueCall, { email, password });
-            const body = result.body as { token?: unknown };
-            if (typeof body.token !== 'string') {
-                console.error('Login failed: no token in the response.');
+            const result = await client.call('identity.ticket.issue', { email, password });
+            this.session.credential = result.token;
+            await persistSession(this.session);
+            this.logger.info(`Logged in as ${result.userId}.`);
+        } catch (err) {
+            if (err instanceof MeshCallError) {
+                this.logger.error(err.message);
                 return;
             }
-
-            session.credential = body.token;
-            await persistSession(session);
-            console.log('Logged in.');
+            throw err;
         } finally {
-            if (ctx.rl === undefined) {
-                rl.close();
-            }
+            rl.close();
         }
-    },
-};
+    }
+}

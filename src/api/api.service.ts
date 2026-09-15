@@ -6,7 +6,7 @@ import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybym
 import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
 import { generateClientContract } from './contracts/generateClient.contract.js';
-import { buildDescriptor } from './methods/descriptor.js';
+import { buildDescriptor, API_BASE } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
 import { add } from './tools/add.js';
 import { remove } from './tools/remove.js';
@@ -207,10 +207,17 @@ export class ApiService extends ServiceModule {
      * Finds the one exposed row+contract matching this request. A row naming a gone or non-public
      * contract is skipped rather than 500ing -- the same "reject internal" defense in depth as
      * methods/descriptor.ts's buildDescriptor, checked again here rather than trusted from there.
+     *
+     * Every contract path is written without the API_BASE prefix (e.g. "/identity/ticket"), matching
+     * buildDescriptor's advertised `base` -- so the prefix has to come off the real request path
+     * before matchPath compares them, or every generated client's calls would 404 while only the
+     * hardcoded "/api/_describe" special case worked.
      */
     private findRoute(rows: readonly Expose[], req: http.IncomingMessage): Route | undefined {
         const method = (req.method ?? 'GET').toUpperCase();
-        const urlPath = (req.url ?? '/').split('?')[0] ?? '/';
+        const fullPath = (req.url ?? '/').split('?')[0] ?? '/';
+        if (!fullPath.startsWith(API_BASE)) return undefined;
+        const urlPath = fullPath.slice(API_BASE.length) || '/';
 
         for (const row of rows) {
             const contract = globalContractRegistry.get(row.contract);
@@ -324,7 +331,7 @@ export class ApiService extends ServiceModule {
         const target = await this.resolveTarget(hostname);
 
         const urlPath = (req.url ?? '/').split('?')[0];
-        if (urlPath === '/api/_describe') {
+        if (urlPath === `${API_BASE}/_describe`) {
             return this.handleDescribe(target, res);
         }
 

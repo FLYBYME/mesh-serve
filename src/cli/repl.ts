@@ -1,63 +1,43 @@
 import readline from 'node:readline';
+import type { Command } from 'commander';
 
-import { restClient } from './client.js';
-import { ensureDescriptor } from './ensureDescriptor.js';
-import { buildProgram } from './commandTree.js';
-import { dispatchMeta } from './dispatchMeta.js';
-import { metaCommands, findMetaCommand } from './commands/index.js';
 import type { Session } from './session.js';
-import type { MetaCommandContext } from './metaCommand.js';
+import type { ReplHandle } from './commands/exit.js';
 
-function printResult(result: unknown): void {
-    console.log(JSON.stringify(result, null, 2));
+function isCommanderExit(err: unknown): boolean {
+    return typeof err === 'object' && err !== null && 'code' in err
+        && typeof (err as { code: unknown }).code === 'string'
+        && (err as { code: string }).code.startsWith('commander.');
 }
 
-export async function startRepl(session: Session): Promise<void> {
+/**
+ * Re-parses each line through the same fixed Commander program the one-shot path uses -- there is no
+ * dynamic domain.action tree to rebuild per line any more (that lived on a cached descriptor, gone
+ * with it), so reusing one program instance across lines is safe: nothing here keeps option state
+ * between actions.
+ */
+export async function startRepl(session: Session, program: Command, handle: ReplHandle): Promise<void> {
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
         prompt: `${session.apiHost}> `,
     });
+    handle.rl = rl;
 
-    const ctx: MetaCommandContext = { session, rl, commands: metaCommands, client: restClient };
-
-    // Non-fatal: a server may not exist yet (that's what "start" is for), so the REPL has to come up
-    // regardless of whether one is currently reachable.
-    try {
-        const descriptor = await ensureDescriptor(session, restClient);
-        console.log(`Connected to ${session.apiHost} -- ${descriptor.calls.length} calls available. Type "help" or "exit".`);
-    } catch {
-        console.log(`No server reachable at ${session.apiHost} yet. Type "start" to run one, "switch" to point elsewhere, or "help".`);
-    }
+    console.log(`mesh-serve -- connected to ${session.apiHost}. Type "help" or "exit".`);
     rl.prompt();
 
     rl.on('line', async (line) => {
         const trimmed = line.trim();
-
-        try {
-            if (trimmed === '') {
-                // fall through to prompt again
-            } else {
-                const [name, ...rest] = trimmed.split(/\s+/);
-                const meta = name !== undefined ? findMetaCommand(name) : undefined;
-
-                if (meta !== undefined) {
-                    await dispatchMeta(meta, rest, ctx);
-                } else {
-                    const current = await ensureDescriptor(session, restClient);
-                    const program = buildProgram(session, current, restClient, (_call, result) => printResult(result));
-                    await program.parseAsync(trimmed.split(/\s+/), { from: 'user' });
+        if (trimmed !== '') {
+            try {
+                await program.parseAsync(trimmed.split(/\s+/), { from: 'user' });
+            } catch (err) {
+                if (!isCommanderExit(err)) {
+                    console.error(err instanceof Error ? err.message : String(err));
                 }
             }
-        } catch (err) {
-            const isCommanderExit = typeof err === 'object' && err !== null && 'code' in err
-                && typeof (err as { code: unknown }).code === 'string'
-                && (err as { code: string }).code.startsWith('commander.');
-            if (!isCommanderExit) {
-                console.error(err instanceof Error ? err.message : String(err));
-            }
         }
-
         rl.prompt();
     });
 

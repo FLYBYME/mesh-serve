@@ -5,8 +5,32 @@ const CTRL_C = String.fromCharCode(3);
 const CTRL_D = String.fromCharCode(4);
 const BACKSPACE_CHARS = new Set(['\b', String.fromCharCode(127)]);
 
+/**
+ * One shared async iterator per `rl`, reused across every `question()` call against it.
+ *
+ * `rl.question()` attaches a one-shot `'line'` listener per call -- fine interactively, where each
+ * line only exists once the user presses Enter, but wrong for piped input (scripts, tests): readline
+ * drains a buffered chunk and emits every `'line'` event it contains synchronously, before an `await`
+ * between two sequential questions gets a chance to attach the second listener. The second line's
+ * event fires into nothing, stdin then hits EOF, and the second `question()` never resolves -- caught
+ * live running "login" with piped credentials, where the process exited after only reading email.
+ * The async iterator queues internally instead of racing a listener against emission, so a line that
+ * arrives before anyone asked for it is not lost.
+ */
+const iterators = new WeakMap<readline.Interface, AsyncIterator<string>>();
+
+function nextLine(rl: readline.Interface): Promise<string> {
+    let it = iterators.get(rl);
+    if (it === undefined) {
+        it = rl[Symbol.asyncIterator]();
+        iterators.set(rl, it);
+    }
+    return it.next().then((result) => result.value ?? '');
+}
+
 export function question(rl: readline.Interface, query: string): Promise<string> {
-    return new Promise((resolve) => rl.question(query, resolve));
+    process.stdout.write(query);
+    return nextLine(rl);
 }
 
 /**

@@ -29,6 +29,7 @@ interface DescribedCall {
 }
 
 interface Descriptor {
+    readonly base: string;
     readonly calls: readonly DescribedCall[];
 }
 
@@ -45,7 +46,7 @@ async function call(descriptor: Descriptor, key: string, input: unknown, token?:
     if (token !== undefined) {
         headers['Authorization'] = `Bearer ${token}`;
     }
-    const res = await fetch(`${baseUrl()}${decl.path}`, { method: decl.method, headers, body: JSON.stringify(input) });
+    const res = await fetch(`${baseUrl()}${descriptor.base}${decl.path}`, { method: decl.method, headers, body: JSON.stringify(input) });
     const text = await res.text();
     const body = text.length > 0 ? JSON.parse(text) as unknown : undefined;
     if (!res.ok) {

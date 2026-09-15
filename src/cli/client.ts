@@ -1,20 +1,21 @@
-import { fetchDescriptor, type ExposureDescriptor } from './describe.js';
-import { executeCall, type ExecuteResult } from './execute.js';
-import type { DescribedCall } from './describe.js';
+import { createClient, fetchTransport, withHeaders, type MeshClient } from '@flybyme/mesh-web/net';
+
+import { cliApi } from './api.js';
 import type { Session } from './session.js';
 
-/**
- * The one thing that actually talks to a running ApiService, over plain REST -- everything else in
- * this CLI (meta commands, the dynamic command tree) goes through this rather than importing fetch
- * mechanics directly. Exists as one seam so an SSE subscription (`/events`, once the api server has
- * one) has somewhere to live later without reshaping every caller again.
- */
-export interface Client {
-    describe(apiHost: string): Promise<ExposureDescriptor>;
-    call(session: Session, call: DescribedCall, args: Record<string, unknown>): Promise<ExecuteResult>;
+export function originOf(apiHost: string): string {
+    return apiHost.startsWith('http://') || apiHost.startsWith('https://') ? apiHost : `http://${apiHost}`;
 }
 
-export const restClient: Client = {
-    describe: fetchDescriptor,
-    call: executeCall,
-};
+/**
+ * `switch`'s whole job: the origin is a runtime argument to the transport, not baked into the typed
+ * surface, so one typed client can point at whichever host the session currently selects. Exposure
+ * checking is off -- this client isn't a generated one guarding against a site's exposure moving out
+ * from under it, it's the CLI's own always-on baseline, hand-declared alongside the server it ships
+ * with.
+ */
+export function buildClient(session: Session): MeshClient<typeof cliApi> {
+    const transport = withHeaders(fetchTransport(originOf(session.apiHost)), (): Record<string, string> =>
+        session.credential !== undefined ? { Authorization: `Bearer ${session.credential}` } : {});
+    return createClient(cliApi, { transport, checkExposure: false });
+}

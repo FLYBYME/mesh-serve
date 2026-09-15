@@ -32,6 +32,7 @@
     },
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v2.5.0",
+        "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.17.1",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
         "json-schema-to-zod": "^2.8.1",

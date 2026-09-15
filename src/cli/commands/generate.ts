@@ -1,15 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { z } from 'zod';
+import type { Command as CommanderCommand } from 'commander';
+import { MeshCallError } from '@flybyme/mesh-web/net';
 
-import type { MetaCommand } from '../metaCommand.js';
-import { ensureDescriptor } from '../ensureDescriptor.js';
+import { BaseCommand } from '../core/BaseCommand.js';
+import { buildClient } from '../client.js';
+import type { Session } from '../session.js';
 
-const generateInputSchema = z.object({
-    site: z.string().min(1).describe('The serve.site id to render a client for'),
-    wants: z.string().default('./mesh.wants.json').describe('Local file listing the contract keys this app calls, same format the builder reads from a repo'),
-    out: z.string().default('./generated/api.ts').describe('Where to write the generated client'),
-});
+interface GenerateArgs {
+    readonly site: string;
+    readonly wants: string;
+    readonly out: string;
+}
 
 async function readWants(file: string): Promise<string[] | undefined> {
     let raw: string;
@@ -34,32 +36,45 @@ async function readWants(file: string): Promise<string[] | undefined> {
  * here: it needs mesh-serve's own zod, which is exactly the cross-package reference this whole
  * design exists to avoid shipping to a consumer.
  */
-export const generateCommand: MetaCommand<z.infer<typeof generateInputSchema>> = {
-    name: 'generate',
-    description: 'generate --site <id> [--wants file] [--out file]: render this app\'s typed client',
-    input: generateInputSchema,
-    async run({ site, wants, out }, { session, client }) {
+export class GenerateCommand extends BaseCommand {
+    public readonly name = 'generate';
+    public readonly description = 'generate --site <id> [--wants file] [--out file]: render this app\'s typed client';
+
+    constructor(private readonly session: Session) {
+        super();
+    }
+
+    public register(program: CommanderCommand): void {
+        program
+            .command(this.name)
+            .description(this.description)
+            .requiredOption('--site <id>', 'The serve.site id to render a client for')
+            .option('--wants <file>', 'Local file listing the contract keys this app calls, same format the builder reads from a repo', './mesh.wants.json')
+            .option('--out <file>', 'Where to write the generated client', './generated/api.ts')
+            .action(async (opts: { site: string; wants: string; out: string }) => this.execute(opts));
+    }
+
+    protected async execute({ site, wants, out }: GenerateArgs): Promise<void> {
         const contracts = await readWants(wants);
         if (contracts === undefined) {
-            console.log(`No ${wants} -- rendering everything "${site}" exposes.`);
+            this.logger.info(`No ${wants} -- rendering everything "${site}" exposes.`);
         }
 
-        const descriptor = await ensureDescriptor(session, client);
-        const call = descriptor.calls.find((c) => c.key === 'serve.api.generateClient');
-        if (call === undefined) {
-            console.error(`"serve.api.generateClient" is not exposed at ${session.apiHost}.`);
-            return;
-        }
-
-        const result = await client.call(session, call, { siteId: site, contracts });
-        const body = result.body as { source?: unknown };
-        if (typeof body.source !== 'string') {
-            console.error('generateClient did not return source.');
-            return;
+        const client = buildClient(this.session);
+        let source: string;
+        try {
+            const result = await client.call('serve.api.generateClient', { siteId: site, contracts });
+            source = result.source;
+        } catch (err) {
+            if (err instanceof MeshCallError) {
+                this.logger.error(err.message);
+                return;
+            }
+            throw err;
         }
 
         await fs.mkdir(path.dirname(out), { recursive: true });
-        await fs.writeFile(out, body.source);
-        console.log(`Wrote ${out} (${body.source.length} bytes).`);
-    },
-};
+        await fs.writeFile(out, source);
+        this.logger.info(`Wrote ${out} (${source.length} bytes).`);
+    }
+}

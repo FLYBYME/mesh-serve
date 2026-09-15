@@ -5,6 +5,9 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import type { Expose } from '../contracts/expose.contract.js';
 
+/** Every contract path is routed under this prefix -- api.service.ts strips it before matching. */
+export const API_BASE = '/api';
+
 export interface DescribedCall {
     readonly key: string;
     readonly domain: string;
@@ -73,5 +76,5 @@ export function buildDescriptor(host: string, rows: readonly Expose[]): Exposure
         .update(JSON.stringify(calls.map((c) => ({ key: c.key, gate: c.gate }))))
         .digest('hex');
 
-    return { host, base: '/api', exposure, shapeHash, calls };
+    return { host, base: API_BASE, exposure, shapeHash, calls };
 }
