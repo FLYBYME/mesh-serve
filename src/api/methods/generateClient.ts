@@ -1,13 +1,17 @@
-import { compile } from 'json-schema-to-typescript';
+import { jsonSchemaToZod } from 'json-schema-to-zod';
 
 import { buildDescriptor } from './descriptor.js';
 import type { Expose } from '../contracts/expose.contract.js';
 
 /**
- * Renders the browser-safe, type-safe client mesh-web/mesh-operator import from -- structural TS,
- * never a zod reference across the package boundary (surfdns #15: a duplicated/mismatched zod
- * silently degrades a live reference to `unknown`). This runs server-side, against mesh-serve's own
- * zod, so there is no version to mismatch; the client gets finished text, not a live schema.
+ * Renders the browser-safe, type-safe client mesh-web/mesh-serve's own CLI import from -- real zod,
+ * not a JSON-Schema-derived approximation, and self-contained: no reference to mesh-serve anywhere
+ * in the output. `jsonSchemaToZod` turns the JSON Schema `_describe` already computes back into real
+ * zod *source text* (`z.object({...}).email()`, not just a bare shape) -- a freshly declared value in
+ * the generated file, using whichever zod the consumer has installed, not a live reference into
+ * mesh-serve's own (surfdns #15's actual failure mode: a *live* cross-package `z.infer` reference
+ * degrading under version skew). Nothing here imports zod-to-json-schema's output as a *type*; only
+ * the rendered zod source ships.
  */
 
 function pascalCase(key: string): string {
@@ -15,6 +19,10 @@ function pascalCase(key: string): string {
         .split('.')
         .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
         .join('');
+}
+
+function lowerFirst(s: string): string {
+    return s.charAt(0).toLowerCase() + s.slice(1);
 }
 
 /**
@@ -47,7 +55,7 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
     const descriptor = buildDescriptor(host, rows);
     const rowByKey = new Map(rows.map((r) => [r.contract, r]));
 
-    const interfaces: string[] = [];
+    const schemas: string[] = [];
     const callEntries: string[] = [];
 
     for (const call of descriptor.calls) {
@@ -55,13 +63,23 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
 
         let inputType = 'void';
         if (!isEmptyObjectSchema(call.input)) {
-            const inputName = `${name}Input`;
-            interfaces.push(await compile(call.input as Record<string, unknown>, inputName, { bannerComment: '', additionalProperties: false }));
-            inputType = inputName;
+            const inputType_ = `${name}Input`;
+            schemas.push(jsonSchemaToZod(call.input as Record<string, unknown>, {
+                name: `${lowerFirst(name)}InputSchema`,
+                module: 'esm',
+                type: inputType_,
+                noImport: true,
+            }));
+            inputType = inputType_;
         }
 
-        const outputName = `${name}Output`;
-        interfaces.push(await compile(call.output as Record<string, unknown>, outputName, { bannerComment: '', additionalProperties: false }));
+        const outputType = `${name}Output`;
+        schemas.push(jsonSchemaToZod(call.output as Record<string, unknown>, {
+            name: `${lowerFirst(name)}OutputSchema`,
+            module: 'esm',
+            type: outputType,
+            noImport: true,
+        }));
 
         const gate = gateLiteral(rowByKey.get(call.key));
         const doc = [
@@ -72,7 +90,7 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
 
         callEntries.push(
             `    /**\n     * ${doc}\n     */\n`
-            + `    ${JSON.stringify(call.key)}: call<${inputType}, ${outputName}, never>(${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}, ${gate}),`,
+            + `    ${JSON.stringify(call.key)}: call<${inputType}, ${outputType}, never>(${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}, ${gate}),`,
         );
     }
 
@@ -85,11 +103,13 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
         '//',
         '// Regenerate rather than editing. The exposure and shape hashes above are checked at run time',
         "// against what the API reports, so a hand-edited client is a client that lies about a surface",
-        '// nobody can verify.',
+        '// nobody can verify. Self-contained: no import of mesh-serve anywhere below -- every schema',
+        '// is real zod, rendered fresh into this file, using whichever zod this project has installed.',
         '',
-        "import { call, defineApi } from '@flybyme/mesh-web';",
+        "import { z } from 'zod';",
+        "import { call, defineApi } from '@flybyme/mesh-web/net';",
         '',
-        ...interfaces,
+        ...schemas,
         '',
         'export const ' + camelIdentifier(id) + 'Api = defineApi({',
         `    id: ${JSON.stringify(id)},`,
