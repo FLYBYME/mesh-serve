@@ -1,6 +1,6 @@
 import readline from 'node:readline';
-import type { Command } from 'commander';
 
+import { buildProgram } from './program.js';
 import type { Session } from './session.js';
 import type { ReplHandle } from './commands/exit.js';
 
@@ -11,12 +11,18 @@ function isCommanderExit(err: unknown): boolean {
 }
 
 /**
- * Re-parses each line through the same fixed Commander program the one-shot path uses -- there is no
- * dynamic domain.action tree to rebuild per line any more (that lived on a cached descriptor, gone
- * with it), so reusing one program instance across lines is safe: nothing here keeps option state
- * between actions.
+ * Rebuilds the program fresh for every line -- see program.ts for why. That also means each line
+ * re-fetches the current host's live exposure, so a `switch` or `login` earlier in the same REPL
+ * session is reflected on the very next line, not just on restart.
+ *
+ * Reads lines via the async iterator rather than `rl.on('line', ...)`: an event listener fires for
+ * every buffered line without waiting for the previous handler's async work, so three piped lines
+ * ("identity whoami", "help", "exit") ran concurrently and "exit" closed the interface before the
+ * first two printed anything -- caught live piping a scripted REPL session, the same class of bug
+ * `prompt.ts`'s `question()` had. `for await` pulls one line at a time and only asks for the next
+ * once the current one's `await`s are done, which serializes it for free.
  */
-export async function startRepl(session: Session, program: Command, handle: ReplHandle): Promise<void> {
+export async function startRepl(session: Session, handle: ReplHandle): Promise<void> {
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
@@ -27,10 +33,11 @@ export async function startRepl(session: Session, program: Command, handle: Repl
     console.log(`mesh-serve -- connected to ${session.apiHost}. Type "help" or "exit".`);
     rl.prompt();
 
-    rl.on('line', async (line) => {
+    for await (const line of rl) {
         const trimmed = line.trim();
         if (trimmed !== '') {
             try {
+                const { program } = await buildProgram(session, handle);
                 await program.parseAsync(trimmed.split(/\s+/), { from: 'user' });
             } catch (err) {
                 if (!isCommanderExit(err)) {
@@ -39,10 +46,8 @@ export async function startRepl(session: Session, program: Command, handle: Repl
             }
         }
         rl.prompt();
-    });
+    }
 
-    rl.on('close', () => {
-        console.log('Goodbye.');
-        process.exit(0);
-    });
+    console.log('Goodbye.');
+    process.exit(0);
 }

@@ -37,11 +37,19 @@ const DEFAULT_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
  * gets anyone in at all, plus the two calls that let an operator start configuring real sites
  * without needing anything pre-seeded by hand. Kept otherwise minimal on purpose: register, log in,
  * ask who you are. Anything else goes through explicit expose rows once something needs it.
+ *
+ * `identity.user.setPassword` belongs here too, not behind a site-scoped expose row -- there is no
+ * way to add one for the default host in the first place (`serve.expose.add` requires a `siteId`,
+ * and a default-host row is exactly the row with none), which meant a fresh install's first-boot
+ * account could log in, call whoami, and nothing else: the one call the boot message says it *can*
+ * make -- "It can do nothing except set its own password" -- was unreachable. Confirmed live: a POST
+ * to /expose for it 400s with "siteId: Required" no matter who calls it.
  */
 const DEFAULT_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'identity.user.register' },
     { contract: 'identity.ticket.issue' },
     { contract: 'identity.whoami' },
+    { contract: 'identity.user.setPassword' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 ];
