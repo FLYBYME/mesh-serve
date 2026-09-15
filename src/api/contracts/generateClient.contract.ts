@@ -1,9 +1,9 @@
 import { defineContract, z } from '@flybyme/mesh';
 
 export const generateClientInputSchema = z.object({
-    siteId: z.string().min(1).describe('The serve.site whose exposure to render a client for'),
-    contracts: z.array(z.string()).optional().describe('Narrow to these contract keys (e.g. one part\'s resolved "wants"); absent renders everything the site exposes'),
-}).describe('Render the browser-safe, type-safe client for one site\'s current exposure');
+    apiId: z.string().min(1).describe('The serve.api whose exposure to render a client for'),
+    contracts: z.array(z.string()).optional().describe('Narrow to these contract keys (e.g. one part\'s resolved "wants"); absent renders everything the api exposes'),
+}).describe('Render the browser-safe, type-safe client for one api\'s current exposure');
 
 export const generateClientOutputSchema = z.object({
     source: z.string().describe('The generated .ts file, ready to write to disk'),
@@ -12,7 +12,7 @@ export const generateClientOutputSchema = z.object({
 export const generateClientContract = defineContract({
     domain: 'serve.api',
     action: 'generateClient',
-    description: 'Render the browser-safe, type-safe client for one site\'s current exposure.',
+    description: 'Render the browser-safe, type-safe client for one api\'s current exposure.',
     inputSchema: generateClientInputSchema,
     outputSchema: generateClientOutputSchema,
     // POST, not GET: `contracts` is an array, and GET query params never get JSON-parsed back out

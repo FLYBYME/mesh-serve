@@ -1,17 +1,20 @@
 import http from 'node:http';
 
-import { Database, globalContractRegistry, isPublicContract, MeshError, ServiceModule } from '@flybyme/mesh';
+import { globalContractRegistry, isPublicContract, MeshError, ServiceModule } from '@flybyme/mesh';
 import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
 import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
+import { apiCrud, apiResolveByIdContract, apiResolveByHostContract } from './contracts/api.contract.js';
 import { generateClientContract } from './contracts/generateClient.contract.js';
 import { buildDescriptor, API_BASE } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
 import { add } from './tools/add.js';
 import { remove } from './tools/remove.js';
+import { resolveApiById } from './tools/resolveApiById.js';
+import { resolveApiByHost } from './tools/resolveApiByHost.js';
 import { generateClient } from './tools/generateClient.js';
-import type { Site } from '../cdn/contracts/site.contract.js';
+import type { Api } from './contracts/api.contract.js';
 
 interface Caller {
     readonly userId: string;
@@ -23,29 +26,28 @@ interface Route {
     readonly params: Record<string, string>;
 }
 
-/** What every request needs, whether it resolved to a real site or the always-on default host. */
 interface Target {
     readonly host: string;
-    readonly tenantId: string | undefined;
+    readonly tenantId: string;
     readonly rows: readonly Expose[];
 }
 
-const DEFAULT_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
+/**
+ * The hostname a fresh install's bootstrap api lives on -- not special-cased in routing any more
+ * (every host, including this one, resolves through the same `serve.api` lookup), just the one this
+ * install creates a real `serve.api` row for automatically, attached to the "platform" organization
+ * identity.service.ts creates at first boot. A literal string shared between the two files, the same
+ * way the "operator" role key already is.
+ */
+const BOOTSTRAP_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
 
 /**
- * Always exposed on DEFAULT_API_HOST, tied to no site and no tenant -- this is how a fresh install
- * gets anyone in at all, plus the two calls that let an operator start configuring real sites
- * without needing anything pre-seeded by hand. Kept otherwise minimal on purpose: register, log in,
- * ask who you are. Anything else goes through explicit expose rows once something needs it.
- *
- * `identity.user.setPassword` belongs here too, not behind a site-scoped expose row -- there is no
- * way to add one for the default host in the first place (`serve.expose.add` requires a `siteId`,
- * and a default-host row is exactly the row with none), which meant a fresh install's first-boot
- * account could log in, call whoami, and nothing else: the one call the boot message says it *can*
- * make -- "It can do nothing except set its own password" -- was unreachable. Confirmed live: a POST
- * to /expose for it 400s with "siteId: Required" no matter who calls it.
+ * Exposed on the bootstrap api the first time it's created -- how a fresh install gets anyone in at
+ * all, plus the two calls that let an operator start configuring more without anything pre-seeded by
+ * hand. Kept minimal on purpose: register, log in, ask who you are, set a real password. Anything
+ * else goes through explicit expose rows once something needs it.
  */
-const DEFAULT_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
+const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'identity.user.register' },
     { contract: 'identity.ticket.issue' },
     { contract: 'identity.whoami' },
@@ -63,8 +65,11 @@ export class ApiService extends ServiceModule {
     constructor() {
         super();
 
+        this.mountCrud(apiCrud);
         this.mountCrud(exposeCrud);
         this.mountCrud(wantCrud);
+        this.mountTool(apiResolveByIdContract, resolveApiById);
+        this.mountTool(apiResolveByHostContract, resolveApiByHost);
         this.mountTool(exposeAddContract, add);
         this.mountTool(exposeRemoveContract, remove);
         this.mountTool(generateClientContract, generateClient);
@@ -72,26 +77,42 @@ export class ApiService extends ServiceModule {
 
     public async onStart(broker: IServiceBroker): Promise<void> {
         this.broker = broker;
-        await this.seedDefaultExposure();
+        await this.ensureBootstrapApi();
         await this.createServer();
     }
 
     /**
-     * Checked every boot, idempotently -- these rows have no tenant to scope a generated-CRUD write
-     * through, so this reads/writes serve.expose directly rather than via serve.expose.create.
+     * Checked every boot, idempotently. Relies on identity.service.ts's own onStart having already
+     * created the "platform" organization this attaches to -- module registration order in start.ts
+     * puts IdentityService first, so its onStart has already run by the time this does. If no such
+     * organization exists yet (an install whose identity module hasn't bootstrapped, or never will),
+     * this is a no-op rather than a failure: there's nothing to attach a bootstrap api to.
      */
-    private async seedDefaultExposure(): Promise<void> {
-        const db = this.broker.getProvider<Database>('database');
-        const repo = db.repo(exposeCrud.get.outputSchema, 'serve.expose');
+    private async ensureBootstrapApi(): Promise<void> {
+        const organization = await this.broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
+        if (organization === undefined) {
+            return;
+        }
 
-        for (const { contract, role } of DEFAULT_EXPOSED_CONTRACTS) {
-            const existing = await repo.findOne({ contract, siteId: { $exists: false } });
-            if (existing === undefined) {
-                this.broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on the default host (${DEFAULT_API_HOST})...`);
-                // Passing role: undefined explicitly (rather than omitting the key) stores it as
-                // null, which the schema's z.string().optional() then rejects on the next read.
-                await repo.create(role !== undefined ? { contract, role } : { contract });
-            }
+        const meta = { tenant_id: organization.id };
+        const existing = await this.broker.call('serve.api.find_one', { query: { apiHost: BOOTSTRAP_API_HOST } }, { meta });
+        if (existing !== undefined) {
+            return;
+        }
+
+        this.broker.logger.info(`Creating bootstrap api "${BOOTSTRAP_API_HOST}"...`);
+        const api = await this.broker.call('serve.api.create', {
+            tenantId: organization.id, apiHost: BOOTSTRAP_API_HOST,
+        }, { meta });
+
+        for (const { contract, role } of BOOTSTRAP_EXPOSED_CONTRACTS) {
+            this.broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on ${BOOTSTRAP_API_HOST}...`);
+            await this.broker.call('serve.expose.create', {
+                tenantId: organization.id,
+                apiId: api.id,
+                contract,
+                ...(role !== undefined ? { role } : {}),
+            }, { meta });
         }
     }
 
@@ -148,37 +169,27 @@ export class ApiService extends ServiceModule {
         return hostname;
     }
 
-    private async resolveSite(hostname: string): Promise<Site> {
-        const site = await this.broker.call('serve.cdn.resolveApiHost', { apiHost: hostname });
-        if (site === undefined) {
-            throw new MeshError({ code: 'Not Found', message: 'Site not found', status: 404 });
+    private async resolveApi(hostname: string): Promise<Api> {
+        const api = await this.broker.call('serve.api.resolveByHost', { apiHost: hostname });
+        if (api === undefined) {
+            throw new MeshError({ code: 'Not Found', message: `No api for host "${hostname}".`, status: 404 });
         }
-        return site;
+        return api;
     }
 
     /**
      * This runs before any caller is known, but resolveCallerScope (DatabaseMiddleware.js) doesn't
      * actually need a caller -- it falls back to a bare meta.tenant_id when meta.user is absent. The
-     * site we already resolved names its own tenant, so that's what scopes this read: no bypass, no
+     * api we already resolved names its own tenant, so that's what scopes this read: no bypass, no
      * caller required, just the tenant context this request is already known to be serving.
      */
-    private async resolveExposeRows(siteId: string, tenantId: string): Promise<Expose[]> {
-        return this.broker.call('serve.expose.find', { query: { siteId } }, { meta: { tenant_id: tenantId } });
-    }
-
-    /** No tenant applies to the default host's rows at all, so this is a genuine cross-tenant read. */
-    private async resolveDefaultExposeRows(): Promise<Expose[]> {
-        const db = this.broker.getProvider<Database>('database');
-        const repo = db.repo(exposeCrud.get.outputSchema, 'serve.expose');
-        return repo.find({ query: { siteId: { $exists: false } } });
+    private async resolveExposeRows(apiId: string, tenantId: string): Promise<Expose[]> {
+        return this.broker.call('serve.expose.find', { query: { apiId } }, { meta: { tenant_id: tenantId } });
     }
 
     private async resolveTarget(hostname: string): Promise<Target> {
-        if (hostname === DEFAULT_API_HOST) {
-            return { host: DEFAULT_API_HOST, tenantId: undefined, rows: await this.resolveDefaultExposeRows() };
-        }
-        const site = await this.resolveSite(hostname);
-        return { host: site.apiHost, tenantId: site.tenantId, rows: await this.resolveExposeRows(site.id, site.tenantId) };
+        const api = await this.resolveApi(hostname);
+        return { host: api.apiHost, tenantId: api.tenantId, rows: await this.resolveExposeRows(api.id, api.tenantId) };
     }
 
     /**
@@ -244,11 +255,11 @@ export class ApiService extends ServiceModule {
      * role is a coarse, direct role check (identity.hasRole); permission calls identity.permits, a
      * finer check against the role's own permission patterns. Both resolve the caller's effective
      * roles fresh, combining global account roles with their membership role in this target's own
-     * tenant (absent on the default host, so only global roles ever apply there) -- account roles
-     * are king, so a membership role can never stand in for a global one. Neither role nor permission
-     * set on the row means public. No caller at all is only a problem once the row actually demands one.
+     * tenant -- account roles are king, so a membership role can never stand in for a global one.
+     * Neither role nor permission set on the row means public. No caller at all is only a problem
+     * once the row actually demands one.
      */
-    private async checkGate(row: Expose, caller: Caller | undefined, tenantId: string | undefined): Promise<void> {
+    private async checkGate(row: Expose, caller: Caller | undefined, tenantId: string): Promise<void> {
         if (row.role === undefined && row.permission === undefined) {
             return;
         }
@@ -260,9 +271,7 @@ export class ApiService extends ServiceModule {
         // identity.membership is scopedBy: 'userId', which resolveCallerScope special-cases from
         // meta.user.id -- hasRole/permits resolve that account's own membership internally via
         // ctx.call, which inherits whatever meta this entry call carries, so it has to be set here.
-        // IMeshMeta.user.tenant_id is a required string; '' on the default host is an unused
-        // placeholder -- organizationId is undefined there, so membership resolution never runs.
-        const meta = { user: { id: caller.userId, tenant_id: tenantId ?? '' } };
+        const meta = { user: { id: caller.userId, tenant_id: tenantId } };
 
         if (row.role !== undefined) {
             const result = await this.broker.call('identity.hasRole', {
@@ -356,11 +365,10 @@ export class ApiService extends ServiceModule {
         const input = await this.parseInput(req, route.params);
 
         // Tools like identity.whoami read ctx.meta.user.id, so an anonymous ctx.call is not the
-        // same call a caller made. tenant_id is the target's own owning tenant; '' on the default
-        // host is an unused placeholder, same reasoning as checkGate's meta above.
+        // same call a caller made. tenant_id is the target's own owning tenant.
         const meta = caller === undefined
             ? undefined
-            : { user: { id: caller.userId, tenant_id: target.tenantId ?? '' } };
+            : { user: { id: caller.userId, tenant_id: target.tenantId } };
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already
         // confirmed globalContractRegistry has a matching public contract for it) -- the broker's

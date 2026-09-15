@@ -112,6 +112,18 @@ export class IdentityService extends ServiceModule {
             }
         }
 
+        // Same idempotent-seed pattern as operator, but scope: 'organization' -- resolveEffectiveRoleKeys
+        // (methods/roles.ts) only honors a membership's roleKey when a matching role document exists
+        // with scope !== 'global'. Without this, every membership's role silently granted nothing:
+        // nothing anywhere seeded one, for any organization, ever.
+        if (roles.find((r) => r.key === 'owner') === undefined) {
+            broker.logger.info('No owner role found, creating one...');
+            await broker.call('identity.role.create', {
+                key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: [],
+                permissions: [],
+            });
+        }
+
         const userCount = await broker.call('identity.user.count', { query: {} });
         if (userCount > 0) {
             broker.logger.debug('User count > 0, skipping operator creation.');
@@ -120,13 +132,27 @@ export class IdentityService extends ServiceModule {
 
         const password = randomBytes(24).toString('base64url');
         const passwordHash = await hashPassword(password);
-        await broker.call('identity.user.create', {
+        const user = await broker.call('identity.user.create', {
             email: 'operator@node.invalid',
             displayName: 'operator',
             passwordHash,
             roles: ['operator'],
             provisional: true,
         });
+
+        /**
+         * The operator's global `operator` role is what actually grants them power -- this
+         * organization exists so `api.localhost` (and anything else bootstrap-owned) has somewhere
+         * real to live, not to grant anything itself. "platform" is a shared bootstrap convention
+         * with api.service.ts, which looks an organization up by this exact slug to attach its own
+         * default api to -- a literal string on both sides, the same way "operator" already is.
+         */
+        const organization = await broker.call('identity.organization.create', {
+            slug: 'platform', name: 'Platform', ownerId: user.id,
+        });
+        await broker.call('identity.membership.create', {
+            userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
+        }, { meta: { user: { id: user.id, tenant_id: '' } } });
 
         broker.logger.info('\nFIRST BOOT -- no accounts existed, so one was created.\n\n'
             + '  email     operator@node.invalid\n'
