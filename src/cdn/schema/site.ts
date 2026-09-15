@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const siteSchema = z.object({
   host: z.string().describe('The frontend hostname that resolves to this site\'s cdn; normalized by lowercasing, stripping port and trailing dot'),
-  apiHost: z.string().describe('The hostname that resolves to this site\'s REST+SSE api'),
+  apiId: z.string().optional().describe('The serve.api backing this site, if any -- absent means this site calls no exposed contracts of its own'),
   mcpHost: z.string().describe('The hostname that resolves to this site\'s mcp endpoint'),
   tenantId: z.string().describe('The organization that owns this site'),
   releaseHash: z.string().optional().describe('The release this site serves; absent means not deployed yet'),

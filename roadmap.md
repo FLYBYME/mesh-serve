@@ -64,14 +64,15 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ## Open — what's left of the `site` split
 
-The `serve.api` half landed (previous section). Two things it didn't touch:
-
-- **`serve.cdn` doesn't reference `serve.api` yet.** A full site (frontend + backing api) still has
-  no link between the two — `serve.cdn.apiHost` and a real `serve.api.apiHost` row are two unrelated
-  strings that could disagree. The clean fix is an optional `apiId` on `serve.cdn`, with `apiHost`
-  either dropped from the site schema entirely or kept only as a cache of what `apiId` resolves to.
-  Not urgent: nothing has hit this yet because nothing has created a full frontend+api site through
-  the new path.
+- [x] **`serve.cdn` now references `serve.api`.** `apiHost` is gone from `siteSchema`, replaced by an
+      optional `apiId` (absent means a UI-only site that calls no exposed contracts of its own). The
+      dead `serve.cdn.resolveApiHost` contract/tool/mount are deleted — nothing called it any more
+      once `api.service.ts`'s routing moved to `serve.api.resolveByHost` in the previous change.
+      `cdn.service.ts`'s HTML render and CSP header both resolve `site.apiId` → `serve.api.apiHost`
+      once per request (`resolveApiHost`) and degrade cleanly (no preconnect link, no `data-api`
+      attribute, no api entry in `connect-src`) when a site has none. Verified live: a real site
+      created with a real `apiId` resolves it correctly before hitting the (expected, unrelated)
+      "Site not deployed" check.
 - **What would `generate --cdn <id>` actually produce?** Still unanswered. `generate --api <id>` is
   clear — the same real-zod `call`/`defineApi` shape as today. A CDN/UI-only site doesn't need a typed
   *client*, it needs its already-built JS bundles served, which `serve.artifact`/`serve.composition`/

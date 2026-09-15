@@ -7,14 +7,12 @@ import type { IServiceBroker } from '@flybyme/mesh';
 import {
     siteCrud,
     siteResolveHostContract,
-    siteResolveApiHostContract,
     siteResolveByIdContract,
     siteDeployContract,
     type Site
 } from './contracts/site.contract.js';
 
 import { resolveHost } from './tools/resolveHost.js';
-import { resolveApiHost } from './tools/resolveApiHost.js';
 import { resolveById } from './tools/resolveById.js';
 import { deploy } from './tools/deploy.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
@@ -37,9 +35,8 @@ interface WebAssetRequest {
  * required here so a caller never has to re-check what was already validated. */
 type ResolvedWebAssetRequest = WebAssetRequest & { kernel: WebAsset };
 
-/** No scheme/protocol concept exists anywhere else in mesh-serve yet; apiHost/mcpHost are stored
- * bare (matching resolveApiHost's exact-match lookup). Same env-var convention as API_PORT/
- * SERVER_PORT/DEFAULT_API_HOST. */
+/** No scheme/protocol concept exists anywhere else in mesh-serve yet; host/mcpHost are stored
+ * bare. Same env-var convention as API_PORT/SERVER_PORT/DEFAULT_API_HOST. */
 const PUBLIC_SCHEME = process.env.PUBLIC_SCHEME || 'https';
 
 export class CdnService extends ServiceModule {
@@ -56,7 +53,6 @@ export class CdnService extends ServiceModule {
 
         this.mountCrud(siteCrud);
         this.mountTool(siteResolveHostContract, resolveHost);
-        this.mountTool(siteResolveApiHostContract, resolveApiHost);
         this.mountTool(siteResolveByIdContract, resolveById);
         this.mountTool(siteDeployContract, deploy);
     }
@@ -248,7 +244,14 @@ export class CdnService extends ServiceModule {
         return resolved;
     }
 
-    private async generateHtml(site: Site, req: http.IncomingMessage): Promise<string> {
+    /** `site.apiId` is optional -- a UI-only site calls no exposed contracts of its own. */
+    private async resolveApiHost(site: Site): Promise<string | undefined> {
+        if (site.apiId === undefined) return undefined;
+        const api = await this.broker.call('serve.api.resolveById', { id: site.apiId });
+        return api.apiHost;
+    }
+
+    private async generateHtml(site: Site, req: http.IncomingMessage, apiHost: string | undefined): Promise<string> {
         const html: string[] = [];
 
         if (!site.releaseHash) {
@@ -284,7 +287,7 @@ export class CdnService extends ServiceModule {
       ${site.canonical ? `<link rel="canonical" href="${site.canonical}">` : ''}
       ${site.image ? `<meta property="og:image" content="${site.image}">` : ''}
       ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
-      <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.apiHost}">
+      ${apiHost ? `<link rel="preconnect" href="${PUBLIC_SCHEME}://${apiHost}">` : ''}
       <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.mcpHost}">
       ${themeVars ? `<style>:root { ${themeVars} }</style>` : ''}
       ${webRequest.theme ? styleTag(webRequest.theme) : ''}
@@ -296,7 +299,7 @@ export class CdnService extends ServiceModule {
         src="/assets/${webRequest.kernel.url}"
         ${integrityAttr(webRequest.kernel)}
         data-application="${site.application}"
-        data-api="${site.apiHost}"
+        ${apiHost ? `data-api="${apiHost}"` : ''}
         data-mcp="${site.mcpHost}"
         data-policy='${JSON.stringify(site.policy)}'
         ${site.open ? `data-open='${JSON.stringify(site.open)}'` : ''}
@@ -315,15 +318,15 @@ export class CdnService extends ServiceModule {
      * data-* attributes) -- so script-src can be strict. style-src allows 'unsafe-inline' for the
      * one inline <style> block (theme CSS vars); low severity, not worth an external per-request
      * stylesheet to avoid it. */
-    private contentSecurityPolicy(site: Site): string {
-        const api = `${PUBLIC_SCHEME}://${site.apiHost}`;
+    private contentSecurityPolicy(site: Site, apiHost: string | undefined): string {
+        const api = apiHost === undefined ? undefined : `${PUBLIC_SCHEME}://${apiHost}`;
         const mcp = `${PUBLIC_SCHEME}://${site.mcpHost}`;
         const mcpWs = `wss://${site.mcpHost}`;
         return [
             "default-src 'self'",
             "script-src 'self'",
             "style-src 'self' 'unsafe-inline'",
-            `connect-src 'self' ${api} ${mcp} ${mcpWs}`,
+            `connect-src 'self' ${[api, mcp, mcpWs].filter((v) => v !== undefined).join(' ')}`,
             "img-src 'self' data: https:",
             "font-src 'self'",
         ].join('; ');
@@ -436,10 +439,11 @@ export class CdnService extends ServiceModule {
             return this.serveAssets(site, req, res);
         }
 
-        const html = await this.generateHtml(site, req);
+        const apiHost = await this.resolveApiHost(site);
+        const html = await this.generateHtml(site, req, apiHost);
         res.setHeader('Content-Type', 'text/html');
         res.setHeader('Content-Length', Buffer.byteLength(html));
-        res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site));
+        res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site, apiHost));
         res.statusCode = 200;
         res.end(html);
 

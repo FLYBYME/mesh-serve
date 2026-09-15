@@ -7,7 +7,6 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
     scopedBy: 'tenantId',
     unique: [
         { fields: 'host', scope: 'global' },
-        { fields: 'apiHost', scope: 'global' },
         { fields: 'mcpHost', scope: 'global' },
     ],
     visibility: {
@@ -37,26 +36,6 @@ export const siteResolveHostContract = defineContract({
 
 export type ResolveHostInput = z.infer<typeof siteResolveHostContract.inputSchema>;
 export type ResolveHostOutput = z.infer<typeof siteResolveHostContract.outputSchema>;
-
-export const resolveApiHostInputSchema = z.object({
-    apiHost: z.string().min(1).describe('The hostname an api connection arrived on'),
-}).describe('One site, by api hostname, for an anonymous connection');
-
-export const resolveApiHostOutputSchema = siteCrud.get.outputSchema;
-
-export const siteResolveApiHostContract = defineContract({
-    domain: 'serve.cdn',
-    action: 'resolveApiHost',
-    description: 'One site, by api hostname, for an anonymous connection.',
-    inputSchema: resolveApiHostInputSchema,
-    outputSchema: resolveApiHostOutputSchema,
-    rest: { method: 'GET', path: '/sites/api/:apiHost' },
-    visibility: 'public',
-    print: (o) => `${o.apiHost} (${o.tenantId})`,
-});
-
-export type ResolveApiHostInput = z.infer<typeof siteResolveApiHostContract.inputSchema>;
-export type ResolveApiHostOutput = z.infer<typeof siteResolveApiHostContract.outputSchema>;
 
 export const resolveByIdInputSchema = z.object({
     id: z.string().min(1).describe('The site id'),
