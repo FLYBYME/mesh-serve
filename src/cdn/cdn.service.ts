@@ -52,22 +52,31 @@ interface WebAssetRequest {
  * required here so a caller never has to re-check what was already validated. */
 type ResolvedWebAssetRequest = WebAssetRequest & { kernel: WebAsset };
 
-/** No scheme/protocol concept exists anywhere else in mesh-serve yet; host/mcpHost are stored
- * bare. Same env-var convention as API_PORT/SERVER_PORT/DEFAULT_API_HOST. */
-const PUBLIC_SCHEME = process.env.PUBLIC_SCHEME || 'https';
+/**
+ * Read live, not captured as a module-level const: `mesh-serve start`'s `--publicScheme`/
+ * `--publicApiPort` flags set these env vars from inside `StartCommand.execute()`, which runs
+ * *after* this module's own top-level code already ran (imports resolve, and therefore every
+ * module-level `const`, before any command's `execute()` does) -- a const here would permanently
+ * capture whatever was set before the process even started, the same way `API_PORT` would if
+ * ApiService read it as one instead of inside `createServer()`. No scheme/protocol concept exists
+ * anywhere else in mesh-serve yet; host/mcpHost are stored bare.
+ */
+const publicScheme = (): string => process.env.PUBLIC_SCHEME || 'https';
 
 /**
  * `serve.api.apiHost` is deliberately bare (`resolveHostname` strips a port before matching it, so
  * the api and every one of its sites can be found by the same Host header regardless of what front
  * door the request arrived through) -- production's front door is always the standard port for
- * `PUBLIC_SCHEME`, so bare has always been a complete public origin. It stops being one the moment
+ * `publicScheme()`, so bare has always been a complete public origin. It stops being one the moment
  * ApiService is reached directly, unproxied, on a non-standard port -- exactly this repo's own local
  * dev. `PUBLIC_API_PORT` is that one missing piece, kept as its own env var rather than reused from
  * `API_PORT` (ApiService's *listen* port) because those two are only ever the same number by
  * coincidence of no reverse proxy sitting in between -- true here, false the moment one exists.
  */
-const PUBLIC_API_PORT = process.env.PUBLIC_API_PORT;
-const apiOrigin = (host: string): string => `${PUBLIC_SCHEME}://${host}${PUBLIC_API_PORT ? `:${PUBLIC_API_PORT}` : ''}`;
+const apiOrigin = (host: string): string => {
+    const port = process.env.PUBLIC_API_PORT;
+    return `${publicScheme()}://${host}${port ? `:${port}` : ''}`;
+};
 
 export class CdnService extends ServiceModule {
     public readonly domain = 'serve.cdn';
@@ -345,7 +354,7 @@ export class CdnService extends ServiceModule {
       ${site.image ? `<meta property="og:image" content="${site.image}">` : ''}
       ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
       ${apiHost ? `<link rel="preconnect" href="${apiOrigin(apiHost)}">` : ''}
-      <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.mcpHost}">
+      <link rel="preconnect" href="${publicScheme()}://${site.mcpHost}">
       ${themeVars ? `<style>:root { ${themeVars} }</style>` : ''}
       ${webRequest.theme ? styleTag(webRequest.theme) : ''}
       ${webRequest.css.map(styleTag).join('')}
@@ -375,7 +384,7 @@ export class CdnService extends ServiceModule {
      * loudly at the header. Found live, the first time this path actually rendered two hashes. */
     private contentSecurityPolicy(site: Site, apiHost: string | undefined, scriptHashes: string): string {
         const api = apiHost === undefined ? undefined : apiOrigin(apiHost);
-        const mcp = `${PUBLIC_SCHEME}://${site.mcpHost}`;
+        const mcp = `${publicScheme()}://${site.mcpHost}`;
         const mcpWs = `wss://${site.mcpHost}`;
         return [
             "default-src 'self'",

@@ -30,6 +30,8 @@ const startInputSchema = z.object({
     cdnPort: z.coerce.number().default(3123).describe('CdnService frontend http port'),
     db: z.string().optional().describe('Database name, e.g. "test-001" -- not a connection string; use MONGODB_URI for that'),
     logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
+    publicScheme: z.enum(['http', 'https']).optional().describe('Scheme used in every public-facing URL a site\'s HTML embeds (preconnect, CSP connect-src, the boot module\'s api field) -- defaults to https, the correct value whenever a reverse proxy fronts this node. Pass http only for an unproxied local node'),
+    publicApiPort: z.coerce.number().optional().describe('Port appended to those same public-facing api URLs -- unset in production, where the public port is always the standard one for publicScheme. Needed only when apiPort is reached directly, unproxied (e.g. matching --apiPort for local dev)'),
 });
 
 export class StartCommand extends BaseCommand {
@@ -57,6 +59,10 @@ export class StartCommand extends BaseCommand {
         // (SERVER_PORT, API_PORT) -- set before registering them, not passed as constructor args.
         process.env.API_PORT = String(args.apiPort);
         process.env.SERVER_PORT = String(args.cdnPort);
+        // Same pattern, and both left unset (CdnService's own defaults apply) unless given --
+        // there is no correct universal default for either, only a correct default per deployment.
+        if (args.publicScheme !== undefined) process.env.PUBLIC_SCHEME = args.publicScheme;
+        if (args.publicApiPort !== undefined) process.env.PUBLIC_API_PORT = String(args.publicApiPort);
 
         const transport = new WSTransport(serializer, args.wsPort);
         node.use(new RegistryModule({ ttl: 5000 })); // Short TTL for faster repro
