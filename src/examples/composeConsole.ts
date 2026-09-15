@@ -1,0 +1,171 @@
+#!/usr/bin/env -S npx tsx
+/**
+ * Stands up console.localhost end to end, by hand, over the real primitives -- there is no `seed`
+ * convenience command any more (deleted before this session; see HANDOVER.md, now historical).
+ *
+ * repo -> part -> artifact.requestBuild -> composition -> composition.compose -> cdn.create ->
+ * cdn.deploy -> expose.add, all called directly through the broker (system-level, the same way
+ * identity.service.ts's own bootstrap does it -- no ticket needed, only meta.tenant_id for scoping).
+ *
+ * mesh-web and mesh-core are built from the local bare mirrors
+ * (/home/ubuntu/code/.git-remotes/{mesh-web,mesh-core}.git), not GitHub -- mesh-web's mirror has
+ * diverged history from other work (dispatch/14, dispatch/16, dispatch/17 branches untouched), so
+ * this pushes the local repo's HEAD to a dedicated `console-demo` branch rather than touching
+ * `master`.
+ */
+import {
+    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
+} from '@flybyme/mesh';
+import { WSTransport } from '@flybyme/mesh/node';
+
+import { IdentityService } from '../identity/identity.service.js';
+import { CdnService } from '../cdn/cdn.service.js';
+import { CatalogService } from '../catalog/catalog.service.js';
+import { ApiService } from '../api/api.service.js';
+
+const DB_NAME = 'mesh-console-demo';
+const WS_PORT = 17654;
+const API_PORT = 17655;
+const CDN_PORT = 17656;
+
+const MESH_WEB_URL = '/home/ubuntu/code/.git-remotes/mesh-web.git';
+const MESH_WEB_REF = 'console-demo';
+const MESH_CORE_URL = '/home/ubuntu/code/.git-remotes/mesh-core.git';
+const MESH_CORE_REF = 'master';
+
+const IDENTITY_CONTRACTS = [
+    'identity.ticket.issue', 'identity.ticket.signOut', 'identity.whoami', 'identity.user.setPassword',
+    'identity.organization.find', 'identity.organization.create',
+    'identity.membership.find', 'identity.membership.create', 'identity.membership.delete',
+    'identity.role.find',
+];
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+async function waitForBuild(app: MeshApp, meta: { tenant_id: string }, partId: string, label: string): Promise<void> {
+    for (let i = 0; i < 90; i++) {
+        const artifacts = await app.call('serve.artifact.find', { query: { partId } }, { meta });
+        const latest = artifacts[artifacts.length - 1];
+        if (latest?.status === 'success') {
+            console.log(`  ${label}: built (${latest.hash})`);
+            return;
+        }
+        if (latest?.status === 'failed') {
+            throw new Error(`${label} failed: ${latest.error ?? 'unknown error'}`);
+        }
+        await sleep(2000);
+    }
+    throw new Error(`${label} timed out waiting for a build`);
+}
+
+async function main(): Promise<void> {
+    process.env.API_PORT = String(API_PORT);
+    process.env.SERVER_PORT = String(CDN_PORT);
+
+    const logger = new Logger(LogLevel.INFO, {}, (_level, _formatted, originalMsg) => {
+        if (typeof originalMsg === 'string') console.log(originalMsg);
+    });
+
+    const app = new MeshApp({ nodeID: 'console-demo', logger });
+    app.use(new RegistryModule({ ttl: 5000 }));
+    app.use(new NetworkModule({ transports: [new WSTransport(new JSONSerializer(), WS_PORT)] }));
+    app.use(new DatabaseModule({ dbName: DB_NAME }));
+    app.use(new BrokerModule());
+
+    await app.registerModule(new IdentityService());
+    await app.registerModule(new CdnService());
+    await app.registerModule(new CatalogService());
+    await app.registerModule(new ApiService());
+
+    await app.start();
+
+    const org = await app.call('identity.organization.find_one', { query: { slug: 'platform' } });
+    if (org === undefined) throw new Error('No "platform" organization -- first boot did not run?');
+    const meta = { tenant_id: org.id };
+
+    console.log('\n== repos ==');
+    const meshWebRepo = await app.call('serve.repo.create', { tenantId: org.id, url: MESH_WEB_URL, defaultBranch: MESH_WEB_REF }, { meta });
+    const meshCoreRepo = await app.call('serve.repo.create', { tenantId: org.id, url: MESH_CORE_URL, defaultBranch: MESH_CORE_REF }, { meta });
+
+    console.log('== parts ==');
+    const kernelPart = await app.call('serve.part.create', {
+        tenantId: org.id, repoId: meshWebRepo.id, key: 'platform/kernel', kind: 'kernel', path: '.', entryPoint: 'src/index.ts', imports: '@flybyme/mesh-web', wants: [],
+    }, { meta });
+    const uiPart = await app.call('serve.part.create', {
+        tenantId: org.id, repoId: meshCoreRepo.id, key: 'platform/ui', kind: 'extension', path: '.', entryPoint: 'src/ui/index.ts', imports: '@flybyme/mesh-core/ui', wants: [],
+    }, { meta });
+    const authPart = await app.call('serve.part.create', {
+        tenantId: org.id, repoId: meshCoreRepo.id, key: 'platform/auth', kind: 'extension', path: '.', entryPoint: 'src/auth/index.ts', imports: '@flybyme/mesh-core/auth', wants: [],
+    }, { meta });
+    const identityPart = await app.call('serve.part.create', {
+        tenantId: org.id, repoId: meshCoreRepo.id, key: 'platform/identity', kind: 'application', path: '.', entryPoint: 'src/identity/index.ts', wants: [],
+    }, { meta });
+    const chromePart = await app.call('serve.part.create', {
+        tenantId: org.id, repoId: meshCoreRepo.id, key: 'platform/chrome', kind: 'extension', path: '.', entryPoint: 'src/chrome/index.ts', wants: [],
+    }, { meta });
+
+    console.log('== requesting builds ==');
+    const kernelArtifact = await app.call('serve.artifact.requestBuild', { partId: kernelPart.id, ref: MESH_WEB_REF }, { meta });
+    const uiArtifact = await app.call('serve.artifact.requestBuild', { partId: uiPart.id, ref: MESH_CORE_REF }, { meta });
+    const authArtifact = await app.call('serve.artifact.requestBuild', { partId: authPart.id, ref: MESH_CORE_REF }, { meta });
+    const identityArtifact = await app.call('serve.artifact.requestBuild', { partId: identityPart.id, ref: MESH_CORE_REF }, { meta });
+    const chromeArtifact = await app.call('serve.artifact.requestBuild', { partId: chromePart.id, ref: MESH_CORE_REF }, { meta });
+
+    console.log('== waiting for builds (catalog polls every 60s) ==');
+    await Promise.all([
+        waitForBuild(app, meta, kernelPart.id, 'kernel'),
+        waitForBuild(app, meta, uiPart.id, 'ui'),
+        waitForBuild(app, meta, authPart.id, 'auth'),
+        waitForBuild(app, meta, identityPart.id, 'identity'),
+        waitForBuild(app, meta, chromePart.id, 'chrome'),
+    ]);
+    void kernelArtifact; void uiArtifact; void authArtifact; void identityArtifact; void chromeArtifact;
+
+    console.log('== composition ==');
+    const composition = await app.call('serve.composition.create', {
+        tenantId: org.id, key: 'console', kernelPartKey: kernelPart.key, drivers: [],
+        parts: [uiPart.key, authPart.key, identityPart.key, chromePart.key],
+    }, { meta });
+    const release = await app.call('serve.composition.compose', { id: composition.id }, { meta });
+    console.log(`  release ${release.hash}, ${release.parts.length} parts pinned`);
+
+    console.log('== exposing identity contracts on api.localhost ==');
+    const api = await app.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
+    if (api === undefined) throw new Error('No api.localhost -- first boot did not run?');
+    for (const contract of IDENTITY_CONTRACTS) {
+        const existing = await app.call('serve.expose.find_one', { query: { apiId: api.id, contract } }, { meta });
+        if (existing === undefined) {
+            await app.call('serve.expose.add', { apiId: api.id, contract }, { meta });
+            console.log(`  exposed ${contract}`);
+        }
+    }
+
+    console.log('== cdn site ==');
+    const site = await app.call('serve.cdn.create', {
+        tenantId: org.id,
+        host: 'console.localhost',
+        apiId: api.id,
+        mcpHost: 'console-mcp.localhost',
+        application: 'console',
+        policy: {},
+        open: [{ application: identityPart.key }],
+        theme: {},
+        title: 'Console',
+        description: 'The identity console, composed live for real.',
+        indexable: false,
+    }, { meta });
+
+    const deployed = await app.call('serve.cdn.deploy', { siteId: site.id, releaseHash: release.hash }, { meta });
+    console.log(`  deployed: ${deployed.site.host} -> ${deployed.site.releaseHash}`);
+
+    console.log(`\nconsole.localhost is live: http://127.0.0.1:${CDN_PORT}  (Host: console.localhost)`);
+    console.log(`api.localhost:              http://127.0.0.1:${API_PORT}  (Host: api.localhost)`);
+    console.log('Leave this running; Ctrl-C to stop.');
+}
+
+main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+});

@@ -71,17 +71,28 @@ export async function compose(
     const { tenantId } = composition;
     const meta = { tenant_id: tenantId };
 
+    /**
+     * MongoDB serializes an explicit `undefined` object property to BSON `null` when that object is
+     * an array element (unlike a top-level document field, where mesh's `ignoreUndefined` connection
+     * setting drops the key outright) -- so `{ imports: possiblyUndefined }` inside `releaseParts`
+     * round-trips as `{ imports: null }`, which `releasePartSchema`'s plain `z.string().optional()`
+     * then refuses on the next read. Omitting the key outright when there's nothing to put there
+     * sidesteps it instead of loosening the schema to accept a null that means the same thing.
+     */
+    const importsField = (imports: string | undefined): { imports: string } | Record<string, never> =>
+        imports === undefined ? {} : { imports };
+
     const kernelPart = await resolvePart(composition.kernelPartKey, tenantId, 'kernel', ctx);
     const kernelArtifact = await latestArtifact(kernelPart, tenantId, composition.drivers, ctx);
 
     const releaseParts: ComposeOutput['parts'] = [
-        { partKey: kernelPart.key, kind: 'kernel', artifactHash: kernelArtifact.hash as string },
+        { partKey: kernelPart.key, kind: 'kernel', artifactHash: kernelArtifact.hash as string, ...importsField(kernelPart.imports) },
     ];
 
     if (composition.theme !== undefined) {
         const themePart = await resolvePart(composition.theme, tenantId, 'theme', ctx);
         const themeArtifact = await latestArtifact(themePart, tenantId, undefined, ctx);
-        releaseParts.push({ partKey: themePart.key, kind: 'theme', artifactHash: themeArtifact.hash as string });
+        releaseParts.push({ partKey: themePart.key, kind: 'theme', artifactHash: themeArtifact.hash as string, ...importsField(themePart.imports) });
     }
 
     for (const key of composition.parts) {
@@ -93,7 +104,7 @@ export async function compose(
             throw new MeshError({ message: `Part "${key}" is kind "${part.kind}", not application or extension.`, code: 'BAD_REQUEST', status: 400 });
         }
         const artifact = await latestArtifact(part, tenantId, undefined, ctx);
-        releaseParts.push({ partKey: part.key, kind: part.kind, artifactHash: artifact.hash as string });
+        releaseParts.push({ partKey: part.key, kind: part.kind, artifactHash: artifact.hash as string, ...importsField(part.imports) });
     }
 
     releaseParts.sort((a, b) => a.partKey.localeCompare(b.partKey));

@@ -7,6 +7,142 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done — `cdn.service.ts` was generating a page against a kernel API that no longer exists
+
+Also found trying to stand up `console.localhost`, after the builder gap above was fixed: the page
+built, downloaded every script, threw no console error, and rendered nothing. Two real bugs:
+
+- [x] **`buildKernel`'s synthesized entry only exported `default`.** `import * as kernel from ...;
+      export default kernel` compiles fine but gives every other part's `import { needs } from
+      '@flybyme/mesh-web'` nothing to resolve against -- mesh-web has no default export, only named
+      ones. Fixed: `export * from <mesh-web's entry>`, re-exporting the same named bindings.
+- [x] **`cdn.service.ts` was built against an old kernel boot protocol.** It put `data-application`/
+      `data-policy`/`data-open`/`data-api` on the kernel's own `<script>` tag and loaded every other
+      part as its own flat `<script type="module">`. mesh-web's real entry point,
+      `start(composition)` (`mesh-web/kernel/start.ts`), reads none of that -- it takes an explicit
+      `{ application, api, policy, open, parts }` object and constructs+registers each part's default
+      export itself. A part's module merely being *fetched* does nothing; nothing before this called
+      `start()` at all. `cdn.service.ts` now generates a small boot module (`import { start } from
+      '@flybyme/mesh-web'; import part_0 from '/assets/...'; ...; start({...})`), inlined as one
+      CSP-hashed `<script type="module">`, in place of both the old kernel-script-with-data-attrs and
+      the flat per-part script list. mesh-core's own docs (`auth/index.ts`'s comment on its default
+      export) already named this exact module shape as `boot.js` -- nothing had ever generated it.
+      Confirmed at the bundle level (kernel's export list contains `needs`/`element`/`provider`/etc.
+      under their real names) before re-reporting this fixed, same as the import-map work above.
+
+**Known gap, not fixed**: the old mechanism read a `mesh_ticket` cookie server-side
+(`cdn.service.ts`'s `resolveTicket`/`parseCookies`, now deleted) so a returning signed-in visitor
+skipped a login round-trip. `Composition` (`start()`'s input type) has no ticket field at all --
+`AuthExtension` takes an optional `store: TicketStore` per-part instead, and nothing currently
+constructs one from a server-resolved cookie and passes it as that part's `options`. A real feature,
+just not wired past this session's actual blocker (a completely blank page).
+
+## Done — four more bugs, found by actually loading the rendered page
+
+`console.localhost` went from a blank page to fully working -- real windowed kernel chrome, the
+identity app, live data -- across four more fixes, each found by reloading in a real browser
+(`test/puppeteer/checkPage.ts`, see below) rather than by re-reading the code:
+
+- [x] **CSP hash sources need their own quotes.** `script-src 'self' sha256-...` (no quotes around
+      the hash itself) is silently dropped by the browser -- "contains an invalid source" in the
+      console, not a header-rejected error, so it read as nothing being wrong until the inline boot
+      script was blocked. Fixed: each hash gets wrapped (`'sha256-...'`) before joining.
+- [x] **The kernel's own CSS was dropped.** mesh-web's entry does `import './kernel.css'`, so esbuild
+      emits a real `entry.css` next to `entry.js` -- but `resolveWebRequest`'s `kind === 'kernel'`
+      branch `continue`d before ever reaching the CSS-collection loop. The page rendered, unstyled,
+      for every release, from the moment the boot-module fix landed. Fixed: the kernel branch now
+      collects its own `.css` asset too.
+- [x] **No public port for an unproxied api.** `serve.api.apiHost` has to stay a bare hostname
+      (`resolveHostname` strips the port before matching, on purpose -- the same api answers whatever
+      front door a request arrived through), so there was no way to say "the public origin needs
+      `:17655`" for a local, unproxied dev setup. New `PUBLIC_API_PORT` env var, read only when
+      building a *public-facing* origin (preconnect, CSP `connect-src`, the boot module's `api`
+      field) -- never reused from `API_PORT` (the internal listen port), since those two are only the
+      same number by coincidence of nothing sitting in between.
+- [x] **No CORS handling anywhere in `api.service.ts`.** cdn and api are genuinely different origins
+      (different host *and* port) the moment nothing proxies them onto one, and nothing had ever
+      called this api from a real browser before now -- curl and the CLI don't enforce CORS, so nine
+      months of `_describe`/CLI verification never would have caught it. `Access-Control-Allow-Origin:
+      *` (safe here specifically because every call is bearer-token-authenticated, never
+      cookie-credentialed -- the same reasoning `mesh-core/auth/extension.ts` already gives for
+      staying bearer-only) plus real `OPTIONS` preflight handling, added at the top of the request
+      handler.
+
+**`test/puppeteer/checkPage.ts`** (new): loads a URL in the system's real Chrome via `puppeteer-core`
+(no bundled Chromium download) and reports console messages, page errors, failed requests, and a
+screenshot. Built because Claude-in-Chrome wasn't connected in the session that needed to verify all
+four of these -- every one of them was invisible to `curl`/direct HTTP checks and only showed up once
+something actually rendered the page.
+
+---
+
+## Done — chrome: a real entry point, a real sign-in, and the dispatcher gap that hid under both
+
+`console.localhost` had windows but no shell around them (no chrome composed in at all), then a
+shell with a sign-in button that silently did nothing, then a shell whose window host collapsed to
+0 height. Three real bugs, spanning mesh-web, mesh-core, and mesh-serve's own git history reading,
+not one — "make it right" meant tracing each to its actual root rather than patching the symptom:
+
+- [x] **`chrome.ts` had no entry point.** Same gap `auth/index.ts` already had and was fixed for --
+      `chrome/index.ts` now exists, default-exports `ConsoleChrome`, and `package.json` gained
+      `"./chrome"`. Deleted `chrome/contract.ts` alongside it: confirmed via `git log` it was
+      orphaned scaffolding from an unrelated generics-fix commit, never imported, redeclaring names
+      `chrome.ts` already declared correctly.
+- [x] **mesh-web's page-level dispatcher only ever resolved `{ kind: 'command' }`.** A window's own
+      view gets a real per-instance handler table for free (`window/host.ts`'s `mountView`); chrome,
+      rendered outside the window-host mechanism, had no equivalent -- every chrome written before
+      this only used `command(...)`-bound intents, so the gap was invisible until `ui.SignIn`
+      (real, complete, and previously wired into nothing) got embedded in chrome's banner for the
+      first time. `PageChrome` gained an optional `handlers?: HandlerTable`; `start.ts`'s page
+      dispatch now resolves `{ kind: 'handler' }` against it before falling through to the existing
+      command path. 472 unit + 49 browser tests in mesh-web, all passing.
+- [x] **chrome had no stylesheet at all.** `ui.css` is scoped to `src/ui`; nothing styled
+      `.console`/`.console-banner`/etc., so `[data-mesh-window-host]` sat in a heightless flex column
+      and every window rendered off-screen. New `chrome/chrome.css`, structural only, mirroring
+      `kernel.css`'s own token fallbacks directly.
+
+Verified with `test/puppeteer/signIn.ts` (new): fills the real form, submits it, confirms "Signed in
+as operator." with zero console/page errors -- not a screenshot of a form that might work, an actual
+completed sign-in against a live api.
+
+**Not fixed, noted rather than silently designed:** `sidebar()` renders as a horizontal strip between
+the tabs and the window host (it's a direct child of the same column flex, not a side rail) --
+harmless today since nothing calls `ConsoleChromeApi.addNav` yet, so it's always empty, but a real
+side-panel layout is undesigned work, not a bug to patch blind.
+
+---
+
+## Open — the builder never actually builds a real, multi-part site
+
+Found trying to stand up `console.localhost` for real: `serve.repo` → `serve.part` →
+`serve.artifact.requestBuild` → `serve.composition` → `serve.cdn.deploy` had never been exercised
+end to end against a real kernel + extensions + application since this session's api/cdn/catalog
+rework (the old `seed` command that used to drive this was deleted before this session even started
+— see the "One SDK" section below). Two real bugs, one fixed:
+
+- [x] **`buildKernel`'s synthesized entry assumed a default export.** `import kernel from
+      <mesh-web's src/index.ts>` — but mesh-web's kernel entry is barrel re-exports only, no default,
+      deliberately (its own header enforces the node/browser split, and every export in the file is
+      named). Every kernel build failed outright. Fixed: `import * as kernel from ...`.
+- [ ] **There is no external-import / import-map mechanism at all.** `runEsbuild` (`build.ts`) calls
+      `esbuild.build({ bundle: true, ... })` with no `external` list, so building any mesh-core part
+      (`ui`, `auth`, `identity`) fails immediately: `Could not resolve "@flybyme/mesh-web"` — the
+      checked-out repo is a fresh `git clone` with no `node_modules`, and even if it had one, bundling
+      the framework into every single part's artifact separately isn't what the rest of the system
+      assumes happens. **mesh-core's own `mesh.json` already documents the intended behavior**,
+      written before this gap was found: *"A part is bundled with one specifier external and
+      everything else inlined from its own clone... The builder marks it external and the site's
+      import map points it at this artifact, exactly as it has always done for `@flybyme/mesh-web`."*
+      That mechanism does not exist. Two things are missing to build it: (1) `serve.part`'s schema has
+      no field for "the specifier other parts import this one as" — only `key` (an internal
+      identifier), not an `import` string like mesh.json's own per-part `"import":
+      "@flybyme/mesh-core/ui"` field; (2) nothing generates an actual `<script type="importmap">` (or
+      equivalent) in `cdn.service.ts`'s served HTML mapping those specifiers to the release's pinned
+      artifact URLs, and nothing tells esbuild which specifiers to mark `external` per part. Real
+      design work, not a quick fix — flagged rather than improvised.
+
+---
+
 ## Done this session (continued — real integration test coverage)
 
 - [x] **`test/bootstrap.integration.test.ts`.** Everything above was verified by hand, repeatedly, and
@@ -158,18 +294,29 @@ parallel structure drifts, a scanned declaration can't. Two separable pieces:
 
 ---
 
+## The "One SDK" plan is fully complete
+
+Checked directly against each repo's own git log, not assumed from memory — every part of it landed:
+
+- **Part 1 (mesh-web, `cx.mesh.call` throws).** `0.17.0` — `coerceResult`/`isTypedResult` are gone
+  from `src/`, `models.ts`/`query.ts`/`broker.ts` all use `MeshCallError` directly.
+- **Part 2a (relocate mesh's CLI/scanner into mesh-serve).** `mesh/src/cli/` no longer exists at all;
+  `mesh-serve/src/cli/core/` now holds `BaseCommand`/`CommandRegistry`/`ZodToCliMapper`. mesh's own
+  `git status` is clean — the removal is committed, not a pending risk.
+- **Part 2b (real zod-backed generator)** and **Part 2c (`@flybyme/mesh-web/net` subpath)** — both
+  live; `0.17.1` published `/net` as its own export. This is what `generate --api <id>` and
+  `src/examples/whoami.ts` both depend on, verified live and in `test/bootstrap.integration.test.ts`.
+- **Part 3 (mesh-serve's own CLI rebuilt on it)** — done, see "Done this session" above.
+
+Nothing from that plan is still open. `mesh-operator/src/console/generated/api.ts` is also already
+regenerated for real (zod, `/net`, typechecks clean) — the line that used to be here saying otherwise
+was stale, corrected 2026-09-15.
+
 ## No longer blocked, not yet done
 
-- **Regenerating `mesh-operator/src/console/generated/api.ts` for real.** It's still the old
-  JSON-Schema-to-`interface` output (no zod, imports `@flybyme/mesh-web` not `/net`) from before this
-  session's generator rewrite. The bootstrap gap that blocked this is fixed — there's now a real
-  `serve.api` row (`Platform`'s bootstrap api) an operator can `serve.expose.add` the console's wanted
-  contracts onto and generate a real client from. Not done yet, just unblocked.
-- **The console port itself** (`contract.ts`, `index.ts`, `views/*.ts`) — `cx.mesh.call` needs the
-  Result→throw update, `cx.models('site')`/`'membership'`/`'release'` need to become
-  `cx.models('serve.cdn')`/`'identity.membership'`/`'serve.release'` (collection names derive from
-  the real `${domain}.find` action, not an arbitrary short name), and the whole `seedSite` command is
-  built around a `site.seed` contract that no longer exists — mesh-serve only has the separate
+- **The console port itself** (`contract.ts`, `index.ts`, `views/*.ts`) — the whole `seedSite` command
+  is built around a `site.seed` contract that no longer exists — mesh-serve only has the separate
   primitives now (`serve.repo.create` → `serve.part.create` → `serve.artifact.requestBuild` →
   `serve.composition.create`/`.compose` → `serve.cdn.create` → `serve.cdn.deploy` → `serve.expose.add`).
-  Still blocked on `defineCommand`/`defineView` not existing, if that's the direction taken.
+  Fully unblocked (real generated client exists, `cx.mesh.call` already throws) but not started.
+  Still an open question whether it waits on `defineCommand`/`defineView` or goes ahead without them.

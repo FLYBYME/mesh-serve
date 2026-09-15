@@ -48,7 +48,7 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
     return dir;
 }
 
-async function runEsbuild(entryPointFiles: string[], outDir: string): Promise<void> {
+async function runEsbuild(entryPointFiles: string[], outDir: string, external: string[]): Promise<void> {
     for (const entryPointFile of entryPointFiles) {
         if (!(await exists(entryPointFile))) {
             throw new Error(`Entry point not found: ${entryPointFile}`);
@@ -65,6 +65,7 @@ async function runEsbuild(entryPointFiles: string[], outDir: string): Promise<vo
         sourcemap: true,
         minify: true,
         logLevel: 'silent',
+        external,
     });
 }
 
@@ -139,15 +140,21 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
  * Builds one part at one git ref: checks out the repo, bundles the part's entry with esbuild, and
  * stores the result under its content hash. Does not touch serve.artifact -- the caller records the
  * outcome.
+ *
+ * `external` is every other known part's `imports` specifier (this part's own excluded by the
+ * caller). A part that actually imports one of them keeps the bare specifier in its output instead
+ * of inlining a second copy of code the page already loaded from that part's own artifact; a part
+ * that doesn't import any of them is unaffected -- esbuild only externalizes what's actually
+ * imported.
  */
-export async function buildPart(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+export async function buildPart(part: Part, repo: Repo, ref: string, external: string[]): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
     const repoDir = await ensureRepoCheckout(repo, ref);
     const entry = path.join(repoDir, part.path, part.entryPoint);
     const wants = await readWants(repoDir, part);
 
     const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
     try {
-        await runEsbuild([entry], buildTmpDir);
+        await runEsbuild([entry], buildTmpDir, external);
         return { ...await hashAndStoreOutput(buildTmpDir), wants };
     } finally {
         await fs.rm(buildTmpDir, { recursive: true, force: true });
@@ -185,15 +192,29 @@ export async function buildKernel(
     await fs.mkdir(synthDir, { recursive: true });
     const synthEntry = path.join(synthDir, 'entry.ts');
 
-    const lines: string[] = [`import kernel from ${JSON.stringify(kernelEntry)};`];
-    driverEntries.forEach((entry, i) => lines.push(`import driver_${i} from ${JSON.stringify(entry)};`));
-    lines.push('export default kernel;');
+    /**
+     * `export *`, not a default import/export: every other part's build leaves `@flybyme/mesh-web`
+     * external and the site's import map points that bare specifier straight at this artifact, so
+     * this file has to look exactly like mesh-web's own `src/index.ts` to anything that imports it --
+     * i.e. re-export the same named bindings (`needs`, `element`, `provider`, ...), not wrap them in
+     * a default nobody asks for. A first version of this did `import kernel from ...; export default
+     * kernel`, which happened to build without error (esbuild doesn't care that nothing consumes the
+     * default) and only broke on a real page: `import { needs } from '@flybyme/mesh-web'` in every
+     * mesh-core part failed at runtime with "does not provide an export named 'needs'". Found live,
+     * building console.localhost for real -- this synthesized entry had never actually been run
+     * against a real kernel part, then a real consuming part, before this session.
+     */
+    const lines: string[] = [`export * from ${JSON.stringify(kernelEntry)};`];
+    driverEntries.forEach((entry, i) => lines.push(`import * as driver_${i} from ${JSON.stringify(entry)};`));
     lines.push(`export const drivers = [${driverEntries.map((_, i) => `driver_${i}`).join(', ')}];`);
     await fs.writeFile(synthEntry, lines.join('\n'));
 
     const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
     try {
-        await runEsbuild([synthEntry], buildTmpDir);
+        // The kernel bundle is the one thing nothing is external to -- it's what every other part's
+        // externalized specifier resolves against on the page, so it has to carry mesh-web and every
+        // baked-in driver itself, not a bare import of them.
+        await runEsbuild([synthEntry], buildTmpDir, []);
         return { ...await hashAndStoreOutput(buildTmpDir), wants: [...wants] };
     } finally {
         await fs.rm(synthDir, { recursive: true, force: true });

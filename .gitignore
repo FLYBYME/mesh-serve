@@ -7,6 +7,9 @@ dist/
 .artifacts/
 logs/
 
+# Screenshots test/puppeteer/*.ts write on every run -- verification output, not fixtures.
+test/puppeteer/screenshots/
+
 # Dispatch output. Results are agy stdout and are destroyed with the worktree; reports are committed.
 agent-runs/results/*.result.md
 agent-runs/results/*-verify.log

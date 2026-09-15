@@ -121,6 +121,26 @@ export class ApiService extends ServiceModule {
         const SERVER_HOST = process.env.SERVER_HOST || '::';
 
         this.server = http.createServer(async (req, res) => {
+            /**
+             * `*`, not the caller's own `Origin` reflected back: this api is meant to be called from
+             * whichever site's `serve.expose` rows grant it, a set that changes at runtime and isn't
+             * knowable statically here, and there is no cookie/credential a wildcard origin would
+             * expose -- every call carries its own bearer token, the same reasoning
+             * `auth/extension.ts` (mesh-core) already gives for staying bearer-only instead of a
+             * cookie: *"to avoid the CSRF surface a cookie creates."* No CORS handling existed here
+             * at all before this -- found live, the first time a real browser (rather than curl or a
+             * same-process CLI, neither of which enforce CORS) called this api from a different
+             * origin.
+             */
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
+            if ((req.method ?? 'GET').toUpperCase() === 'OPTIONS') {
+                res.statusCode = 204;
+                res.end();
+                return;
+            }
+
             try {
                 this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
                 await this.handleRequest(req, res);

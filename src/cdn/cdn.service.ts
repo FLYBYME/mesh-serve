@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 
 import { MeshError, ServiceModule } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
@@ -24,11 +25,27 @@ interface WebAsset {
     integrity?: string;
 }
 
+/** One application/extension part, as the boot module will construct and register it with the
+ * kernel -- `id` becomes both `PartRef.id` (for the kernel's own boot summary) and, for an
+ * Application, the value `site.open[].application` has to match. */
+interface BootPart {
+    id: string;
+    url: string;
+}
+
 interface WebAssetRequest {
     kernel?: WebAsset;
     theme?: WebAsset;
     css: WebAsset[];
-    js: WebAsset[];
+    parts: BootPart[];
+    /** specifier -> asset URL, e.g. "@flybyme/mesh-core/ui" -> "<hash>/index.js". Built from every
+     * release part that declared serve.part.imports, kernel included -- everything else that bundles
+     * one of these bare specifiers left it external rather than inlining a second copy. This is
+     * separate from `parts`: importMap is for *named* imports between modules (identity importing
+     * `AUTH`), `parts` is for the boot module's own default-import-and-construct of each running
+     * contribution. The same artifact can appear in both -- ui and auth are each importable by
+     * specifier *and* have to be constructed and handed to `start()`. */
+    importMap: Record<string, string>;
 }
 
 /** What resolveWebRequest actually hands back once it has confirmed a kernel exists -- kernel is
@@ -38,6 +55,19 @@ type ResolvedWebAssetRequest = WebAssetRequest & { kernel: WebAsset };
 /** No scheme/protocol concept exists anywhere else in mesh-serve yet; host/mcpHost are stored
  * bare. Same env-var convention as API_PORT/SERVER_PORT/DEFAULT_API_HOST. */
 const PUBLIC_SCHEME = process.env.PUBLIC_SCHEME || 'https';
+
+/**
+ * `serve.api.apiHost` is deliberately bare (`resolveHostname` strips a port before matching it, so
+ * the api and every one of its sites can be found by the same Host header regardless of what front
+ * door the request arrived through) -- production's front door is always the standard port for
+ * `PUBLIC_SCHEME`, so bare has always been a complete public origin. It stops being one the moment
+ * ApiService is reached directly, unproxied, on a non-standard port -- exactly this repo's own local
+ * dev. `PUBLIC_API_PORT` is that one missing piece, kept as its own env var rather than reused from
+ * `API_PORT` (ApiService's *listen* port) because those two are only ever the same number by
+ * coincidence of no reverse proxy sitting in between -- true here, false the moment one exists.
+ */
+const PUBLIC_API_PORT = process.env.PUBLIC_API_PORT;
+const apiOrigin = (host: string): string => `${PUBLIC_SCHEME}://${host}${PUBLIC_API_PORT ? `:${PUBLIC_API_PORT}` : ''}`;
 
 export class CdnService extends ServiceModule {
     public readonly domain = 'serve.cdn';
@@ -146,40 +176,6 @@ export class CdnService extends ServiceModule {
         return site;
     }
 
-    private parseCookies(req: http.IncomingMessage): Record<string, string> {
-        const header = req.headers.cookie;
-        if (header === undefined) {
-            return {};
-        }
-        const cookies: Record<string, string> = {};
-        for (const part of header.split(';')) {
-            const idx = part.indexOf('=');
-            if (idx === -1) continue;
-            const key = part.slice(0, idx).trim();
-            const value = part.slice(idx + 1).trim();
-            if (key.length > 0) {
-                cookies[key] = decodeURIComponent(value);
-            }
-        }
-        return cookies;
-    }
-
-    /**
-     * A session cookie is only ever read here, to decide what to bake into the initial HTML. It is
-     * never sent by mesh-web's own runtime API calls (those are bearer-only, deliberately, to avoid
-     * the CSRF surface a cookie creates for a state-changing request) -- this is a different request
-     * (a plain document navigation) serving a different purpose (skip a login round-trip on return).
-     */
-    private async resolveTicket(req: http.IncomingMessage): Promise<string | undefined> {
-        const cookies = this.parseCookies(req);
-        const token = cookies['mesh_ticket'];
-        if (token === undefined) {
-            return undefined;
-        }
-        const result = await this.broker.call('identity.ticket.validate', { token });
-        return result.valid ? token : undefined;
-    }
-
     /**
      * A release is immutable and content-addressed (its own hash), so the shape this resolves to
      * can never change once computed -- cached by release.hash rather than re-walking every part's
@@ -197,17 +193,29 @@ export class CdnService extends ServiceModule {
             kernel: undefined,
             theme: undefined,
             css: [],
-            js: []
+            parts: [],
+            importMap: {},
         }
 
         for (const part of release.parts) {
 
             const artifact = await this.broker.call('serve.artifact.getArtifact', { hash: part.artifactHash });
+            const jsEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
+            if (part.imports !== undefined && jsEntry !== undefined) {
+                webRequest.importMap[part.imports] = `${part.artifactHash}/${jsEntry.url}`;
+            }
 
             if (part.kind === 'kernel') {
-                const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
-                if (entry) {
-                    webRequest.kernel = { url: `${part.artifactHash}/${entry.url}`, integrity: entry.integrity };
+                if (jsEntry) {
+                    webRequest.kernel = { url: `${part.artifactHash}/${jsEntry.url}`, integrity: jsEntry.integrity };
+                }
+                // mesh-web's own entry does `import './kernel.css'`, so esbuild emits a real
+                // entry.css alongside entry.js -- this `continue` skipped straight past the CSS
+                // collection loop below and dropped it, every time, for every release. Found live:
+                // the page rendered (the boot-module fix held) but with no kernel styling at all.
+                const cssEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.css');
+                if (cssEntry) {
+                    webRequest.css.push({ url: `${part.artifactHash}/${cssEntry.url}`, integrity: cssEntry.integrity });
                 }
                 continue;
             }
@@ -224,9 +232,16 @@ export class CdnService extends ServiceModule {
                 if (asset.fileExtension === '.css') {
                     webRequest.css.push({ url: `${part.artifactHash}/${asset.url}`, integrity: asset.integrity });
                 }
-                if (asset.fileExtension === '.js') {
-                    webRequest.js.push({ url: `${part.artifactHash}/${asset.url}`, integrity: asset.integrity });
-                }
+            }
+            // Every application/extension part is a boot.js entry -- start() constructs each one's
+            // default export and hands the running instance to the kernel; nothing runs on the page
+            // from a part's module merely being fetched. A flat <script type="module"> per part
+            // (this file's previous approach) loaded and evaluated each one but never called start(),
+            // so nothing was ever constructed or registered -- a blank page with a fully downloaded,
+            // fully silent set of scripts. Found live: no console error, because there wasn't one --
+            // the page had genuinely finished doing everything it was told to do.
+            if (jsEntry !== undefined) {
+                webRequest.parts.push({ id: part.partKey, url: `${part.artifactHash}/${jsEntry.url}` });
             }
         }
 
@@ -251,7 +266,9 @@ export class CdnService extends ServiceModule {
         return api.apiHost;
     }
 
-    private async generateHtml(site: Site, req: http.IncomingMessage, apiHost: string | undefined): Promise<string> {
+    private async generateHtml(
+        site: Site, apiHost: string | undefined,
+    ): Promise<{ html: string; scriptHashes: string }> {
         const html: string[] = [];
 
         if (!site.releaseHash) {
@@ -264,8 +281,6 @@ export class CdnService extends ServiceModule {
 
         const release = await this.broker.call('serve.release.getRelease', { hash: site.releaseHash });
 
-        const ticket = await this.resolveTicket(req);
-
         const webRequest = await this.resolveWebRequest(release);
 
         const themeVars = Object.entries(site.theme)
@@ -273,8 +288,50 @@ export class CdnService extends ServiceModule {
             .join(' ');
 
         const integrityAttr = (asset: WebAsset): string => asset.integrity ? ` integrity="${asset.integrity}"` : '';
-        const scriptTag = (asset: WebAsset): string => `<script type="module" src="/assets/${asset.url}"${integrityAttr(asset)}></script>`;
         const styleTag = (asset: WebAsset): string => `<link rel="stylesheet" href="/assets/${asset.url}"${integrityAttr(asset)}>`;
+
+        /**
+         * Escapes an inline <script>'s JSON body so it can never contain `</script>` (none of this is
+         * attacker-controlled -- release-pinned artifact hashes and this site's own stored record --
+         * but the escape is free) and returns the CSP hash source that allowlists it. A hash, not
+         * `'unsafe-inline'`, so an attacker-injected <script> elsewhere on the page still gets refused.
+         */
+        const inlineScript = (body: string): { escaped: string; hash: string } => {
+            const escaped = body.replace(/</g, '\\u003c');
+            return { escaped, hash: `sha256-${crypto.createHash('sha256').update(escaped).digest('base64')}` };
+        };
+
+        // Must appear before any <script type="module"> on the page -- browsers refuse to resolve an
+        // import against a map registered after the first module has already started fetching.
+        const importMapBody = Object.keys(webRequest.importMap).length === 0 ? undefined : JSON.stringify({
+            imports: Object.fromEntries(Object.entries(webRequest.importMap).map(([specifier, url]) => [specifier, `/assets/${url}`])),
+        });
+        const importMap = importMapBody === undefined ? undefined : inlineScript(importMapBody);
+
+        /**
+         * `start()` (`mesh-web/kernel/start.ts`) is the kernel's real entry point: it takes an
+         * explicit `{ application, policy, open, parts }` object, constructing each part's default
+         * export itself and registering the running instance -- nothing on the page does anything
+         * from a part's module merely being *fetched*. This file used to put `data-application`/
+         * `data-policy`/`data-open` on the kernel's own <script> tag and load every other part as its
+         * own flat <script type="module">; `start()` never reads a script tag's dataset (the one
+         * exception, `data-api` on <html>, is a fallback for when `composition.api` isn't passed, so
+         * passing it directly here makes that fallback moot) and a part's module loading is not the
+         * same thing as the kernel constructing and booting it. The result was a fully downloaded,
+         * fully silent page: no error, because every script had genuinely finished doing everything
+         * it was told to do -- which was nothing. Found live, on a real page, after the import
+         * resolution bug above was already fixed.
+         */
+        const bootLines = [`import { start } from '@flybyme/mesh-web';`];
+        webRequest.parts.forEach((part, i) => bootLines.push(`import part_${String(i)} from '/assets/${part.url}';`));
+        bootLines.push('start({');
+        bootLines.push(`  application: ${JSON.stringify(site.application)},`);
+        if (apiHost !== undefined) bootLines.push(`  api: ${JSON.stringify(apiOrigin(apiHost))},`);
+        bootLines.push(`  policy: ${JSON.stringify(site.policy)},`);
+        if (site.open !== undefined) bootLines.push(`  open: ${JSON.stringify(site.open)},`);
+        bootLines.push(`  parts: [${webRequest.parts.map((part, i) => `{ id: ${JSON.stringify(part.id)}, contribution: part_${String(i)} }`).join(', ')}],`);
+        bootLines.push('});');
+        const boot = inlineScript(bootLines.join('\n'));
 
         html.push(`<!DOCTYPE html>`);
         html.push(`<html>`);
@@ -287,44 +344,42 @@ export class CdnService extends ServiceModule {
       ${site.canonical ? `<link rel="canonical" href="${site.canonical}">` : ''}
       ${site.image ? `<meta property="og:image" content="${site.image}">` : ''}
       ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
-      ${apiHost ? `<link rel="preconnect" href="${PUBLIC_SCHEME}://${apiHost}">` : ''}
+      ${apiHost ? `<link rel="preconnect" href="${apiOrigin(apiHost)}">` : ''}
       <link rel="preconnect" href="${PUBLIC_SCHEME}://${site.mcpHost}">
       ${themeVars ? `<style>:root { ${themeVars} }</style>` : ''}
       ${webRequest.theme ? styleTag(webRequest.theme) : ''}
       ${webRequest.css.map(styleTag).join('')}
+      ${importMap ? `<script type="importmap">${importMap.escaped}</script>` : ''}
     </head>
     <body>
-      <script
-        type="module"
-        src="/assets/${webRequest.kernel.url}"
-        ${integrityAttr(webRequest.kernel)}
-        data-application="${site.application}"
-        ${apiHost ? `data-api="${apiHost}"` : ''}
-        data-mcp="${site.mcpHost}"
-        data-policy='${JSON.stringify(site.policy)}'
-        ${site.open ? `data-open='${JSON.stringify(site.open)}'` : ''}
-        ${ticket !== undefined ? `data-ticket="${ticket}"` : ''}
-      ></script>
-      ${webRequest.js.map(scriptTag).join('')}
+      <script type="module">${boot.escaped}</script>
     </body>
   </html>
 `);
 
-        return html.join('')
+        return {
+            html: html.join(''),
+            scriptHashes: [importMap?.hash, boot.hash].filter((h): h is string => h !== undefined).map((h) => `'${h}'`).join(' '),
+        };
     }
 
     /** Content-Security-Policy for the HTML document: every asset URL is deterministic and
-     * same-origin by the time this runs, and nothing here is an inline <script> (data travels via
-     * data-* attributes) -- so script-src can be strict. style-src allows 'unsafe-inline' for the
+     * same-origin by the time this runs, and the only inline <script>s are the import map and the
+     * boot module, each allowlisted by its own content hash rather than 'unsafe-inline' -- so
+     * script-src stays strict against anything else. style-src allows 'unsafe-inline' for the
      * one inline <style> block (theme CSS vars); low severity, not worth an external per-request
      * stylesheet to avoid it. */
-    private contentSecurityPolicy(site: Site, apiHost: string | undefined): string {
-        const api = apiHost === undefined ? undefined : `${PUBLIC_SCHEME}://${apiHost}`;
+    /** `scriptHashes` arrives pre-quoted (`"'sha256-...' 'sha256-...'"`) -- a CSP source list needs
+     * the quotes around each hash itself, not just around the directive value as a whole; without
+     * them the browser reports "contains an invalid source" and drops it silently rather than erring
+     * loudly at the header. Found live, the first time this path actually rendered two hashes. */
+    private contentSecurityPolicy(site: Site, apiHost: string | undefined, scriptHashes: string): string {
+        const api = apiHost === undefined ? undefined : apiOrigin(apiHost);
         const mcp = `${PUBLIC_SCHEME}://${site.mcpHost}`;
         const mcpWs = `wss://${site.mcpHost}`;
         return [
             "default-src 'self'",
-            "script-src 'self'",
+            `script-src 'self' ${scriptHashes}`,
             "style-src 'self' 'unsafe-inline'",
             `connect-src 'self' ${[api, mcp, mcpWs].filter((v) => v !== undefined).join(' ')}`,
             "img-src 'self' data: https:",
@@ -440,10 +495,10 @@ export class CdnService extends ServiceModule {
         }
 
         const apiHost = await this.resolveApiHost(site);
-        const html = await this.generateHtml(site, req, apiHost);
+        const { html, scriptHashes } = await this.generateHtml(site, apiHost);
         res.setHeader('Content-Type', 'text/html');
         res.setHeader('Content-Length', Buffer.byteLength(html));
-        res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site, apiHost));
+        res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site, apiHost, scriptHashes));
         res.statusCode = 200;
         res.end(html);
 

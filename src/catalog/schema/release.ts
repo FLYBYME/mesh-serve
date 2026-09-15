@@ -4,6 +4,7 @@ export const releasePartSchema = z.object({
   partKey: z.string().describe('The serve.part key this entry pins'),
   kind: z.enum(['kernel', 'application', 'extension', 'driver', 'theme']).describe('Copied from serve.part.kind at release time, so a reader never needs a second lookup to classify this entry'),
   artifactHash: z.string().describe('The serve.artifact hash built for that part'),
+  imports: z.string().optional().describe('Copied from serve.part.imports at release time -- present means the site\'s import map points this specifier at this part\'s artifact; absent means nothing else may import it'),
 }).describe('One part, pinned to the artifact built for it');
 
 export const releaseSchema = z.object({

@@ -130,6 +130,21 @@ export class CatalogService extends ServiceModule {
         return resolved;
     }
 
+    /**
+     * Every other part's declared `imports` specifier, so a non-kernel build externalizes whatever
+     * it actually references instead of inlining a second copy of code the page loads separately.
+     * Broad on purpose: a part that doesn't import a given specifier is unaffected by it being
+     * listed, since esbuild only externalizes what a build's own module graph actually references.
+     */
+    private async resolveExternals(part: Part): Promise<string[]> {
+        const others = await this.broker.call('serve.part.find', {
+            query: { tenantId: part.tenantId },
+        }, { meta: { tenant_id: part.tenantId } });
+        return others
+            .filter((other) => other.id !== part.id && other.imports !== undefined)
+            .map((other) => other.imports as string);
+    }
+
     private async buildArtifact(artifact: Artifact): Promise<void> {
         const meta = { tenant_id: artifact.tenantId };
 
@@ -156,7 +171,7 @@ export class CatalogService extends ServiceModule {
 
             const { hash, assets, wants } = part.kind === 'kernel'
                 ? await buildKernel(part, repo, artifact.ref, await this.resolveDrivers(artifact))
-                : await buildPart(part, repo, artifact.ref);
+                : await buildPart(part, repo, artifact.ref, await this.resolveExternals(part));
 
             const duration = (Date.now() - startedAt) / 1000;
 
