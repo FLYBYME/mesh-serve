@@ -7,6 +7,31 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Open — the builder can't build a part with a real npm dependency
+
+Tried to verify `serve.part.wants` actually gets populated from a repo's `mesh.wants.json` at build
+time (mesh-operator now has a real one; nothing had ever registered mesh-operator itself as a
+`serve.part` and built it to find out). The build failed before getting anywhere near that:
+`mesh-operator/src/console/generated/api.ts` imports real `zod` (this session's own regenerated,
+real-zod client), and the builder's ephemeral `git clone` has no `node_modules` at all -- `zod` is
+neither bundled (nothing installs it) nor external (nothing provides it at runtime the way the kernel
+provides `@flybyme/mesh-web`). `esbuild` fails outright: `Could not resolve "zod"`.
+
+This is the same *class* of gap the import-map work fixed -- a real dependency the builder doesn't
+know how to hand a part -- but for an ordinary npm package rather than another mesh part, and it's
+not obviously the same fix. Real options, undecided: run `npm install` in every ephemeral clone
+before bundling (correctness at the cost of a slow, network-dependent build); treat a short list of
+common runtime deps (`zod`, at minimum) as always-available externals the same way `@flybyme/mesh-web`
+is, with the kernel or the page providing them; or something else. Not decided here on purpose --
+parked, not fixed blind.
+
+Consequence: `readWants`'s own correctness (a plain file read + `JSON.parse`, no cross-cutting
+integration surface, unlike everything else found this session) is still unconfirmed by an actual
+successful build, only by inspection. Worth re-testing the moment the above is resolved, or against a
+part with no npm dependencies in the meantime.
+
+---
+
 ## Done — `cdn.service.ts` was generating a page against a kernel API that no longer exists
 
 Also found trying to stand up `console.localhost`, after the builder gap above was fixed: the page
