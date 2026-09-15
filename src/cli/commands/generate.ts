@@ -9,36 +9,20 @@ import type { Session } from '../session.js';
 
 interface GenerateArgs {
     readonly api: string;
-    readonly wants: string;
     readonly out: string;
 }
 
-async function readWants(file: string): Promise<string[] | undefined> {
-    let raw: string;
-    try {
-        raw = await fs.readFile(file, 'utf8');
-    } catch {
-        return undefined;
-    }
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === 'string')) {
-        throw new Error(`${file} must be a JSON array of contract key strings.`);
-    }
-    return parsed;
-}
-
 /**
- * The local-dev half of "generate a browser-safe client" (the other half is whatever the cdn does
- * at release-build time, against the same serve.api.generateClient call): read this repo's own
- * mesh.wants.json -- the same file the builder reads server-side once this part is actually
- * imported -- so a local generate narrows to what this app calls rather than everything the target
- * api happens to expose, then ask the api itself to render it. The rendering itself never runs
- * here: it needs mesh-serve's own zod, which is exactly the cross-package reference this whole
- * design exists to avoid shipping to a consumer.
+ * Deliberately no narrowing input -- always the api's full current exposure. A local wants file was
+ * a second input besides live server state, which meant two things had to agree for a regenerate to
+ * be correct rather than one: the api's actual exposure, and whether the file was still accurate.
+ * Dropped so this is what it should already be -- pull from the api, get the same file every time
+ * nothing on the server has changed. What a site actually exposes is real, deliberate configuration
+ * (serve.expose.add), not something a client-side file should be narrowing on its own say-so.
  */
 export class GenerateCommand extends BaseCommand {
     public readonly name = 'generate';
-    public readonly description = 'generate --api <id> [--wants file] [--out file]: render this app\'s typed client';
+    public readonly description = 'generate --api <id> [--out file]: render this app\'s typed client from the api\'s full current exposure';
 
     constructor(private readonly session: Session) {
         super();
@@ -49,21 +33,15 @@ export class GenerateCommand extends BaseCommand {
             .command(this.name)
             .description(this.description)
             .requiredOption('--api <id>', 'The serve.api id to render a client for')
-            .option('--wants <file>', 'Local file listing the contract keys this app calls, same format the builder reads from a repo', './mesh.wants.json')
             .option('--out <file>', 'Where to write the generated client', './generated/api.ts')
-            .action(async (opts: { api: string; wants: string; out: string }) => this.execute(opts));
+            .action(async (opts: { api: string; out: string }) => this.execute(opts));
     }
 
-    protected async execute({ api, wants, out }: GenerateArgs): Promise<void> {
-        const contracts = await readWants(wants);
-        if (contracts === undefined) {
-            this.logger.info(`No ${wants} -- rendering everything "${api}" exposes.`);
-        }
-
+    protected async execute({ api, out }: GenerateArgs): Promise<void> {
         const client = buildClient(this.session);
         let source: string;
         try {
-            const result = await client.call('serve.api.generateClient', { apiId: api, contracts });
+            const result = await client.call('serve.api.generateClient', { apiId: api });
             source = result.source;
         } catch (err) {
             if (err instanceof MeshCallError) {
