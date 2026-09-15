@@ -7,6 +7,35 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done this session (continued — regenerating mesh-operator's real client)
+
+- [x] **`generate` dropped local wants-narrowing entirely.** `--wants`/`--contracts` meant the right
+      output depended on two things agreeing (the api's live exposure, and whether a local
+      `mesh.wants.json` was still accurate) instead of one. Now `generate --api <id>` always renders
+      the full current exposure — deterministic, nothing else feeding it, same file every re-run
+      against an unchanged api. `serve.api.generateClient` itself keeps the optional `contracts`
+      filter server-side, for a real different future caller (a cdn build narrowing to a site's
+      `serve.want`) — just not this CLI any more.
+- [x] **`serve.repo`/`serve.part`/`serve.composition` were completely unexposable.** Found
+      regenerating `mesh-operator`'s client for real: all three had `visibility: {}` — nothing on any
+      CRUD action whitelisted public, so `serve.expose.add` refused every one of them. Nothing could
+      create a repo, a part, or a composition over HTTP, for any caller, ever — a bigger gap than "no
+      single seed contract" (the individual primitives weren't reachable either). `serve.expose`
+      itself had the same problem for reads. Fixed the same way `serve.cdn` already does it
+      (find/findOne/get/count/create public, update/delete internal; `serve.expose` reads only —
+      writes stay behind the validated `add`/`remove` tools). Verified live, gated at `role:
+      'operator'`.
+- [x] **`mesh-operator/src/console/generated/api.ts` regenerated for real**, against a real exposed
+      `serve.api` (all 16 originally-wanted contracts, once the above was fixed). Real zod, real
+      `@flybyme/mesh-web/net` import, typechecks completely clean in mesh-operator's own build — the
+      only remaining typecheck errors are in `contract.ts`/`index.ts`, which still reference the old
+      generator's type names (the console port itself, still not started). Also found and fixed:
+      `mesh-operator/package.json` had `@flybyme/mesh-web` pinned to `v0.16.6` (before the `/net`
+      export existed at all) and never listed `zod` as a dependency despite the generated file
+      needing it directly — bumped to `v0.17.1`, added `zod`.
+
+---
+
 ## Done this session
 
 - [x] **`/api` routing mismatch.** The server matched contract routes (`findRoute` in
