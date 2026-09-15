@@ -7,6 +7,25 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done this session (continued — real integration test coverage)
+
+- [x] **`test/bootstrap.integration.test.ts`.** Everything above was verified by hand, repeatedly, and
+      none of it had automated coverage — the exact gap flagged earlier in this file. Boots a real
+      `MeshApp` (all four services, real MongoDB, real HTTP) once per file and drives it with real
+      `fetch()` calls, in order: Platform org + owner membership + owner role exist for real; a real
+      `serve.api` row backs the bootstrap host (not a hostname special-cased in code); `/api/_describe`
+      answers; a request missing the `/api` prefix 404s (the routing fix stays fixed); an
+      operator-gated call refuses with no credential (401) and with a non-operator session (403); the
+      real first-boot operator (password captured from the real boot-time log message, not a stand-in
+      account) claims their provisional account and `whoami` reports real organization membership
+      afterward; `serve.repo.create`/`serve.part.create`/`serve.composition.create`/`serve.expose.find`
+      all expose and work (the visibility fix stays fixed); `serve.api.generateClient` renders a real
+      self-contained zod file over real HTTP; a site created with a real `apiId` round-trips it (the
+      `serve.cdn`↔`serve.api` link stays linked). 11 assertions, ~1.3s, fully idempotent (drops its own
+      database in `afterAll`, confirmed by running it back to back).
+
+---
+
 ## Done this session (continued — regenerating mesh-operator's real client)
 
 - [x] **`generate` dropped local wants-narrowing entirely.** `--wants`/`--contracts` meant the right
