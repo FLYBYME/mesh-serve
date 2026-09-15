@@ -6,7 +6,11 @@ export const exposeCrud = defineCrud('serve.expose', exposeSchema, {
     pluralPath: 'exposes',
     scopedBy: 'tenantId',
     unique: [{ fields: ['apiId', 'contract'], scope: 'scoped' }],
-    visibility: {},
+    // Reads only -- create/update/delete stay internal, behind the validated add/remove tools
+    // (duplicate checks, public-contract checks, resolving the target api's tenant first).
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public',
+    },
     dependencies: ['serve.api'],
 });
 

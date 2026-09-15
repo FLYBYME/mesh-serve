@@ -8,7 +8,9 @@ export const partCrud = defineCrud('serve.part', partSchema, {
     // key is namespaced "org-slug/part-name" (enforced in catalog.service.ts's create/update hooks),
     // so it's already globally disambiguated -- global uniqueness matches that, not tenant-scoped.
     unique: [{ fields: 'key', scope: 'global' }],
-    visibility: {},
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+    },
     dependencies: ['serve.repo'],
 });
 

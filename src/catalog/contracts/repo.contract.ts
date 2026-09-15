@@ -6,7 +6,9 @@ export const repoCrud = defineCrud('serve.repo', repoSchema, {
     pluralPath: 'repos',
     scopedBy: 'tenantId',
     unique: [{ fields: 'url', scope: 'scoped' }],
-    visibility: {},
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+    },
     dependencies: [],
 });
 

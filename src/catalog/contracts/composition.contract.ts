@@ -7,7 +7,9 @@ export const compositionCrud = defineCrud('serve.composition', compositionSchema
     pluralPath: 'compositions',
     scopedBy: 'tenantId',
     unique: [{ fields: 'key', scope: 'scoped' }],
-    visibility: {},
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+    },
     dependencies: ['serve.part'],
 });
 
