@@ -7,6 +7,24 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done — every `z.date()` field rejected a real HTTP request, always, for anyone
+
+Found live: `identity.membership.create --joinedAt 2026-...` over HTTP (the CLI, or a plain `curl`)
+failed with `Expected date, received string`. Root cause: `z.date()` requires an actual JS `Date`
+instance -- JSON has no date type, so *every* date-typed field, called over HTTP with the only thing
+HTTP can carry (a string), was broken, for anyone, always. It read as fine all session because every
+prior date-setting call (`identity.service.ts`'s bootstrap, `composeConsole.ts`) went through a
+direct broker call with a real `new Date()` already in hand -- this was the first time a date field
+went out over the wire at all.
+
+Checked for the same pattern elsewhere rather than patching just the one field that got hit: 9
+occurrences across `user.ts`/`apiToken.ts`/`membership.ts`/`ticket.ts`, all `z.date()`, all the same
+gap. All switched to `z.coerce.date()` -- accepts a string or a number over the wire and a real
+`Date` unchanged for every existing direct-broker-call site, so nothing already working needed to
+change to keep working.
+
+---
+
 ## Done — `serve.artifact` had the same unexposable-CRUD gap repo/part/composition already had
 
 Found live, exposing the catalog domain for real CLI use: `serve.artifact.find` refused with `"is
