@@ -1,0 +1,24 @@
+{
+    "org": "platform",
+    "api": "api.localhost",
+    "host": "studio.localhost",
+    "compositionKey": "studio",
+    "title": "Studio",
+    "contracts": [],
+    "repos": [
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
+            "ref": "console-demo",
+            "parts": [
+                { "name": "kernel", "kind": "kernel", "path": ".", "entryPoint": "src/index.ts", "imports": "@flybyme/mesh-web" }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-core.git",
+            "ref": "rebuild",
+            "parts": [
+                { "name": "studio", "kind": "application", "path": ".", "entryPoint": "src/Studio/index.ts" }
+            ]
+        }
+    ]
+}
