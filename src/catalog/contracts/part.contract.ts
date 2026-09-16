@@ -8,8 +8,12 @@ export const partCrud = defineCrud('serve.part', partSchema, {
     // key is namespaced "org-slug/part-name" (enforced in catalog.service.ts's create/update hooks),
     // so it's already globally disambiguated -- global uniqueness matches that, not tenant-scoped.
     unique: [{ fields: 'key', scope: 'global' }],
+    // update: catalog.service.ts already validates it (the same key-prefix hook `create` uses), and
+    // `mesh-serve init -c` needs it to reconcile a rerun against a config that changed which repo,
+    // path, entry point, or kind an existing part's key now points at -- `create` alone only ever
+    // covers a genuinely new key, so the existing row silently kept its stale fields otherwise.
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: ['serve.repo'],
 });

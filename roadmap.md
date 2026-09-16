@@ -663,3 +663,18 @@ no-op, since a service's running state is only ever in-memory (`services.ts`), n
 `startService.ts` has no dedicated error kind for it, just a 400 with that exact wording, matched and
 swallowed the same way. Verified live, twice in a row against the same running node: a fresh start
 succeeds normally, and an immediate rerun logs `"flow/server" is already running.` instead of failing.
+
+**`findOrCreate` alone was still wrong: it never reconciled drift.** Found by the person actually
+editing `flow.init.json` (switching `flowboard`'s repo url and two refs) and rerunning it: the refs
+applied (real, differently-hashed rebuilds), but the repo url change silently didn't -- a new, unused
+`serve.repo` row got created for the new url, while `flow/app`/`flow/server` kept pointing at the old
+one, because `create` never runs again once a part's *key* already exists, and nothing ever told the
+existing row its `repoId` was now stale. `update` was `internal`-only on `serve.repo`/`serve.part` (no
+tool wrapper the way `expose.add`/`artifact.requestBuild` have one) -- exposed both as `public`,
+catalog.service.ts's own `validatePartKey` hook already covers `update` the same as `create`. `init`'s
+`findOrCreate` gained an optional `reconcile(existing)` step, used for repo (`defaultBranch`) and part
+(`repoId`/`kind`/`path`/`entryPoint`/`imports`): a real field mismatch now issues an update instead of
+being silently kept. Verified live end to end: changed `flowboard`'s repo url and two refs, reran
+`init -c`, and confirmed directly against Mongo that `flow/app`/`flow/server`'s `repoId` now points at
+the new repo -- the rebuilt artifact hash differing from every earlier run confirmed it built from the
+new source, not the old one it would have silently kept.

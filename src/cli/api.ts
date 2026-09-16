@@ -83,11 +83,17 @@ export const cliApi = defineApi({
         'serve.repo.find_one': call<{ query: Record<string, unknown> }, z.infer<typeof repoCrud.findOne.outputSchema>>(
             'GET', '/repos/one',
         ),
+        'serve.repo.update': call<z.infer<typeof repoCrud.update.inputSchema>, z.infer<typeof repoCrud.update.outputSchema>>(
+            'PATCH', '/repos/:id',
+        ),
         'serve.part.create': call<Scoped<z.infer<typeof partCrud.create.inputSchema>>, z.infer<typeof partCrud.create.outputSchema>>(
             'POST', '/parts',
         ),
         'serve.part.find_one': call<{ query: Record<string, unknown> }, z.infer<typeof partCrud.findOne.outputSchema>>(
             'GET', '/parts/one',
+        ),
+        'serve.part.update': call<z.infer<typeof partCrud.update.inputSchema>, z.infer<typeof partCrud.update.outputSchema>>(
+            'PATCH', '/parts/:id',
         ),
         'serve.artifact.requestBuild': call<z.infer<typeof requestBuildInputSchema>, z.infer<typeof requestBuildOutputSchema>>(
             'POST', '/artifacts/requestBuild',

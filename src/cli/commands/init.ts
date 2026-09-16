@@ -176,8 +176,10 @@ async function collectInteractively(rl: readline.Interface): Promise<WizardInput
 const REQUIRED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'serve.repo.create', role: 'operator' },
     { contract: 'serve.repo.find_one', role: 'operator' },
+    { contract: 'serve.repo.update', role: 'operator' },
     { contract: 'serve.part.create', role: 'operator' },
     { contract: 'serve.part.find_one', role: 'operator' },
+    { contract: 'serve.part.update', role: 'operator' },
     { contract: 'serve.artifact.requestBuild', role: 'operator' },
     { contract: 'serve.artifact.find', role: 'operator' },
     { contract: 'serve.composition.create', role: 'operator' },
@@ -328,6 +330,9 @@ export class InitCommand extends BaseCommand {
             const repoId = repoIdByUrl.get(config.service.url) ?? (await this.findOrCreate(
                 () => client.call('serve.repo.create', { tenantId: org.id, url: config.service!.url, defaultBranch: config.service!.ref }),
                 () => client.call('serve.repo.find_one', { query: { tenantId: org.id, url: config.service!.url } }),
+                async (existing) => existing.defaultBranch === config.service!.ref
+                    ? existing
+                    : client.call('serve.repo.update', { id: existing.id, defaultBranch: config.service!.ref }),
             )).id;
             this.logger.info(`  repo ${repoId} (${config.service.url})`);
             const serviceKey = `${config.org}/${config.service.name}`;
@@ -337,6 +342,14 @@ export class InitCommand extends BaseCommand {
                     path: config.service!.path, entryPoint: config.service!.entryPoint, wants: [],
                 }),
                 () => client.call('serve.part.find_one', { query: { key: serviceKey } }),
+                async (existing) => {
+                    const drifted = existing.repoId !== repoId || existing.path !== config.service!.path
+                        || existing.entryPoint !== config.service!.entryPoint;
+                    if (!drifted) return existing;
+                    return client.call('serve.part.update', {
+                        id: existing.id, repoId, path: config.service!.path, entryPoint: config.service!.entryPoint,
+                    });
+                },
             );
             this.logger.info(`  part ${part.id} (service)`);
             await client.call('serve.artifact.requestBuild', { partId: part.id, ref: config.service.ref });
@@ -397,15 +410,26 @@ export class InitCommand extends BaseCommand {
      * exists" (a `CONFLICT` on its own unique key) -- reruns of the same config are how a manifest
      * earns being checked in at all. Anything else (a real validation error, a network failure)
      * still throws. `find` re-fetches the existing row so the caller gets a real id back either way.
+     *
+     * `reconcile`, when given, runs on that existing row before returning it -- `find`-or-create
+     * alone only ever fills in what's *missing*; it silently keeps a row's stale fields forever once
+     * it exists once, which is exactly backwards for a config meant to describe current, not
+     * original, desired state. Found live: changing a part's repo in `flow.init.json` and rerunning
+     * `init -c` left the existing `flow/app` part still pointed at the old one -- `create` never even
+     * ran again, so nothing about the new value ever reached it.
      */
-    private async findOrCreate<T>(create: () => Promise<T>, find: () => Promise<T | undefined>): Promise<T> {
+    private async findOrCreate<T>(
+        create: () => Promise<T>,
+        find: () => Promise<T | undefined>,
+        reconcile?: (existing: T) => Promise<T>,
+    ): Promise<T> {
         try {
             return await create();
         } catch (err) {
             if (!(err instanceof MeshCallError && err.error.kind === 'conflict')) throw err;
             const existing = await find();
             if (existing === undefined) throw err;
-            return existing;
+            return reconcile !== undefined ? await reconcile(existing) : existing;
         }
     }
 
@@ -422,6 +446,9 @@ export class InitCommand extends BaseCommand {
             const created = await this.findOrCreate(
                 () => client.call('serve.repo.create', { tenantId, url: repo.url, defaultBranch: repo.ref }),
                 () => client.call('serve.repo.find_one', { query: { tenantId, url: repo.url } }),
+                async (existing) => existing.defaultBranch === repo.ref
+                    ? existing
+                    : client.call('serve.repo.update', { id: existing.id, defaultBranch: repo.ref }),
             );
             this.logger.info(`  repo ${created.id} (${repo.url})`);
             repoIdByUrl.set(repo.url, created.id);
@@ -435,6 +462,16 @@ export class InitCommand extends BaseCommand {
                         ...(p.imports !== undefined ? { imports: p.imports } : {}),
                     }),
                     () => client.call('serve.part.find_one', { query: { key } }),
+                    async (existing) => {
+                        const drifted = existing.repoId !== created.id || existing.kind !== p.kind
+                            || existing.path !== p.path || existing.entryPoint !== p.entryPoint
+                            || existing.imports !== p.imports;
+                        if (!drifted) return existing;
+                        return client.call('serve.part.update', {
+                            id: existing.id, repoId: created.id, kind: p.kind, path: p.path, entryPoint: p.entryPoint,
+                            ...(p.imports !== undefined ? { imports: p.imports } : {}),
+                        });
+                    },
                 );
                 this.logger.info(`    part ${part.id} (${p.kind})`);
 
