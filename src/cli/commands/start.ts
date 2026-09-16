@@ -15,6 +15,7 @@ import { IdentityService } from '../../identity/identity.service.js';
 import { CdnService } from '../../cdn/cdn.service.js';
 import { CatalogService } from '../../catalog/catalog.service.js';
 import { HoldService } from '../../hold/hold.service.js';
+import { QueueService } from '../../queue/queue.service.js';
 import { ApiService } from '../../api/api.service.js';
 
 const LogLevelMap: Record<string, LogLevel> = {
@@ -79,6 +80,7 @@ export class StartCommand extends BaseCommand {
         await node.registerModule(new CdnService());
         await node.registerModule(new CatalogService());
         await node.registerModule(new HoldService());
+        await node.registerModule(new QueueService());
         await node.registerModule(new ApiService());
 
         await node.start();
