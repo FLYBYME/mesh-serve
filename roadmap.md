@@ -643,3 +643,16 @@ Verified live end to end against a real two-tenant cluster: `Flow` organization,
 `flow.localhost` correctly pointed at `flow-api.localhost` in its own boot config, and flowboard's
 real backend service built, started, and answering `GET /api/projects` with `200 []` rather than
 404/connection-refused.
+
+**Made `init` idempotent, found rerunning it against real state.** `serve.repo.create`, `serve.part.
+create`, `serve.composition.create`, and `serve.cdn.create` all CONFLICT outright on a rerun of the
+same config -- none of them were find-or-create. Found live: the first sign-in attempt through
+`flow.localhost` 404'd (nothing exposes `identity.ticket.issue` on a non-bootstrap api, same class of
+gap as `organization.find_one` and `resolveById` before it -- fixed by hand for now, `contracts` is
+where it belongs going forward), and simply rerunning `init -c` to fix it failed outright on the
+already-existing `mesh-web` repo. Added a small `findOrCreate` (create; on `CONFLICT`, re-find the
+existing row instead of failing) used for all four creates in `buildSite` and the service's own repo/
+part. A build failure from a transient DNS hiccup (`Could not resolve host: github.com`, nothing to do
+with this code) confirmed the property directly: rerunning `init -c` a second time reused every
+already-created id untouched, rebuilt cleanly, and redeployed -- config-driven `init` is now safe to
+run again any time, the same way `publish` already was.

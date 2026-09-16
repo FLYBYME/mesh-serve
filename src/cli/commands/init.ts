@@ -175,12 +175,16 @@ async function collectInteractively(rl: readline.Interface): Promise<WizardInput
  */
 const REQUIRED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'serve.repo.create', role: 'operator' },
+    { contract: 'serve.repo.find_one', role: 'operator' },
     { contract: 'serve.part.create', role: 'operator' },
+    { contract: 'serve.part.find_one', role: 'operator' },
     { contract: 'serve.artifact.requestBuild', role: 'operator' },
     { contract: 'serve.artifact.find', role: 'operator' },
     { contract: 'serve.composition.create', role: 'operator' },
+    { contract: 'serve.composition.find_one', role: 'operator' },
     { contract: 'serve.composition.compose', role: 'operator' },
     { contract: 'serve.cdn.create', role: 'operator' },
+    { contract: 'serve.cdn.resolveHost', role: 'operator' },
     { contract: 'serve.cdn.deploy', role: 'operator' },
     // No role: only read when --org-slug is omitted, to construct a valid part key -- see
     // BOOTSTRAP_EXPOSED_CONTRACTS's own comment on why this one is public.
@@ -321,13 +325,19 @@ export class InitCommand extends BaseCommand {
             // Reuse the repo already created above when the service shares a URL with a frontend
             // part (flowboard's own case: its app and its server live in the same repo) -- a repo is
             // unique per (tenant, url), so creating a second row for the same URL conflicts outright.
-            const repoId = repoIdByUrl.get(config.service.url)
-                ?? (await client.call('serve.repo.create', { tenantId: org.id, url: config.service.url, defaultBranch: config.service.ref })).id;
+            const repoId = repoIdByUrl.get(config.service.url) ?? (await this.findOrCreate(
+                () => client.call('serve.repo.create', { tenantId: org.id, url: config.service!.url, defaultBranch: config.service!.ref }),
+                () => client.call('serve.repo.find_one', { query: { tenantId: org.id, url: config.service!.url } }),
+            )).id;
             this.logger.info(`  repo ${repoId} (${config.service.url})`);
-            const part = await client.call('serve.part.create', {
-                tenantId: org.id, repoId, key: `${config.org}/${config.service.name}`, kind: 'service',
-                path: config.service.path, entryPoint: config.service.entryPoint, wants: [],
-            });
+            const serviceKey = `${config.org}/${config.service.name}`;
+            const part = await this.findOrCreate(
+                () => client.call('serve.part.create', {
+                    tenantId: org.id, repoId, key: serviceKey, kind: 'service',
+                    path: config.service!.path, entryPoint: config.service!.entryPoint, wants: [],
+                }),
+                () => client.call('serve.part.find_one', { query: { key: serviceKey } }),
+            );
             this.logger.info(`  part ${part.id} (service)`);
             await client.call('serve.artifact.requestBuild', { partId: part.id, ref: config.service.ref });
             await this.waitForBuild(client, part);
@@ -371,6 +381,23 @@ export class InitCommand extends BaseCommand {
         return buildClient({ apiHost, credential: this.session.credential });
     }
 
+    /**
+     * `create` a resource whose only failure mode worth swallowing is "this exact one already
+     * exists" (a `CONFLICT` on its own unique key) -- reruns of the same config are how a manifest
+     * earns being checked in at all. Anything else (a real validation error, a network failure)
+     * still throws. `find` re-fetches the existing row so the caller gets a real id back either way.
+     */
+    private async findOrCreate<T>(create: () => Promise<T>, find: () => Promise<T | undefined>): Promise<T> {
+        try {
+            return await create();
+        } catch (err) {
+            if (!(err instanceof MeshCallError && err.error.kind === 'conflict')) throw err;
+            const existing = await find();
+            if (existing === undefined) throw err;
+            return existing;
+        }
+    }
+
     private async buildSite(
         client: ReturnType<typeof buildClient>,
         tenantId: string,
@@ -381,17 +408,23 @@ export class InitCommand extends BaseCommand {
         const repoIdByUrl = new Map<string, string>();
         const parts: CollectedPart[] = [];
         for (const repo of input.repos) {
-            const created = await client.call('serve.repo.create', { tenantId, url: repo.url, defaultBranch: repo.ref });
+            const created = await this.findOrCreate(
+                () => client.call('serve.repo.create', { tenantId, url: repo.url, defaultBranch: repo.ref }),
+                () => client.call('serve.repo.find_one', { query: { tenantId, url: repo.url } }),
+            );
             this.logger.info(`  repo ${created.id} (${repo.url})`);
             repoIdByUrl.set(repo.url, created.id);
 
             for (const p of repo.parts) {
                 const key = `${orgSlug}/${p.name}`;
-                const part = await client.call('serve.part.create', {
-                    tenantId,
-                    repoId: created.id, key, kind: p.kind, path: p.path, entryPoint: p.entryPoint, wants: [],
-                    ...(p.imports !== undefined ? { imports: p.imports } : {}),
-                });
+                const part = await this.findOrCreate(
+                    () => client.call('serve.part.create', {
+                        tenantId,
+                        repoId: created.id, key, kind: p.kind, path: p.path, entryPoint: p.entryPoint, wants: [],
+                        ...(p.imports !== undefined ? { imports: p.imports } : {}),
+                    }),
+                    () => client.call('serve.part.find_one', { query: { key } }),
+                );
                 this.logger.info(`    part ${part.id} (${p.kind})`);
 
                 parts.push({ id: part.id, key: part.key, kind: p.kind });
@@ -413,32 +446,38 @@ export class InitCommand extends BaseCommand {
         }
 
         this.logger.info('Composing...');
-        const composition = await client.call('serve.composition.create', {
-            tenantId,
-            key: input.compositionKey,
-            kernelPartKey: kernel.key,
-            drivers: [],
-            parts: nonKernel.map((p) => p.key),
-        });
+        const composition = await this.findOrCreate(
+            () => client.call('serve.composition.create', {
+                tenantId,
+                key: input.compositionKey,
+                kernelPartKey: kernel.key,
+                drivers: [],
+                parts: nonKernel.map((p) => p.key),
+            }),
+            () => client.call('serve.composition.find_one', { query: { tenantId, key: input.compositionKey } }),
+        );
         const release = await client.call('serve.composition.compose', { id: composition.id });
         this.logger.info(`  release ${release.hash} (${release.parts.length} parts pinned)`);
 
         const applications = parts.filter((p) => p.kind === 'application');
 
         this.logger.info('Creating the site...');
-        const site = await client.call('serve.cdn.create', {
-            tenantId,
-            host: input.host, apiId,
-            mcpHost: `mcp-${input.host}`,
-            application: input.compositionKey,
-            policy: {},
-            ...(applications.length > 0 ? { open: applications.map((p) => ({ application: p.key })) } : {}),
-            theme: {},
-            title: input.title,
-            description: '',
-            indexable: false,
-            maintenance: false,
-        });
+        const site = await this.findOrCreate(
+            () => client.call('serve.cdn.create', {
+                tenantId,
+                host: input.host, apiId,
+                mcpHost: `mcp-${input.host}`,
+                application: input.compositionKey,
+                policy: {},
+                ...(applications.length > 0 ? { open: applications.map((p) => ({ application: p.key })) } : {}),
+                theme: {},
+                title: input.title,
+                description: '',
+                indexable: false,
+                maintenance: false,
+            }),
+            () => client.call('serve.cdn.resolveHost', { host: input.host }),
+        );
 
         const deployed = await client.call('serve.cdn.deploy', { siteId: site.id, releaseHash: release.hash });
         this.logger.info(`\nDone. ${deployed.site.host} is deployed and pointed at ${deployed.site.releaseHash}.`);

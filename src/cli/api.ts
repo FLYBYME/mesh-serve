@@ -80,6 +80,9 @@ export const cliApi = defineApi({
         'serve.repo.create': call<Scoped<z.infer<typeof repoCrud.create.inputSchema>>, z.infer<typeof repoCrud.create.outputSchema>>(
             'POST', '/repos',
         ),
+        'serve.repo.find_one': call<{ query: Record<string, unknown> }, z.infer<typeof repoCrud.findOne.outputSchema>>(
+            'GET', '/repos/one',
+        ),
         'serve.part.create': call<Scoped<z.infer<typeof partCrud.create.inputSchema>>, z.infer<typeof partCrud.create.outputSchema>>(
             'POST', '/parts',
         ),
@@ -94,6 +97,9 @@ export const cliApi = defineApi({
         ),
         'serve.composition.create': call<Scoped<z.infer<typeof compositionCrud.create.inputSchema>>, z.infer<typeof compositionCrud.create.outputSchema>>(
             'POST', '/compositions',
+        ),
+        'serve.composition.find_one': call<{ query: Record<string, unknown> }, z.infer<typeof compositionCrud.findOne.outputSchema>>(
+            'GET', '/compositions/one',
         ),
         'serve.composition.compose': call<z.infer<typeof composeInputSchema>, z.infer<typeof composeOutputSchema>>(
             'POST', '/compositions/:id/compose',
