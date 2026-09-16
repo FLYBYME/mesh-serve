@@ -600,3 +600,13 @@ continue -- only start the whole wizard over. `init` now takes `-c/--config <fil
 imports? }] }] }`) validated with zod, run non-interactively through the exact same pipeline the
 interactive path uses (`collectInteractively`/`loadConfig` both just produce a `WizardInput`) -- so a
 real deployment becomes a file worth checking in and re-running, not a transcript to retype.
+
+**Added `org-create`/`api-create`, found needing a second tenant.** `init --tenant <id>` can create
+inside any organization (`resolveEffectiveTenantId`'s operator override), but there was no way to
+*make* a second one -- `identity.organization.create` and `serve.api.create` are both `visibility:
+'public'` and neither was bootstrap-exposed, and nothing in the CLI called either. Found standing up
+flowboard's app for real: it was deployed under the `platform` tenant/api by default, which is wrong
+-- an app's own data (and its backend's own exposed contracts) belong to its own organization and its
+own api host, not the platform's operator-only control plane. Added both commands, self-exposing their
+one contract the same way `init`/`publish` do. A fresh api still starts with nothing exposed on it
+(unlike the bootstrap api) -- that's `init`'s own self-heal, or a direct `serve.expose.add`, from there.

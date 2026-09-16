@@ -7,7 +7,7 @@ import { setPasswordInputSchema, setPasswordOutputSchema } from '../identity/con
 import { organizationCrud } from '../identity/contracts/organization.contract.js';
 import { generateClientInputSchema, generateClientOutputSchema } from '../api/contracts/generateClient.contract.js';
 import { addInputSchema, addOutputSchema } from '../api/contracts/expose.contract.js';
-import { resolveApiByHostInputSchema, resolveApiByHostOutputSchema } from '../api/contracts/api.contract.js';
+import { apiCrud, resolveApiByHostInputSchema, resolveApiByHostOutputSchema } from '../api/contracts/api.contract.js';
 import { repoCrud } from '../catalog/contracts/repo.contract.js';
 import { partCrud } from '../catalog/contracts/part.contract.js';
 import { artifactCrud, requestBuildInputSchema, requestBuildOutputSchema } from '../catalog/contracts/artifact.contract.js';
@@ -55,6 +55,12 @@ export const cliApi = defineApi({
         ),
         'identity.organization.get': call<z.infer<typeof organizationCrud.get.inputSchema>, z.infer<typeof organizationCrud.get.outputSchema>>(
             'GET', '/organizations/:id',
+        ),
+        'identity.organization.create': call<z.infer<typeof organizationCrud.create.inputSchema>, z.infer<typeof organizationCrud.create.outputSchema>>(
+            'POST', '/organizations',
+        ),
+        'serve.api.create': call<z.infer<typeof apiCrud.create.inputSchema>, z.infer<typeof apiCrud.create.outputSchema>>(
+            'POST', '/apis',
         ),
         'serve.api.generateClient': call<z.infer<typeof generateClientInputSchema>, z.infer<typeof generateClientOutputSchema>>(
             'POST', '/generate-client',
