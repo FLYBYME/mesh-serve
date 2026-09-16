@@ -69,6 +69,17 @@ async function ensureNpmInstall(dir: string): Promise<void> {
  * Clones a repo on first use, otherwise fetches; either way leaves the workdir checked out at ref
  * with its own npm dependencies installed. The workdir is reused across builds of the same repo --
  * it is builder-owned and never hand-edited.
+ *
+ * `ref` a *branch* name is the case `fetch` alone doesn't actually update: `fetch` only moves
+ * `origin/<ref>`, never the local branch of the same name, so a workdir already checked out onto
+ * that branch from an earlier build stayed frozen at whatever commit it first cloned, forever --
+ * `checkout ref` switches to (or stays on) the existing *local* branch, and `reset --hard ref`
+ * then resets to that same stale local tip, a no-op dressed up as a real reset. Invisible the first
+ * time any repo is ever built (a fresh clone's local branch already matches origin), and invisible
+ * for a tag or a raw commit sha (neither ever has a moving `origin/<ref>` to fall behind) -- only
+ * found rebuilding a *branch* ref a second time after new commits landed on it, which is exactly
+ * what a config-driven, idempotent `init` rerun does routinely. Fixed by preferring `origin/<ref>`
+ * when it exists (force the local branch to match it) and falling back to `ref` itself otherwise.
  */
 async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
     const dir = path.join(repoWorkdir, repo.id);
@@ -80,8 +91,17 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
         await git(['fetch', '--all', '--tags'], dir);
     }
 
-    await git(['checkout', ref], dir);
-    await git(['reset', '--hard', ref], dir);
+    const hasRemoteBranch = await git(['rev-parse', '--verify', `origin/${ref}`], dir).then(() => true, () => false);
+    if (hasRemoteBranch) {
+        // Force the local branch to match origin's tip, exactly like a fresh clone would have.
+        await git(['checkout', '-B', ref, `origin/${ref}`], dir);
+    } else {
+        // A tag or a raw commit sha -- neither has a moving origin/<ref> to reconcile against, and
+        // `checkout -B` would wrongly turn a tag checkout into a same-named local branch instead of
+        // the detached HEAD a tag checkout is supposed to produce.
+        await git(['checkout', ref], dir);
+        await git(['reset', '--hard', ref], dir);
+    }
     await ensureNpmInstall(dir);
 
     return dir;

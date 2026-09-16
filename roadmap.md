@@ -678,3 +678,19 @@ being silently kept. Verified live end to end: changed `flowboard`'s repo url an
 `init -c`, and confirmed directly against Mongo that `flow/app`/`flow/server`'s `repoId` now points at
 the new repo -- the rebuilt artifact hash differing from every earlier run confirmed it built from the
 new source, not the old one it would have silently kept.
+
+**A real catalog builder bug, previously invisible: rebuilding a repo a second time never actually
+picked up new commits on a branch.** `ensureRepoCheckout`'s `git fetch --all --tags` correctly moves
+`origin/<ref>`, but the following `git checkout ref` + `git reset --hard ref` operate on the *local*
+branch of the same name -- which `fetch` never touches. A workdir's first build (a fresh `git clone`)
+had a local branch that already matched origin, so this was invisible every single time this session
+built anything, until a *second* build of the same already-cloned repo, at a ref with genuinely new
+commits on it, which idempotent `init` reruns now do routinely. Found live: `mesh-core`'s `rebuild`
+branch had gained a `Studio` module locally that was never pushed to the local bare mirror used for
+builds; after pushing it, the *build* still reported "Entry point not found" -- the isolated clone's
+local `rebuild` was still 47 commits behind `origin/rebuild` from an earlier build, and re-fetching
+never moved it. Fixed: when `origin/<ref>` exists, force the local branch to match it
+(`checkout -B ref origin/ref`) rather than trusting whatever the local branch already was; a tag or a
+raw commit sha (no moving `origin/<ref>` to reconcile against) keeps the original plain `checkout`/
+`reset --hard` behavior, since forcing those into a same-named local branch would wrongly replace a
+tag's detached-HEAD checkout with an attached one.
