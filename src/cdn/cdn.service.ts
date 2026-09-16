@@ -1,5 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream';
 import crypto from 'node:crypto';
 
 import { MeshError, ServiceModule } from '@flybyme/mesh';
@@ -18,6 +20,7 @@ import { resolveById } from './tools/resolveById.js';
 import { deploy } from './tools/deploy.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
+import type { GetAssetOutput } from '../catalog/contracts/artifact.contract.js';
 
 /** One servable file, with the digest a <script>/<link integrity=...> attribute checks against. */
 interface WebAsset {
@@ -78,6 +81,25 @@ const apiOrigin = (host: string): string => {
     return `${publicScheme()}://${host}${port ? `:${port}` : ''}`;
 };
 
+/** Determine client IP address from an incoming HTTP request (forwarded-first, then socket remote). */
+const getClientIp = (req: http.IncomingMessage): string => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string') {
+        return forwarded.split(',')[0]?.trim() ?? '';
+    }
+    if (Array.isArray(forwarded)) {
+        return forwarded[0]?.trim() ?? '';
+    }
+    return req.socket.remoteAddress ?? '';
+};
+
+const escapeHtml = (str: string): string => str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
 export class CdnService extends ServiceModule {
     public readonly domain = 'serve.cdn';
 
@@ -86,6 +108,8 @@ export class CdnService extends ServiceModule {
     /** Keyed by release hash -- immutable and content-addressed, so a cached entry can never go
      * stale. Unbounded for now; revisit with an eviction policy if it ever matters. */
     private webRequestCache = new Map<string, ResolvedWebAssetRequest>();
+
+    private streamAsset: boolean = true;
 
     constructor() {
         super();
@@ -109,6 +133,7 @@ export class CdnService extends ServiceModule {
         const SERVER_HOST = process.env.SERVER_HOST || '::';
 
         this.server = http.createServer(async (req, res) => {
+            const startedAt = Date.now();
             try {
                 this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
                 await this.handleRequest(req, res);
@@ -122,7 +147,7 @@ export class CdnService extends ServiceModule {
                     res.end('Internal Server Error');
                 }
 
-                this.broker.logger.debug(`Response: ${res.statusCode} ${res.statusMessage}`);
+                this.broker.logger.debug(`Response: ${res.statusCode} ${res.statusMessage} ${Date.now() - startedAt}ms`);
             }
         });
 
@@ -145,6 +170,7 @@ export class CdnService extends ServiceModule {
 
     private async stopServer() {
         if (this.server) {
+            this.server.closeIdleConnections?.();
             await new Promise((resolve) => this.server?.close(resolve));
         }
     }
@@ -158,8 +184,11 @@ export class CdnService extends ServiceModule {
                 status: 400,
             });
         }
-        const [hostname] = host.split(':');
-        if (hostname === undefined) {
+        const hostWithoutPort = host.startsWith('[')
+            ? host.replace(/]:\d+$/, ']').replace(/^\[|\]$/g, '')
+            : host.replace(/:\d+$/, '');
+        const hostname = hostWithoutPort.toLowerCase().replace(/\.$/, '');
+        if (hostname.length === 0) {
             throw new MeshError({
                 code: 'Bad Request',
                 message: 'No hostname',
@@ -206,9 +235,13 @@ export class CdnService extends ServiceModule {
             importMap: {},
         }
 
-        for (const part of release.parts) {
+        const artifacts = await Promise.all(
+            release.parts.map((part) => this.broker.call('serve.artifact.getArtifact', { hash: part.artifactHash })),
+        );
 
-            const artifact = await this.broker.call('serve.artifact.getArtifact', { hash: part.artifactHash });
+        for (let i = 0; i < release.parts.length; i++) {
+            const part = release.parts[i]!;
+            const artifact = artifacts[i]!;
             const jsEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
             if (part.imports !== undefined && jsEntry !== undefined) {
                 webRequest.importMap[part.imports] = `${part.artifactHash}/${jsEntry.url}`;
@@ -348,10 +381,10 @@ export class CdnService extends ServiceModule {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${site.title}</title>
-      ${site.description ? `<meta name="description" content="${site.description}">` : ''}
-      ${site.canonical ? `<link rel="canonical" href="${site.canonical}">` : ''}
-      ${site.image ? `<meta property="og:image" content="${site.image}">` : ''}
+      <title>${escapeHtml(site.title || site.application)}</title>
+      ${site.description ? `<meta name="description" content="${escapeHtml(site.description)}">` : ''}
+      ${site.canonical ? `<link rel="canonical" href="${escapeHtml(site.canonical)}">` : ''}
+      ${site.image ? `<meta property="og:image" content="${escapeHtml(site.image)}">` : ''}
       ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
       ${apiHost ? `<link rel="preconnect" href="${apiOrigin(apiHost)}">` : ''}
       <link rel="preconnect" href="${publicScheme()}://${site.mcpHost}">
@@ -385,7 +418,8 @@ export class CdnService extends ServiceModule {
     private contentSecurityPolicy(site: Site, apiHost: string | undefined, scriptHashes: string): string {
         const api = apiHost === undefined ? undefined : apiOrigin(apiHost);
         const mcp = `${publicScheme()}://${site.mcpHost}`;
-        const mcpWs = `wss://${site.mcpHost}`;
+        const wsScheme = publicScheme() === 'https' ? 'wss' : 'ws';
+        const mcpWs = `${wsScheme}://${site.mcpHost}`;
         return [
             "default-src 'self'",
             `script-src 'self' ${scriptHashes}`,
@@ -396,7 +430,7 @@ export class CdnService extends ServiceModule {
         ].join('; ');
     }
 
-    private async serveAssets(site: Site, req: http.IncomingMessage, res: http.ServerResponse) {
+    private async serveAssets(site: Site, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
 
         if (req.url === undefined) {
             throw new MeshError({
@@ -406,8 +440,9 @@ export class CdnService extends ServiceModule {
             });
         }
 
-        // req.url is "/assets/<artifactHash>/<path...>"
-        const [, , artifactHash, ...rest] = req.url.split('/');
+        // req.url is "/assets/<artifactHash>/<path...>" -- strip query string before parsing segments
+        const pathname = req.url.split('?')[0] ?? '';
+        const [, , artifactHash, ...rest] = pathname.split('/');
         const assetPath = rest.join('/');
         if (artifactHash === undefined || assetPath === '') {
             throw new MeshError({
@@ -418,40 +453,132 @@ export class CdnService extends ServiceModule {
         }
 
         const asset = await this.broker.call('serve.artifact.getAsset', { artifactHash, path: assetPath });
+        const assetFilePath = artifactAssetPath(artifactHash, asset.path);
 
-        const fileContent = await fs.readFile(artifactAssetPath(artifactHash, asset.path));
+        if (this.streamAsset) {
+            await this.handleAssetStreamRequest(req, res, asset, assetFilePath);
+        } else {
+            await this.handleAssetReadRequest(req, res, asset, assetFilePath);
+        }
+    }
+
+    private async handleAssetStreamRequest(
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        asset: GetAssetOutput,
+        assetFilePath: string,
+    ): Promise<void> {
         res.setHeader('Content-Type', asset.contentType);
         res.setHeader('Content-Length', asset.contentLength);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+        // Conditional validation (ETag & Last-Modified) BEFORE opening any file streams
         if (asset.eTag) {
             res.setHeader('ETag', asset.eTag);
             const ifNoneMatch = req.headers['if-none-match'];
-            if (ifNoneMatch === asset.eTag) {
-                res.statusCode = 304;
-                res.end();
-                return;
+            if (ifNoneMatch) {
+                const clientTags = ifNoneMatch.split(',').map((t) => t.trim().replace(/^W\//, ''));
+                const cleanEtag = asset.eTag.replace(/^W\//, '');
+                if (clientTags.includes(cleanEtag) || clientTags.includes('*')) {
+                    res.statusCode = 304;
+                    res.end();
+                    return;
+                }
             }
         }
 
         if (asset.lastModified) {
             res.setHeader('Last-Modified', asset.lastModified);
-            const ifModifiedSince = req.headers['if-modified-since'];
-            if (ifModifiedSince === asset.lastModified) {
-                res.statusCode = 304;
-                res.end();
-                return;
+            if (!req.headers['if-none-match']) {
+                const ifModifiedSince = req.headers['if-modified-since'];
+                if (ifModifiedSince) {
+                    const clientTime = Date.parse(ifModifiedSince);
+                    const assetTime = Date.parse(asset.lastModified);
+                    if (!isNaN(clientTime) && !isNaN(assetTime) && clientTime >= assetTime) {
+                        res.statusCode = 304;
+                        res.end();
+                        return;
+                    }
+                }
             }
         }
 
-        // set cache control header for 1 year.
-        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        // Handle HEAD requests: send headers without body stream
+        if ((req.method ?? 'GET').toUpperCase() === 'HEAD') {
+            res.statusCode = 200;
+            res.end();
+            return;
+        }
 
-        // set content disposition header.
-        res.setHeader('Content-Disposition', `attachment; filename="${asset.name}"`);
+        return new Promise((resolve) => {
+            const fileStream = createReadStream(assetFilePath);
 
-        // set content length header.
+            pipeline(fileStream, res, (err) => {
+                if (!err || err.code === 'ERR_STREAM_PREMATURE_CLOSE') {
+                    resolve();
+                    return;
+                }
+
+                this.broker?.logger.error(`Error streaming asset: ${assetFilePath}`, err);
+                if (!res.headersSent) {
+                    res.statusCode = 500;
+                    res.end('Internal Server Error');
+                }
+                resolve();
+            });
+        });
+    }
+
+    private async handleAssetReadRequest(
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        asset: GetAssetOutput,
+        assetFilePath: string,
+    ): Promise<void> {
+        res.setHeader('Content-Type', asset.contentType);
         res.setHeader('Content-Length', asset.contentLength);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
-        // send file.
+        // Check conditional headers before reading the file into memory
+        if (asset.eTag) {
+            res.setHeader('ETag', asset.eTag);
+            const ifNoneMatch = req.headers['if-none-match'];
+            if (ifNoneMatch) {
+                const clientTags = ifNoneMatch.split(',').map((t) => t.trim().replace(/^W\//, ''));
+                const cleanEtag = asset.eTag.replace(/^W\//, '');
+                if (clientTags.includes(cleanEtag) || clientTags.includes('*')) {
+                    res.statusCode = 304;
+                    res.end();
+                    return;
+                }
+            }
+        }
+
+        if (asset.lastModified) {
+            res.setHeader('Last-Modified', asset.lastModified);
+            if (!req.headers['if-none-match']) {
+                const ifModifiedSince = req.headers['if-modified-since'];
+                if (ifModifiedSince) {
+                    const clientTime = Date.parse(ifModifiedSince);
+                    const assetTime = Date.parse(asset.lastModified);
+                    if (!isNaN(clientTime) && !isNaN(assetTime) && clientTime >= assetTime) {
+                        res.statusCode = 304;
+                        res.end();
+                        return;
+                    }
+                }
+            }
+        }
+
+        if ((req.method ?? 'GET').toUpperCase() === 'HEAD') {
+            res.statusCode = 200;
+            res.end();
+            return;
+        }
+
+        const fileContent = await fs.readFile(assetFilePath);
         res.end(fileContent);
     }
 
@@ -459,22 +586,35 @@ export class CdnService extends ServiceModule {
     /** siteSchema.maintenance's own description says what this is: "redirect all traffic to
      * /.well-known/maintenance" -- previously just a thrown 503 with no redirect and no page. */
     private maintenancePage(site: Site): string {
-        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${site.title} -- under maintenance</title></head>`
-            + `<body><h1>${site.title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
+        const title = escapeHtml(site.title || site.application);
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} -- under maintenance</title></head>`
+            + `<body><h1>${title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
     }
 
     private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+
+        const clientIp = getClientIp(req);
+
+        // Check method is GET or HEAD.
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            throw new MeshError({
+                code: 'Method Not Allowed',
+                message: 'Method not allowed',
+                status: 405,
+            });
+        }
 
         const hostname = await this.resolveHostname(req);
 
         const site = await this.resolveSite(hostname);
 
-        const pathname = (req.url ?? '/').split('?')[0];
+        const pathname = (req.url ?? '/').split('?')[0] ?? '/';
 
         if (pathname === '/.well-known/maintenance') {
             const page = this.maintenancePage(site);
-            res.setHeader('Content-Type', 'text/html');
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
             res.setHeader('Content-Length', Buffer.byteLength(page));
+            res.setHeader('X-Content-Type-Options', 'nosniff');
             res.statusCode = 200;
             res.end(page);
             return;
@@ -496,7 +636,7 @@ export class CdnService extends ServiceModule {
         }
 
         // check if path is an asset.
-        const assetPath = req.url?.startsWith('/assets/');
+        const assetPath = pathname.startsWith('/assets/');
 
 
         if (assetPath) {
@@ -505,9 +645,11 @@ export class CdnService extends ServiceModule {
 
         const apiHost = await this.resolveApiHost(site);
         const { html, scriptHashes } = await this.generateHtml(site, apiHost);
-        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Content-Length', Buffer.byteLength(html));
         res.setHeader('Content-Security-Policy', this.contentSecurityPolicy(site, apiHost, scriptHashes));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
         res.statusCode = 200;
         res.end(html);
 
