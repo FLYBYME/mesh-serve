@@ -11,7 +11,9 @@ export async function remove(
 ): Promise<RemoveOutput> {
     // Same reasoning as add: the target api's tenant isn't known from apiId alone.
     const api = await ctx.broker.call('serve.api.resolveById', { id: input.apiId });
-    const meta = { tenant_id: api.tenantId };
+    // Nested under `user`: see add.ts for why a flat `{ tenant_id }` is silently shadowed by the
+    // caller's own ambient `user.tenant_id` (ServiceBroker.internalCall's shallow meta merge).
+    const meta = { user: { id: ctx.meta?.user?.id ?? '', tenant_id: api.tenantId } };
 
     const row = await ctx.broker.call('serve.expose.find_one', {
         query: { apiId: input.apiId, contract: input.contract },

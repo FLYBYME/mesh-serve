@@ -23,7 +23,15 @@ export async function add(
     // pattern as serve.cdn.resolveById.
     const api = await ctx.broker.call('serve.api.resolveById', { id: input.apiId });
 
-    const meta = { tenant_id: api.tenantId };
+    // Nested under `user`, not a flat `{ tenant_id }` -- ServiceBroker.internalCall shallow-merges
+    // `{...activeCtx.meta, ...options.meta}`, and this call runs inside the ambient ctx of the
+    // *caller's own* request (an authenticated operator hitting this through their own api).
+    // resolveCallerScope checks `meta.user` before a flat `meta.tenant_id`, so a flat override here
+    // was silently shadowed by the caller's own `user.tenant_id` every time the caller had one --
+    // exposing a contract on another tenant's api always landed the row in the caller's own tenant
+    // instead. A whole `user` key wins over the shallow merge because it replaces the object outright;
+    // `id` carries forward from the caller's own ambient meta since it is still who did this.
+    const meta = { user: { id: ctx.meta?.user?.id ?? '', tenant_id: api.tenantId } };
 
     const existing = await ctx.broker.call('serve.expose.find_one', {
         query: { apiId: input.apiId, contract: input.contract },

@@ -465,3 +465,37 @@ was stale, corrected 2026-09-15.
   `serve.composition.create`/`.compose` → `serve.cdn.create` → `serve.cdn.deploy` → `serve.expose.add`).
   Fully unblocked (real generated client exists, `cx.mesh.call` already throws) but not started.
   Still an open question whether it waits on `defineCommand`/`defineView` or goes ahead without them.
+
+## 2026-09-16 — porting flowboard onto this rebuild found two real gaps here, not there
+
+**A flat `{ tenant_id }` meta override is silently defeated by the caller's own ambient meta.**
+`ServiceBroker.internalCall` (mesh, frozen) builds a nested call's meta as
+`{ ...activeCtx.meta, ...options.meta }` — a *shallow* merge — and `resolveCallerScope` checks
+`meta.user` before a flat `meta.tenant_id`. So a tool that is itself reachable over HTTP for an
+authenticated caller (its own `ctx.meta.user.tenant_id` already set to the caller's tenant) and that
+tries to override the tenant for a *nested* call by passing a flat `{ tenant_id: X }` gets that
+override silently ignored — the outer `user.tenant_id` object survives the merge untouched and wins.
+Found in `serve.expose.add`/`.remove`: exposing a contract on another tenant's api, called by an
+operator through their own api, landed the `serve.expose` row in the *caller's* tenant, not the
+target api's — undetected until this session actually tried a genuine cross-tenant expose (every
+existing test exposed contracts on the caller's own api). Fixed by nesting the override under `user`
+(`{ user: { id: ctx.meta?.user?.id, tenant_id: X } }`) — replacing the whole key wins the shallow
+merge outright. Regression test: `test/bootstrap.integration.test.ts`, "exposing a contract on
+another tenant's api lands the expose row in that tenant, not the caller's" (fails without the fix,
+confirmed by reverting it locally).
+
+**Not yet fixed, same root cause, wider blast radius:** `serve.part.resolve`/`.find` (and by
+extension `serve.artifact.requestBuild`, `serve.part.start`, `serve.part.stop`,
+`serve.composition.compose`) call `ctx.call('serve.part.resolve', { id })` with *no* meta override at
+all — they inherit whichever tenant the caller's own api put in their ambient meta. `resolve` is
+scoped exactly like `get` (`DatabaseMiddleware`'s `case 'resolve'`), so resolving a part belonging to
+tenant B while calling through tenant A's api returns nothing (never throws NotFound — it's a lookup
+tool, not a CRUD read), and every one of those operations reports 404 as if the part didn't exist.
+Worked around today by calling these through the *target tenant's own api* instead (once that api
+exists and is itself correctly scoped) rather than through an operator's home api — genuinely fine
+once a tenant has its own api, but real for the same first-resource bootstrap moment B3 in
+flowboard's own roadmap is about, one layer up: an operator wanting to build/start/stop a service
+for a brand-new tenant that has no api exposing these calls yet has no path in at all. Not fixed
+here — needs a deliberate decision (an operator-aware unscoped resolve, matching
+`serve.api.resolveById`'s own pattern, vs. requiring the target tenant's api to exist and be used
+directly) rather than a quick patch.

@@ -39,6 +39,8 @@ describe('a fresh install, booted for real', () => {
     let operatorToken = '';
     let organizationId = '';
     let apiId = '';
+    let flowOrgId = '';
+    let flowApiId = '';
 
     beforeAll(async () => {
         const mongo = new MongoClient('mongodb://127.0.0.1:27017');
@@ -270,8 +272,26 @@ describe('a fresh install, booted for real', () => {
             body: JSON.stringify({ tenantId: flowOrg.id, apiHost: 'flow-api.localhost' }),
         });
         expect(createApiRes.status).toBe(200);
-        const flowApi = await json(createApiRes) as { tenantId: string };
+        const flowApi = await json(createApiRes) as { tenantId: string; id: string };
         expect(flowApi.tenantId).toBe(flowOrg.id);
+        flowOrgId = flowOrg.id;
+        flowApiId = flowApi.id;
+    });
+
+    it('exposing a contract on another tenant\'s api lands the expose row in that tenant, not the caller\'s', async () => {
+        // Calling through Platform's api as the operator, naming Flow's own api as the target --
+        // serve.expose.add resolves apiId's own tenant and must scope the write to it, not to
+        // whichever tenant the caller's own ambient meta carries (ServiceBroker.internalCall's
+        // shallow meta merge silently defeated a flat `{ tenant_id }` override here before this fix).
+        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ apiId: flowApiId, contract: 'identity.whoami' }),
+        });
+        expect(exposeRes.status).toBe(200);
+        const row = await json(exposeRes) as { tenantId: string; apiId: string };
+        expect(row.tenantId).toBe(flowOrgId);
+        expect(row.tenantId).not.toBe(organizationId);
     });
 
     it('a site created with a real apiId links to a real serve.api, not a duplicated hostname string', async () => {
