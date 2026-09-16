@@ -341,8 +341,19 @@ export class InitCommand extends BaseCommand {
             this.logger.info(`  part ${part.id} (service)`);
             await client.call('serve.artifact.requestBuild', { partId: part.id, ref: config.service.ref });
             await this.waitForBuild(client, part);
-            const started = await client.call('serve.part.start', { id: part.id });
-            this.logger.info(`  started as "${started.domain}" on node "${started.nodeID}"`);
+            try {
+                const started = await client.call('serve.part.start', { id: part.id });
+                this.logger.info(`  started as "${started.domain}" on node "${started.nodeID}"`);
+            } catch (err) {
+                // No persisted running state (services.ts), so this is only reachable within one
+                // node's own lifetime -- a rerun before the node restarts finds it already running,
+                // which is the desired end state, not a failure. `startService.ts` has no dedicated
+                // "already running" error kind, just a 400 with this exact wording.
+                const already = err instanceof MeshCallError && err.error.kind === 'invalid'
+                    && err.error.detail.includes('already running');
+                if (!already) throw err;
+                this.logger.info(`  "${part.key}" is already running.`);
+            }
         }
 
         if (config.contracts.length > 0) {

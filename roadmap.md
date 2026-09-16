@@ -656,3 +656,10 @@ part. A build failure from a transient DNS hiccup (`Could not resolve host: gith
 with this code) confirmed the property directly: rerunning `init -c` a second time reused every
 already-created id untouched, rebuilt cleanly, and redeployed -- config-driven `init` is now safe to
 run again any time, the same way `publish` already was.
+
+One idempotency gap remained, found by the person actually running it a second time within the same
+node's lifetime: `serve.part.start` throws ("already running on this node") rather than being a
+no-op, since a service's running state is only ever in-memory (`services.ts`), never persisted --
+`startService.ts` has no dedicated error kind for it, just a 400 with that exact wording, matched and
+swallowed the same way. Verified live, twice in a row against the same running node: a fresh start
+succeeds normally, and an immediate rerun logs `"flow/server" is already running.` instead of failing.
