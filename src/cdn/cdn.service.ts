@@ -64,19 +64,9 @@ type ResolvedWebAssetRequest = WebAssetRequest & { kernel: WebAsset };
  * ApiService read it as one instead of inside `createServer()`. No scheme/protocol concept exists
  * anywhere else in mesh-serve yet; host/mcpHost are stored bare.
  */
-const publicScheme = (): string => process.env.PUBLIC_SCHEME || 'https';
+export const publicScheme = (): string => process.env.PUBLIC_SCHEME || 'https';
 
-/**
- * `serve.api.apiHost` is deliberately bare (`resolveHostname` strips a port before matching it, so
- * the api and every one of its sites can be found by the same Host header regardless of what front
- * door the request arrived through) -- production's front door is always the standard port for
- * `publicScheme()`, so bare has always been a complete public origin. It stops being one the moment
- * ApiService is reached directly, unproxied, on a non-standard port -- exactly this repo's own local
- * dev. `PUBLIC_API_PORT` is that one missing piece, kept as its own env var rather than reused from
- * `API_PORT` (ApiService's *listen* port) because those two are only ever the same number by
- * coincidence of no reverse proxy sitting in between -- true here, false the moment one exists.
- */
-const apiOrigin = (host: string): string => {
+export const apiOrigin = (host: string): string => {
     const port = process.env.PUBLIC_API_PORT;
     return `${publicScheme()}://${host}${port ? `:${port}` : ''}`;
 };
@@ -93,12 +83,61 @@ const getClientIp = (req: http.IncomingMessage): string => {
     return req.socket.remoteAddress ?? '';
 };
 
-const escapeHtml = (str: string): string => str
+export const escapeHtml = (str: string): string => str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+
+/**
+ * Escapes an inline <script>'s JSON body so it can never contain `</script>` (none of this is
+ * attacker-controlled -- release-pinned artifact hashes and this site's own stored record --
+ * but the escape is free) and returns the CSP hash source that allowlists it. A hash, not
+ * `'unsafe-inline'`, so an attacker-injected <script> elsewhere on the page still gets refused.
+ */
+export const inlineScript = (body: string): { escaped: string; hash: string } => {
+    const escaped = body.replace(/</g, '\\u003c');
+    return { escaped, hash: `sha256-${crypto.createHash('sha256').update(escaped).digest('base64')}` };
+};
+
+/** Content-Security-Policy for the HTML document: every asset URL is deterministic and
+ * same-origin by the time this runs, and the only inline <script>s are the import map and the
+ * boot module, each allowlisted by its own content hash rather than 'unsafe-inline' -- so
+ * script-src stays strict against anything else. style-src allows 'unsafe-inline' for the
+ * one inline <style> block (theme CSS vars); low severity, not worth an external per-request
+ * stylesheet to avoid it.
+ *
+ * `scriptHashes` arrives pre-quoted (`"'sha256-...' 'sha256-...'"`) -- a CSP source list needs
+ * the quotes around each hash itself, not just around the directive value as a whole; without
+ * them the browser reports "contains an invalid source" and drops it silently rather than erring
+ * loudly at the header. Found live, the first time this path actually rendered two hashes. */
+export const contentSecurityPolicy = (
+    site: Pick<Site, 'mcpHost'>,
+    apiHost: string | undefined,
+    scriptHashes: string,
+): string => {
+    const api = apiHost === undefined ? undefined : apiOrigin(apiHost);
+    const mcp = `${publicScheme()}://${site.mcpHost}`;
+    const wsScheme = publicScheme() === 'https' ? 'wss' : 'ws';
+    const mcpWs = `${wsScheme}://${site.mcpHost}`;
+    return [
+        "default-src 'self'",
+        `script-src 'self' ${scriptHashes}`,
+        "style-src 'self' 'unsafe-inline'",
+        `connect-src 'self' ${[api, mcp, mcpWs].filter((v) => v !== undefined).join(' ')}`,
+        "img-src 'self' data: https:",
+        "font-src 'self'",
+    ].join('; ');
+};
+
+/** siteSchema.maintenance's own description says what this is: "redirect all traffic to
+ * /.well-known/maintenance" -- previously just a thrown 503 with no redirect and no page. */
+export const maintenancePage = (site: Pick<Site, 'title' | 'application'>): string => {
+    const title = escapeHtml(site.title || site.application);
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} -- under maintenance</title></head>`
+        + `<body><h1>${title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
+};
 
 export class CdnService extends ServiceModule {
     public readonly domain = 'serve.cdn';
@@ -338,11 +377,6 @@ export class CdnService extends ServiceModule {
          * but the escape is free) and returns the CSP hash source that allowlists it. A hash, not
          * `'unsafe-inline'`, so an attacker-injected <script> elsewhere on the page still gets refused.
          */
-        const inlineScript = (body: string): { escaped: string; hash: string } => {
-            const escaped = body.replace(/</g, '\\u003c');
-            return { escaped, hash: `sha256-${crypto.createHash('sha256').update(escaped).digest('base64')}` };
-        };
-
         // Must appear before any <script type="module"> on the page -- browsers refuse to resolve an
         // import against a map registered after the first module has already started fetching.
         const importMapBody = Object.keys(webRequest.importMap).length === 0 ? undefined : JSON.stringify({
@@ -415,19 +449,8 @@ export class CdnService extends ServiceModule {
      * the quotes around each hash itself, not just around the directive value as a whole; without
      * them the browser reports "contains an invalid source" and drops it silently rather than erring
      * loudly at the header. Found live, the first time this path actually rendered two hashes. */
-    private contentSecurityPolicy(site: Site, apiHost: string | undefined, scriptHashes: string): string {
-        const api = apiHost === undefined ? undefined : apiOrigin(apiHost);
-        const mcp = `${publicScheme()}://${site.mcpHost}`;
-        const wsScheme = publicScheme() === 'https' ? 'wss' : 'ws';
-        const mcpWs = `${wsScheme}://${site.mcpHost}`;
-        return [
-            "default-src 'self'",
-            `script-src 'self' ${scriptHashes}`,
-            "style-src 'self' 'unsafe-inline'",
-            `connect-src 'self' ${[api, mcp, mcpWs].filter((v) => v !== undefined).join(' ')}`,
-            "img-src 'self' data: https:",
-            "font-src 'self'",
-        ].join('; ');
+    public contentSecurityPolicy(site: Pick<Site, 'mcpHost'>, apiHost: string | undefined, scriptHashes: string): string {
+        return contentSecurityPolicy(site, apiHost, scriptHashes);
     }
 
     private async serveAssets(site: Site, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -585,10 +608,8 @@ export class CdnService extends ServiceModule {
 
     /** siteSchema.maintenance's own description says what this is: "redirect all traffic to
      * /.well-known/maintenance" -- previously just a thrown 503 with no redirect and no page. */
-    private maintenancePage(site: Site): string {
-        const title = escapeHtml(site.title || site.application);
-        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} -- under maintenance</title></head>`
-            + `<body><h1>${title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
+    public maintenancePage(site: Pick<Site, 'title' | 'application'>): string {
+        return maintenancePage(site);
     }
 
     private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {

@@ -12,9 +12,10 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
     const [saltHex, hashHex] = stored.split(':');
-    if (saltHex === undefined || hashHex === undefined) return false;
+    if (!saltHex || !hashHex) return false;
     const salt = Buffer.from(saltHex, 'hex');
     const expected = Buffer.from(hashHex, 'hex');
+    if (salt.length === 0 || expected.length === 0) return false;
     const derived = (await scrypt(password, salt, expected.length)) as Buffer;
     return derived.length === expected.length && timingSafeEqual(derived, expected);
 }
