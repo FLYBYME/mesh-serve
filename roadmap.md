@@ -25,10 +25,11 @@ common runtime deps (`zod`, at minimum) as always-available externals the same w
 is, with the kernel or the page providing them; or something else. Not decided here on purpose --
 parked, not fixed blind.
 
-Consequence: `readWants`'s own correctness (a plain file read + `JSON.parse`, no cross-cutting
-integration surface, unlike everything else found this session) is still unconfirmed by an actual
-successful build, only by inspection. Worth re-testing the moment the above is resolved, or against a
-part with no npm dependencies in the meantime.
+**`readWants` itself is confirmed correct** -- retested against a trivial throwaway repo with a real
+`mesh.wants.json` and no npm dependencies (so the gap above couldn't get in the way): built
+successfully, and `serve.part.wants` came back as exactly `["identity.whoami", "serve.cdn.find"]`,
+matching the file byte for byte. The npm-dependency gap above is real and still open, but it isn't
+masking anything wrong with the wants-reading mechanism.
 
 ---
 
