@@ -284,6 +284,19 @@ export class CdnService extends ServiceModule {
             const jsEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
             if (part.imports !== undefined && jsEntry !== undefined) {
                 webRequest.importMap[part.imports] = `${part.artifactHash}/${jsEntry.url}`;
+
+                // `@flybyme/mesh-web`'s own entry re-exports everything `@flybyme/mesh-web/net`
+                // does (call, defineApi, createClient, fetchTransport, withHeaders, MeshCallError
+                // -- confirmed directly in a real built bundle's own `export{...}` statement), so
+                // that subpath's code is already inside this same artifact. Every mesh-serve
+                // generated client imports from `@flybyme/mesh-web/net` specifically (see
+                // src/api/methods/generateClient.ts), never bare `@flybyme/mesh-web` -- without
+                // this, any site whose build includes a generated client 404s in the browser with
+                // "Failed to resolve module specifier" the instant that file's own top-level
+                // import runs, since only the bare specifier was ever in the import map.
+                if (part.imports === '@flybyme/mesh-web') {
+                    webRequest.importMap['@flybyme/mesh-web/net'] = `${part.artifactHash}/${jsEntry.url}`;
+                }
             }
 
             if (part.kind === 'kernel') {
