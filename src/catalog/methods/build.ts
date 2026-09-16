@@ -29,8 +29,34 @@ async function git(args: string[], cwd?: string): Promise<string> {
 }
 
 /**
- * Clones a repo on first use, otherwise fetches; either way leaves the workdir checked out at ref.
- * The workdir is reused across builds of the same repo -- it is builder-owned and never hand-edited.
+ * A part's real npm dependencies (mesh-operator's generated client imports real `zod`) were
+ * unresolvable at build time -- the checkout is a fresh clone, never `npm install`ed, so esbuild
+ * had nothing to bundle and nothing to mark external. Fixed the same way the git checkout itself
+ * is handled: `npm ci`/`install` runs once per checkout dir, then `node_modules` is reused across
+ * builds of the same repo exactly like the git history already is, rather than a mesh part or a
+ * blessed-package allowlist -- an ordinary npm dependency is bundled by esbuild the ordinary way
+ * the moment it can actually resolve it.
+ *
+ * `npm ci` when there's a lockfile (deterministic, and it also removes anything stale left over
+ * from a previous ref's dependency set); `npm install` otherwise, since `ci` refuses to run
+ * without one. Skipped entirely when there's no `package.json` -- most parts have no npm
+ * dependencies of their own at all, and installing nothing should cost nothing.
+ */
+async function ensureNpmInstall(dir: string): Promise<void> {
+    if (!(await exists(path.join(dir, 'package.json')))) return;
+    const hasLockfile = await exists(path.join(dir, 'package-lock.json'));
+    await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund'], {
+        cwd: dir,
+        // npm's own install log easily clears the default 1MB maxBuffer on a real dependency tree;
+        // this only needs to not throw, the output itself is never read.
+        maxBuffer: 1024 * 1024 * 50,
+    });
+}
+
+/**
+ * Clones a repo on first use, otherwise fetches; either way leaves the workdir checked out at ref
+ * with its own npm dependencies installed. The workdir is reused across builds of the same repo --
+ * it is builder-owned and never hand-edited.
  */
 async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
     const dir = path.join(repoWorkdir, repo.id);
@@ -44,6 +70,7 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
 
     await git(['checkout', ref], dir);
     await git(['reset', '--hard', ref], dir);
+    await ensureNpmInstall(dir);
 
     return dir;
 }

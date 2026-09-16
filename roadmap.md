@@ -7,29 +7,69 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
-## Open — the builder can't build a part with a real npm dependency
+## Done — the builder can now build a part with a real npm dependency
 
 Tried to verify `serve.part.wants` actually gets populated from a repo's `mesh.wants.json` at build
 time (mesh-operator now has a real one; nothing had ever registered mesh-operator itself as a
 `serve.part` and built it to find out). The build failed before getting anywhere near that:
 `mesh-operator/src/console/generated/api.ts` imports real `zod` (this session's own regenerated,
-real-zod client), and the builder's ephemeral `git clone` has no `node_modules` at all -- `zod` is
-neither bundled (nothing installs it) nor external (nothing provides it at runtime the way the kernel
-provides `@flybyme/mesh-web`). `esbuild` fails outright: `Could not resolve "zod"`.
+real-zod client), and the builder's ephemeral `git clone` had no `node_modules` at all -- `zod` was
+neither bundled (nothing installed it) nor external (nothing provides it at runtime the way the
+kernel provides `@flybyme/mesh-web`). `esbuild` failed outright: `Could not resolve "zod"`.
 
-This is the same *class* of gap the import-map work fixed -- a real dependency the builder doesn't
-know how to hand a part -- but for an ordinary npm package rather than another mesh part, and it's
-not obviously the same fix. Real options, undecided: run `npm install` in every ephemeral clone
-before bundling (correctness at the cost of a slow, network-dependent build); treat a short list of
-common runtime deps (`zod`, at minimum) as always-available externals the same way `@flybyme/mesh-web`
-is, with the kernel or the page providing them; or something else. Not decided here on purpose --
-parked, not fixed blind.
+Fixed the general way, not with a blessed-package allowlist: `ensureRepoCheckout` now runs `npm ci`
+(or `npm install` when there's no lockfile) in the checkout the moment there's a `package.json`,
+reusing that install across builds of the same repo exactly the way the git checkout itself is
+already cached. An ordinary npm dependency is bundled by esbuild the ordinary way the moment it can
+actually resolve it -- no special-casing `zod` or anything else.
+
+Reverified against mesh-operator's real repo: the `zod` resolution error is gone. The build now
+fails on a different, already-known, pre-existing error (`src/console/index.ts` importing
+`consoleApi`, a name the old generator produced that the new one doesn't) -- the console port
+itself, still not started, unaffected by this fix.
 
 **`readWants` itself is confirmed correct** -- retested against a trivial throwaway repo with a real
-`mesh.wants.json` and no npm dependencies (so the gap above couldn't get in the way): built
+`mesh.wants.json` and no npm dependencies (so the original gap couldn't get in the way): built
 successfully, and `serve.part.wants` came back as exactly `["identity.whoami", "serve.cdn.find"]`,
-matching the file byte for byte. The npm-dependency gap above is real and still open, but it isn't
-masking anything wrong with the wants-reading mechanism.
+matching the file byte for byte.
+
+---
+
+## Fixed — a real security bug: two identity contracts were exposed with no gate
+
+Found live, reported by a person testing the deployed page: `GET /api/organizations` answered 200
+with real data and no `Authorization` header at all. Traced to `composeConsole.ts`'s own
+`IDENTITY_CONTRACTS` list, which exposed `identity.organization.find`, `identity.organization.create`,
+`identity.membership.find`, `identity.membership.create`, `identity.membership.delete`, and
+`identity.role.find` with no `role`. Checked each one directly against the running server rather than
+assuming from the list:
+
+- `identity.organization.find` -- anonymous **read**: leaked (200, real rows).
+- `identity.role.find` -- anonymous **read**: leaked (200, real rows).
+- `identity.organization.create` -- anonymous **write**: reached input validation (400 for missing
+  fields), meaning a well-formed anonymous request would have succeeded.
+- `identity.membership.create` -- anonymous **write**: same -- reached validation, not blocked by auth.
+- `identity.membership.find`/`.delete` -- correctly refused (401) by accident, not by design: both
+  are `scopedBy: 'userId'`, and resolving that scope for a caller with no ticket throws before the
+  gate would have mattered. `identity.organization`/`identity.role` have no `scopedBy` at all (an
+  organization can't be scoped to itself; a role isn't tenant data), so nothing protected them.
+
+This is exactly the gate mesh-operator's *own* `mesh.json` already documented, years before this
+session touched any of it, as the correct one for `organization.find` and `membership.find`
+specifically -- reasoning that was sitting right there and didn't make it into `composeConsole.ts`
+when these got exposed.
+
+Fixed live (patched the running server's `serve.expose` rows directly, verified anonymous access
+now refuses with 401 on every one, then reverified the actual signed-in operator flow still works
+end to end) and at the source (`composeConsole.ts`'s `IDENTITY_CONTRACTS` now carries `role:
+'operator'` on all six, so a from-scratch redeploy doesn't reintroduce this).
+
+Noted, not fixed: after signing in, a collection that failed its first (correctly-refused, pre-login)
+fetch shows its stale "You need to sign in" state for roughly 1-3 real seconds before the
+session-arrived retry (`mesh-web`'s own `query.ts`) completes and replaces it -- no distinct
+"retrying" state exists in between. Cosmetic, self-corrects, not something this session's changes
+caused (any collection whose first fetch predates its session would show this); it was just invisible
+before because these particular collections had no gate to fail against.
 
 ---
 
