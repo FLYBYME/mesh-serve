@@ -7,9 +7,12 @@ import { setPasswordInputSchema, setPasswordOutputSchema } from '../identity/con
 import { organizationCrud } from '../identity/contracts/organization.contract.js';
 import { generateClientInputSchema, generateClientOutputSchema } from '../api/contracts/generateClient.contract.js';
 import { addInputSchema, addOutputSchema } from '../api/contracts/expose.contract.js';
-import { apiCrud, resolveApiByHostInputSchema, resolveApiByHostOutputSchema } from '../api/contracts/api.contract.js';
+import {
+    apiCrud, resolveApiByHostInputSchema, resolveApiByHostOutputSchema,
+    resolveApiByIdInputSchema, resolveApiByIdOutputSchema,
+} from '../api/contracts/api.contract.js';
 import { repoCrud } from '../catalog/contracts/repo.contract.js';
-import { partCrud } from '../catalog/contracts/part.contract.js';
+import { partCrud, partStartInputSchema, partStartOutputSchema } from '../catalog/contracts/part.contract.js';
 import { artifactCrud, requestBuildInputSchema, requestBuildOutputSchema } from '../catalog/contracts/artifact.contract.js';
 import { composeInputSchema, composeOutputSchema, compositionCrud } from '../catalog/contracts/composition.contract.js';
 import { getReleaseInputSchema, getReleaseOutputSchema } from '../catalog/contracts/release.contract.js';
@@ -53,8 +56,14 @@ export const cliApi = defineApi({
         'serve.api.resolveByHost': call<z.infer<typeof resolveApiByHostInputSchema>, z.infer<typeof resolveApiByHostOutputSchema>>(
             'GET', '/apis/host/:apiHost',
         ),
+        'serve.api.resolveById': call<z.infer<typeof resolveApiByIdInputSchema>, z.infer<typeof resolveApiByIdOutputSchema>>(
+            'GET', '/apis/id/:id',
+        ),
         'identity.organization.get': call<z.infer<typeof organizationCrud.get.inputSchema>, z.infer<typeof organizationCrud.get.outputSchema>>(
             'GET', '/organizations/:id',
+        ),
+        'identity.organization.find_one': call<{ query: Record<string, unknown> }, z.infer<typeof organizationCrud.findOne.outputSchema>>(
+            'GET', '/organizations/one',
         ),
         'identity.organization.create': call<z.infer<typeof organizationCrud.create.inputSchema>, z.infer<typeof organizationCrud.create.outputSchema>>(
             'POST', '/organizations',
@@ -100,6 +109,9 @@ export const cliApi = defineApi({
         ),
         'serve.cdn.resolveHost': call<z.infer<typeof resolveHostInputSchema>, z.infer<typeof resolveHostOutputSchema>>(
             'GET', '/sites/:host',
+        ),
+        'serve.part.start': call<z.infer<typeof partStartInputSchema>, z.infer<typeof partStartOutputSchema>>(
+            'POST', '/parts/:id/start',
         ),
     },
 });

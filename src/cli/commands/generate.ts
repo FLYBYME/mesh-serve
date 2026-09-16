@@ -39,10 +39,19 @@ export class GenerateCommand extends BaseCommand {
     }
 
     protected async execute({ api, out }: GenerateArgs): Promise<void> {
-        const client = buildClient(this.session);
+        const loginClient = buildClient(this.session);
         let source: string;
         try {
-            const { apiId } = await resolveApi(client, this.session, { api });
+            const { apiId, apiHost } = await resolveApi(loginClient, this.session, { api });
+            try {
+                await loginClient.call('serve.expose.add', { apiId, contract: 'serve.api.generateClient', role: 'operator' });
+            } catch (err) {
+                if (!(err instanceof MeshCallError && err.error.kind === 'conflict')) throw err;
+            }
+
+            // See resolveApi's own comment: the call below has to hit the *target* api, which may
+            // differ from the one this session is logged into.
+            const client = buildClient({ apiHost, credential: this.session.credential });
             const result = await client.call('serve.api.generateClient', { apiId });
             source = result.source;
         } catch (err) {

@@ -58,10 +58,19 @@ const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[
     { contract: 'identity.whoami' },
     { contract: 'identity.user.setPassword' },
     { contract: 'serve.api.resolveByHost' },
+    // resolveById's counterpart: an operator naming a *different* api by id (--api on init/publish/
+    // generate, for a tenant other than the one they're logged into) needs that api's own hostname
+    // back -- every call self-exposed on it has to be sent there, not to the login host, and until
+    // this existed the CLI silently sent every such call to its own host instead, 404ing on
+    // everything the self-heal step had just exposed elsewhere. Found live creating a second tenant.
+    { contract: 'serve.api.resolveById' },
     // Public for the same reason as resolveByHost above: `mesh-serve init` needs a tenant's slug
     // to construct a valid serve.part key ("<slug>/<name>", enforced by catalog.service.ts's own
     // validatePartKey hook) and an organization's name/slug is routing metadata, not a secret.
     { contract: 'identity.organization.get' },
+    // `init -c` looks an organization up by the slug the config names, before it has an id to
+    // `.get` with at all -- same public reasoning as `.get` above.
+    { contract: 'identity.organization.find_one' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 ];

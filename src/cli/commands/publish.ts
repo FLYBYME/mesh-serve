@@ -50,18 +50,22 @@ export class PublishCommand extends BaseCommand {
             return;
         }
 
-        const client = buildClient(this.session);
+        const loginClient = buildClient(this.session);
 
         try {
-            const { apiId } = await resolveApi(client, this.session, { api });
+            const { apiId, apiHost } = await resolveApi(loginClient, this.session, { api });
             for (const contract of REQUIRED_CONTRACTS) {
                 try {
-                    await client.call('serve.expose.add', { apiId, contract, role: 'operator' });
+                    await loginClient.call('serve.expose.add', { apiId, contract, role: 'operator' });
                 } catch (err) {
                     if (err instanceof MeshCallError && err.error.kind === 'conflict') continue;
                     throw err;
                 }
             }
+
+            // See resolveApi's own comment: every call below has to hit the *target* api, which may
+            // differ from the one this session is logged into.
+            const client = buildClient({ apiHost, credential: this.session.credential });
 
             const site = await client.call('serve.cdn.resolveHost', { host });
             if (site.releaseHash === undefined) throw new Error(`"${host}" has never been deployed -- nothing to republish from.`);

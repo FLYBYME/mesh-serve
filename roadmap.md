@@ -610,3 +610,36 @@ flowboard's app for real: it was deployed under the `platform` tenant/api by def
 own api host, not the platform's operator-only control plane. Added both commands, self-exposing their
 one contract the same way `init`/`publish` do. A fresh api still starts with nothing exposed on it
 (unlike the bootstrap api) -- that's `init`'s own self-heal, or a direct `serve.expose.add`, from there.
+
+**A real, previously-unhit bug: self-heal exposed contracts on the *target* api, but every operational
+call still went to the *login* host.** Every earlier test happened to target the same api the CLI was
+logged into, so `serve.expose.add({apiId: flow-api-id, ...})` and the very next `serve.repo.create`
+both landing on `session.apiHost` (api.localhost) never disagreed. The moment they differ -- an
+operator building on a second tenant's own api for the first time -- every operational call 404'd
+("That does not exist.") against a host that had never been exposed anything, while the *target* api
+sat there correctly configured and unreachable. `serve.api.resolveById` is now bootstrap-exposed
+alongside `resolveByHost`, and `resolveApi()` returns the target's real hostname (port-preserved from
+the session's own, since this node serves every api on one port with no reverse proxy); `init`/
+`publish`/`generate` now build a second client pointed at it for everything after the one
+`serve.expose.add` step, which is the only call that has to go through the login host.
+
+**`init -c` now describes a whole app, not just its browser-side parts.** Extended the config schema:
+`org` (must already exist -- init throws rather than silently creating one on a typo; membership is
+checked too, past whatever `identity.hasRole`'s operator bypass would otherwise allow silently),
+`api` (created automatically if that hostname doesn't exist -- no ownership question once its
+organization is already verified), `contracts` (an app's own backend domain contracts, e.g.
+`project.find`, exposed alongside the fixed set `init` always needs), and `service` (the app's
+backend: built and started the same way any `kind: 'service'` part would be, kept separate because it
+isn't composed into the site). One real ordering bug found building this: a contract has to be
+registered in the node's broker -- which only happens once the `ServiceModule` that mounts it is
+actually running -- before `serve.expose.add`'s own `isPublicContract` check can see it; exposing an
+app's contracts before its service starts fails "is not a public contract", indistinguishable from a
+genuinely-internal one. Fixed by exposing `config.contracts` after the service starts, not before.
+`identity.organization.find_one` bootstrap-exposed for the same "look an org up with nothing else yet"
+reason as the two `resolveApi` calls above it.
+
+Verified live end to end against a real two-tenant cluster: `Flow` organization, `flow-api.localhost`
+(separate from the platform's own `api.localhost`), a real kernel+ui+auth+app frontend at
+`flow.localhost` correctly pointed at `flow-api.localhost` in its own boot config, and flowboard's
+real backend service built, started, and answering `GET /api/projects` with `200 []` rather than
+404/connection-refused.
