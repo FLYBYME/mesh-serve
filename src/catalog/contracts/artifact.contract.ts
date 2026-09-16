@@ -122,3 +122,35 @@ export const artifactRequestBuildContract = defineContract({
 
 export type RequestBuildInput = z.infer<typeof artifactRequestBuildContract.inputSchema>;
 export type RequestBuildOutput = z.infer<typeof artifactRequestBuildContract.outputSchema>;
+
+export const buildInputSchema = z.object({
+    id: z.string().min(1).describe('The already-created (status: pending) artifact to actually build'),
+}).describe('Run one already-queued build -- dispatched by serve.queue, not called directly');
+
+export const buildOutputSchema = z.object({
+    success: z.boolean(),
+});
+
+/**
+ * Internal (the default -- no visibility set): dispatched only in-process, by serve.queue's own
+ * claim loop, never over HTTP. requestBuild is the public surface that creates the (status:
+ * pending) row; this is what watchRelease used to do inline, serially, for every pending row it
+ * found -- now it just enqueues one of these per row instead.
+ */
+export const artifactBuildContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'build',
+    description: 'Run one already-queued build.',
+    inputSchema: buildInputSchema,
+    outputSchema: buildOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/build' },
+    destructive: true,
+    // Matches CatalogService.BUILD_TIMEOUT_MS -- serve.queue always passes an explicit timeout
+    // that overrides this, but a direct ctx.call (tests, a future non-queue caller) still wants a
+    // sane bound rather than whatever the framework's own default is.
+    timeout: 5 * 60_000,
+    print: (o) => (o.success ? 'built' : 'build failed'),
+});
+
+export type BuildInput = z.infer<typeof artifactBuildContract.inputSchema>;
+export type BuildOutput = z.infer<typeof artifactBuildContract.outputSchema>;

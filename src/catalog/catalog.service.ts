@@ -4,13 +4,14 @@ import { Database, MeshError, ServiceModule } from '@flybyme/mesh';
 import { repoCrud, type Repo } from './contracts/repo.contract.js';
 import { partCrud, partStartContract, partStopContract, type Part } from './contracts/part.contract.js';
 import { compositionCrud, compositionComposeContract } from './contracts/composition.contract.js';
-import { artifactCrud, artifactGetArtifactContract, artifactGetAssetContract, artifactRequestBuildContract, type Artifact } from './contracts/artifact.contract.js';
+import { artifactCrud, artifactGetArtifactContract, artifactGetAssetContract, artifactRequestBuildContract, artifactBuildContract, type Artifact } from './contracts/artifact.contract.js';
 import { releaseCrud, releaseGetReleaseContract } from './contracts/release.contract.js';
 
 import { getArtifact } from './tools/getArtifact.js';
 import { getAsset } from './tools/getAsset.js';
 import { getRelease } from './tools/getRelease.js';
 import { requestBuild } from './tools/requestBuild.js';
+import { build } from './tools/build.js';
 import { compose } from './tools/compose.js';
 import { startService } from './tools/startService.js';
 import { stopService } from './tools/stopService.js';
@@ -34,6 +35,7 @@ export class CatalogService extends ServiceModule {
         this.mountTool(artifactGetArtifactContract, getArtifact);
         this.mountTool(artifactGetAssetContract, getAsset);
         this.mountTool(artifactRequestBuildContract, requestBuild);
+        this.mountTool(artifactBuildContract, build);
         this.mountTool(releaseGetReleaseContract, getRelease);
         this.mountTool(compositionComposeContract, compose);
         this.mountTool(partStartContract, startService);
@@ -100,18 +102,44 @@ export class CatalogService extends ServiceModule {
         }
     }
 
+    /** Bound on both the real build's ctx.call timeout and serve.queue's own lease for it. */
+    private static readonly BUILD_TIMEOUT_MS = 5 * 60_000;
+
     /**
      * Scans for pending artifacts across every tenant -- there is no single tenant this job runs
      * as, so there is no meta.tenant_id that could ever be correct here. This is exactly the case
      * Database.repo() exists for, unlike every other call in this file (each of which resolves one
      * specific artifact/part/repo that already names its own tenant).
+     *
+     * Used to build every pending artifact inline, serially, right here: one at a time, no lease,
+     * so a crash mid-build left a row at 'running' forever with nothing to reclaim it. Now this
+     * only discovers and enqueues -- serve.queue's own claim loop does the actual dispatching, with
+     * real concurrency and a lease sized to BUILD_TIMEOUT_MS. Flipping status to 'running' here
+     * (rather than waiting for the queue to actually claim the job) is what stops the next sweep,
+     * 60s later, from finding the same still-pending-in-the-queue artifact and enqueuing it a
+     * second time -- waitForBuild (init.ts) already treats pending/running identically, so nothing
+     * downstream needed to change to tolerate that.
+     *
+     * maxAttempts: 1 -- a build failure is almost always deterministic (bad code, a missing
+     * entrypoint), not transient; retrying it automatically wouldn't help and would just delay
+     * surfacing a real failure. Same behavior as before this change: a failed build just sits at
+     * status: 'failed'.
      */
     private async watchRelease(): Promise<void> {
         const db = this.broker.getProvider<Database>('database');
         const repo = db.repo(artifactCrud.get.outputSchema, 'serve.artifact');
         const pending = await repo.find({ query: { status: 'pending' } });
-        for (const artifact of pending) {
-            await this.buildArtifact(artifactCrud.get.outputSchema.parse(artifact));
+        for (const raw of pending) {
+            const artifact = artifactCrud.get.outputSchema.parse(raw);
+            const meta = { tenant_id: artifact.tenantId };
+            await this.broker.call('serve.artifact.update', { id: artifact.id, status: 'running' }, { meta });
+            await this.broker.call('serve.queue.create', {
+                tenantId: artifact.tenantId,
+                contract: 'serve.artifact.build',
+                payload: { id: artifact.id },
+                timeoutMs: CatalogService.BUILD_TIMEOUT_MS,
+                maxAttempts: 1,
+            }, { meta });
         }
     }
 
@@ -149,7 +177,10 @@ export class CatalogService extends ServiceModule {
             .map((other) => other.imports as string);
     }
 
-    private async buildArtifact(artifact: Artifact): Promise<void> {
+    /** Public so tools/build.ts (the serve.artifact.build dispatch target) can call it -- same
+     *  reasoning as cdn.service.ts's contentSecurityPolicy/maintenancePage: a tool handler in its
+     *  own file isn't part of this class's lexical body, so `private` would refuse it. */
+    public async buildArtifact(artifact: Artifact): Promise<void> {
         const meta = { tenant_id: artifact.tenantId };
 
         await this.broker.call('serve.artifact.update', {

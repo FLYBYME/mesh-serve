@@ -120,7 +120,14 @@ export class QueueService extends ServiceModule {
     }
 
     private async run(job: QueueJob): Promise<void> {
-        const meta = { user: { id: job.requestedBy.userId, tenant_id: job.tenantId } };
+        // A system job (no requestedBy -- catalog's build dispatch, most concretely) runs with
+        // bare tenant scope and no caller, the same convention buildArtifact's own internal calls
+        // already use. resolveCallerScope (DatabaseMiddleware) falls back to meta.tenant_id when
+        // meta.user is absent, so this is not a degraded case, just the correct one for a job
+        // nothing signed in ever asked for.
+        const meta = job.requestedBy !== undefined
+            ? { user: { id: job.requestedBy.userId, tenant_id: job.tenantId } }
+            : { tenant_id: job.tenantId };
         this.broker.logger.debug(`serve.queue: running ${job.id} (${job.contract}), attempt ${job.attempts}/${job.maxAttempts}`);
 
         try {

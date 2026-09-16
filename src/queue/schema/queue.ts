@@ -11,9 +11,15 @@ export const queueSchema = z.object({
     tenantId: z.string().describe('The organization this job belongs to'),
     contract: z.string().describe('The domain.action to dispatch'),
     payload: z.record(z.string(), z.unknown()).describe('Input for that contract'),
+    /**
+     * Optional: absent means this is a system job, dispatched with bare {tenant_id} meta and no
+     * caller -- catalog.service.ts's build dispatch is exactly this, a background sweep with no
+     * originating human/agent to replay as. When present, dispatch replays under that account
+     * (mesh-infer's tool calls, most concretely), not the queue service's own identity.
+     */
     requestedBy: z.object({
         userId: z.string().describe('Dispatch replays under this account, not the queue service\'s own identity'),
-    }),
+    }).optional(),
     priority: z.number().default(0).describe('Higher claims first'),
     status: z.enum(['pending', 'processing', 'completed', 'failed']).default('pending'),
     attempts: z.number().default(0),
