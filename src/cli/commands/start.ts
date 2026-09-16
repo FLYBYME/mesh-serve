@@ -14,6 +14,7 @@ import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { IdentityService } from '../../identity/identity.service.js';
 import { CdnService } from '../../cdn/cdn.service.js';
 import { CatalogService } from '../../catalog/catalog.service.js';
+import { HoldService } from '../../hold/hold.service.js';
 import { ApiService } from '../../api/api.service.js';
 
 const LogLevelMap: Record<string, LogLevel> = {
@@ -77,6 +78,7 @@ export class StartCommand extends BaseCommand {
         await node.registerModule(new IdentityService());
         await node.registerModule(new CdnService());
         await node.registerModule(new CatalogService());
+        await node.registerModule(new HoldService());
         await node.registerModule(new ApiService());
 
         await node.start();

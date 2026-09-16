@@ -35,6 +35,10 @@ export const apiTokenIssueContract = defineContract({
     outputSchema: issueOutputSchema,
     rest: { method: 'POST', path: '/identity/apiToken/issue' },
     dependencies: ['identity.user'],
+    // Never marked public before this -- there was no way to mint an agent-facing api token over
+    // HTTP at all, which made the agent half of the hold system (ApiService.placeOnHold)
+    // theoretical: nothing could ever authenticate as `viaApiToken` in the first place.
+    visibility: 'public',
     destructive: true,
     print: (o) => `issued api token "${o.name}" for ${o.userId}`,
 });

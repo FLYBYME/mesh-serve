@@ -18,6 +18,13 @@ import type { Api } from './contracts/api.contract.js';
 
 interface Caller {
     readonly userId: string;
+    /** True when auth came from an api token rather than a person's ticket -- see resolveCaller. */
+    readonly viaApiToken: boolean;
+    /** The api token's own name, when viaApiToken. Absent for a person; that absence is meaningful. */
+    readonly agentName?: string;
+    /** Informational only (a held call's frozen requestedBy, display) -- never trusted for a gate
+     *  decision; checkGate always re-resolves fresh. */
+    readonly roles: readonly string[];
 }
 
 interface Route {
@@ -75,6 +82,21 @@ const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[
     { contract: 'serve.expose.remove', role: 'operator' },
 ];
 
+/**
+ * Exposed on every api the moment it's created, not just the bootstrap one -- unlike
+ * BOOTSTRAP_EXPOSED_CONTRACTS above, whose 'once, on the platform api only' reach was correct for
+ * "how does anyone get in at all" but wrong for this: the whole point of holding a call is that a
+ * site's own author never had to remember to grant a way to see or decide the queue it produces.
+ * `serve.api.create`'s own after-hook (below) is what actually does this, on every tenant's every
+ * api, forever. `role: 'operator'` -- a non-operator gets a 403 deciding someone else's held call,
+ * not a 404 pretending the queue doesn't exist.
+ */
+const HOLD_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
+    { contract: 'serve.hold.find', role: 'operator' },
+    { contract: 'serve.hold.get', role: 'operator' },
+    { contract: 'serve.hold.decide', role: 'operator' },
+];
+
 export class ApiService extends ServiceModule {
     public readonly domain = 'serve.api';
 
@@ -92,6 +114,21 @@ export class ApiService extends ServiceModule {
         this.mountTool(exposeAddContract, add);
         this.mountTool(exposeRemoveContract, remove);
         this.mountTool(generateClientContract, generateClient);
+
+        this.mountCrudHook('serve.api', 'create', {
+            after: async (output, ctx) => {
+                const api = output as Api;
+                for (const { contract, role } of HOLD_EXPOSED_CONTRACTS) {
+                    await ctx.call('serve.expose.create', {
+                        tenantId: api.tenantId,
+                        apiId: api.id,
+                        contract,
+                        ...(role !== undefined ? { role } : {}),
+                    });
+                }
+                return output;
+            },
+        });
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
@@ -244,9 +281,11 @@ export class ApiService extends ServiceModule {
     /**
      * Bearer token could be a user ticket or an api token -- there is no prefix marking which, so
      * both are tried. Absent or unrecognized means anonymous, not an error: whether that's good
-     * enough is the gate step's job, not this one's. Only the account id is kept -- roles are never
-     * trusted from a ticket's own payload (which could be long-lived and stale); the gate step
-     * re-resolves them fresh from identity.role/identity.membership on every call.
+     * enough is the gate step's job, not this one's. `roles` here is carried along for display only
+     * (a held call's frozen `requestedBy.roles`) and never trusted for a gate decision -- that
+     * always re-resolves fresh from identity.role/identity.membership, in checkGate, on every call.
+     * `viaApiToken`/`agentName` distinguish a person from an agent: placeOnHold (below) is the
+     * one place that distinction actually matters.
      */
     private async resolveCaller(req: http.IncomingMessage): Promise<Caller | undefined> {
         const header = req.headers.authorization;
@@ -260,12 +299,15 @@ export class ApiService extends ServiceModule {
 
         const ticket = await this.broker.call('identity.ticket.validate', { token });
         if (ticket.valid && ticket.userId !== undefined) {
-            return { userId: ticket.userId };
+            return { userId: ticket.userId, viaApiToken: false, roles: ticket.roles ?? [] };
         }
 
         const apiToken = await this.broker.call('identity.apiToken.validate', { token });
         if (apiToken.valid && apiToken.userId !== undefined) {
-            return { userId: apiToken.userId };
+            return {
+                userId: apiToken.userId, viaApiToken: true, agentName: apiToken.name,
+                roles: apiToken.roles ?? [],
+            };
         }
 
         return undefined;
@@ -484,6 +526,19 @@ export class ApiService extends ServiceModule {
         const effectiveTenantId = await this.resolveEffectiveTenantId(caller, target.tenantId, input);
         const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId } };
 
+        // The agent surface: a destructive call made by an api token (never by a signed-in person's
+        // ticket -- viaApiToken is exactly that distinction) is frozen and held instead of run.
+        // `destructive` already exists on every contract as documentation (descriptor.ts, the CLI's
+        // own help text); this is what actually makes it load-bearing. serve.hold.decide itself is
+        // deliberately never marked destructive, so an operator's own decision can't recursively hold.
+        if (caller?.viaApiToken === true && route.contract.destructive === true) {
+            const held = await this.placeOnHold(route, caller, target, input, effectiveTenantId);
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 202;
+            res.end(JSON.stringify(held));
+            return;
+        }
+
         // route.row.contract is a domain.action key validated at runtime (findRoute already
         // confirmed globalContractRegistry has a matching public contract for it) -- the broker's
         // own generic can't know that statically, so this crosses the boundary the same way mesh's
@@ -495,5 +550,30 @@ export class ApiService extends ServiceModule {
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 200;
         res.end(JSON.stringify(result));
+    }
+
+    /** How long a held call waits before it's treated as expired. Not enforced by a timer --
+     *  read paths (serve.hold.find/get) would need to compute this lazily; there's no such check
+     *  yet, so a row simply never actually flips to 'expired' today. Flagged as a gap. */
+    private static readonly HOLD_TTL_MS = 24 * 60 * 60 * 1000;
+
+    private async placeOnHold(
+        route: Route,
+        caller: Caller,
+        target: Target,
+        input: Record<string, unknown>,
+        tenantId: string,
+    ): Promise<unknown> {
+        const now = Date.now();
+        return this.broker.call('serve.hold.create', {
+            tenantId,
+            call: route.row.contract,
+            host: target.host,
+            input,
+            requestedBy: { userId: caller.userId, agent: caller.agentName, roles: [...caller.roles] },
+            requestedAt: new Date(now).toISOString(),
+            status: 'held',
+            expiresAt: new Date(now + ApiService.HOLD_TTL_MS).toISOString(),
+        }, { meta: { tenant_id: tenantId } });
     }
 }
