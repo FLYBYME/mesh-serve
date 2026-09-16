@@ -7,6 +7,53 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done — `kind: 'service'`: a mesh ServiceModule as a real part, loaded by a running node
+
+The old Supervisor/Fleet system (`src/supervisor/`, `src/fleet/`, moved into mesh-serve from `mesh`
+itself, then dumped into `src-dump/`/`test-dump/` in the September 11 rewrite and never rebuilt) is
+**not** what this is. Explicit decision: all new, nothing restored -- the old design predates the
+current `serve.api`/`serve.cdn`/`serve.repo`/`serve.part` model entirely, and reusing it would mean
+adapting code built for a domain model that no longer exists.
+
+What got built instead, reusing everything already proven this session:
+
+- `serve.part.kind` gains `'service'`, alongside kernel/application/extension/driver/theme --
+  same `repoId`/`path`/`entryPoint` fields, no new collection.
+- `buildService` (parallel to `buildPart`/`buildKernel`) bundles for `platform: 'node'` instead of
+  `'browser'` -- no CDN step, the output never leaves this machine's own artifact store, and
+  `@flybyme/mesh` is always marked external rather than bundled (the loaded module needs to observe
+  and be observed by the *same* broker instance running it, not a bundled, disconnected copy).
+  `@flybyme/mesh` being external only works if it's actually resolvable from the artifact store's
+  location, which isn't inside any node project -- fixed with one symlink at the artifact store's
+  own root (`ensureArtifactNodeModules`), resolved via `import.meta.resolve` rather than
+  `createRequire` (the package's own `exports` map has no "require" condition; resolving it as
+  CommonJS fails outright even though the real ESM import works fine).
+- `serve.part.start`/`serve.part.stop`: explicit only, never automatic on a successful build (the
+  same deploy/build separation `serve.cdn.deploy` already has). `start` imports the latest
+  successful build and calls the framework's own `broker.registerModule` -- confirmed earlier this
+  session that this already handles being called after a broker has started
+  (`if (this.isStarted && module.onStart) { await module.onStart(this); }` in `mesh`'s own
+  `ServiceBroker`). `stop` calls the real, existing `broker.unregisterModule`. Neither contract takes
+  a `nodeID` -- targeting a specific node is `ctx.call`'s own job (the `nodeID` call option, routed
+  against the mesh's real node registry), not a second way to say the same thing in the contract's
+  own input.
+- Deliberately no persisted "is this running" state anywhere. In-memory only, per node
+  (`src/catalog/methods/services.ts`), because a database flag survives exactly the crash that makes
+  it wrong; asking a node directly (or finding it absent from the registry) never can lie the same way.
+
+Verified live end to end against a real, dependency-free throwaway service: build succeeds, `start`
+imports it and the mesh-level contract it declares becomes really callable over HTTP once exposed,
+a second `start` correctly refuses ("already running on this node"), `stop` unregisters it for real
+(confirmed by the exact same call then failing), and restarting it again works.
+
+Found and fixed along the way: calling an exposed contract with nothing currently backing it
+anywhere in the cluster (concretely: right after `stop`) threw a plain `Error`, not a `MeshError`, so
+`api.service.ts`'s catch-all gave a bare, undetailed 500 -- a real, previously-invisible gap, since
+nothing had ever stopped a service before this existed. Now mapped to a proper 503 carrying the
+framework's own clear message.
+
+---
+
 ## Done — the builder can now build a part with a real npm dependency
 
 Tried to verify `serve.part.wants` actually gets populated from a repo's `mesh.wants.json` at build

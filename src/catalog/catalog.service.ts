@@ -2,7 +2,7 @@ import type { IServiceBroker, IServiceContext } from '@flybyme/mesh';
 import { Database, MeshError, ServiceModule } from '@flybyme/mesh';
 
 import { repoCrud, type Repo } from './contracts/repo.contract.js';
-import { partCrud, type Part } from './contracts/part.contract.js';
+import { partCrud, partStartContract, partStopContract, type Part } from './contracts/part.contract.js';
 import { compositionCrud, compositionComposeContract } from './contracts/composition.contract.js';
 import { artifactCrud, artifactGetArtifactContract, artifactGetAssetContract, artifactRequestBuildContract, type Artifact } from './contracts/artifact.contract.js';
 import { releaseCrud, releaseGetReleaseContract } from './contracts/release.contract.js';
@@ -12,7 +12,9 @@ import { getAsset } from './tools/getAsset.js';
 import { getRelease } from './tools/getRelease.js';
 import { requestBuild } from './tools/requestBuild.js';
 import { compose } from './tools/compose.js';
-import { buildPart, buildKernel } from './methods/build.js';
+import { startService } from './tools/startService.js';
+import { stopService } from './tools/stopService.js';
+import { buildPart, buildKernel, buildService } from './methods/build.js';
 
 export class CatalogService extends ServiceModule {
     public readonly domain = 'serve.catalog';
@@ -34,6 +36,8 @@ export class CatalogService extends ServiceModule {
         this.mountTool(artifactRequestBuildContract, requestBuild);
         this.mountTool(releaseGetReleaseContract, getRelease);
         this.mountTool(compositionComposeContract, compose);
+        this.mountTool(partStartContract, startService);
+        this.mountTool(partStopContract, stopService);
 
         this.mountCrudHook('serve.part', 'create', {
             before: async (input, ctx) => {
@@ -171,7 +175,9 @@ export class CatalogService extends ServiceModule {
 
             const { hash, assets, wants } = part.kind === 'kernel'
                 ? await buildKernel(part, repo, artifact.ref, await this.resolveDrivers(artifact))
-                : await buildPart(part, repo, artifact.ref, await this.resolveExternals(part));
+                : part.kind === 'service'
+                    ? await buildService(part, repo, artifact.ref)
+                    : await buildPart(part, repo, artifact.ref, await this.resolveExternals(part));
 
             const duration = (Date.now() - startedAt) / 1000;
 

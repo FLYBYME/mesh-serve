@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 import * as esbuild from 'esbuild';
 import { z } from 'zod';
@@ -75,7 +76,9 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
     return dir;
 }
 
-async function runEsbuild(entryPointFiles: string[], outDir: string, external: string[]): Promise<void> {
+async function runEsbuild(
+    entryPointFiles: string[], outDir: string, external: string[], platform: 'browser' | 'node' = 'browser',
+): Promise<void> {
     for (const entryPointFile of entryPointFiles) {
         if (!(await exists(entryPointFile))) {
             throw new Error(`Entry point not found: ${entryPointFile}`);
@@ -87,8 +90,10 @@ async function runEsbuild(entryPointFiles: string[], outDir: string, external: s
         bundle: true,
         outdir: outDir,
         format: 'esm',
-        platform: 'browser',
-        target: 'es2020',
+        platform,
+        // A service isn't loaded by a browser at all -- it's import()ed by a node process, on
+        // whatever recent Node the cluster actually runs, not a browser-compat target.
+        target: platform === 'node' ? 'node20' : 'es2020',
         sourcemap: true,
         minify: true,
         logLevel: 'silent',
@@ -182,6 +187,66 @@ export async function buildPart(part: Part, repo: Repo, ref: string, external: s
     const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
     try {
         await runEsbuild([entry], buildTmpDir, external);
+        return { ...await hashAndStoreOutput(buildTmpDir), wants };
+    } finally {
+        await fs.rm(buildTmpDir, { recursive: true, force: true });
+    }
+}
+
+/**
+ * Marking `@flybyme/mesh` external only helps if it's actually resolvable from wherever the built
+ * file ends up -- `artifactDir` (`~/.mesh/artifacts/<hash>/`) is not inside any node project, so a
+ * bare `import 'from @flybyme/mesh'` in the built output would otherwise fail outright with
+ * ERR_MODULE_NOT_FOUND the moment something tried to `import()` it. One symlink at the artifact
+ * store's own root, resolved once and reused: Node's module resolution walks up looking for
+ * `node_modules` from the importing file's own directory, so `artifactDir/node_modules/@flybyme/mesh`
+ * satisfies every hash-named subdirectory underneath it, not just this one build.
+ *
+ * `import.meta.resolve` (not `createRequire`) because `@flybyme/mesh`'s own `exports` map has no
+ * "require" condition -- resolving it as CommonJS fails with ERR_PACKAGE_PATH_NOT_EXPORTED even
+ * though the real, ESM import works fine. Locates the package's root by finding
+ * `node_modules/@flybyme/mesh` in the resolved entry path, since the entry itself can be nested
+ * arbitrarily deep (`dist/index.js`, etc.) and only the root needs symlinking.
+ */
+async function ensureArtifactNodeModules(pkg: string): Promise<void> {
+    const segments = pkg.split('/');
+    const linkPath = path.join(artifactDir, 'node_modules', ...segments);
+    if (await exists(linkPath)) return;
+
+    const entryUrl = import.meta.resolve(pkg);
+    const entry = fileURLToPath(entryUrl);
+    const marker = path.join('node_modules', ...segments);
+    const idx = entry.lastIndexOf(marker);
+    if (idx === -1) {
+        throw new Error(`Could not locate the "${pkg}" package root from its resolved entry: ${entry}`);
+    }
+    const packageRoot = entry.slice(0, idx + marker.length);
+
+    await fs.mkdir(path.dirname(linkPath), { recursive: true });
+    await fs.symlink(packageRoot, linkPath, 'dir');
+}
+
+/**
+ * Builds a `kind: 'service'` part: a mesh `ServiceModule`, `import()`ed by a running node
+ * (`serve.part.start`) rather than composed into a site. Bundled for `node`, not `browser` --
+ * there is no CDN step at all, the output never leaves this machine's artifact store.
+ *
+ * `@flybyme/mesh` is always external, never bundled: `ServiceBroker.registerModule` duck-types the
+ * module it's given (`onInit`/`getContracts`/`execute`), so a bundled, structurally-identical copy
+ * would likely still work -- but the loaded module needs to observe and be observed by the *same*
+ * broker instance running it, and a bundled copy of the framework is a second, disconnected one.
+ * Node builtins need no such list: esbuild's own `platform: 'node'` already leaves them external.
+ */
+export async function buildService(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+    const repoDir = await ensureRepoCheckout(repo, ref);
+    const entry = path.join(repoDir, part.path, part.entryPoint);
+    const wants = await readWants(repoDir, part);
+
+    await ensureArtifactNodeModules('@flybyme/mesh');
+
+    const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
+    try {
+        await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
         return { ...await hashAndStoreOutput(buildTmpDir), wants };
     } finally {
         await fs.rm(buildTmpDir, { recursive: true, force: true });

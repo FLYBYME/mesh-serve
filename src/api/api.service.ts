@@ -149,6 +149,16 @@ export class ApiService extends ServiceModule {
                     res.statusCode = err.status;
                     res.setHeader('Content-Type', 'application/json');
                     res.end(JSON.stringify({ error: err.message }));
+                } else if (err instanceof Error && err.message.includes('Local tool not found')) {
+                    // A contract can be exposed (mesh-level public, a real serve.expose row) and
+                    // still have nothing backing it right now -- a serve.part.stop'd service, most
+                    // concretely, but the same is true of any tool nothing in the cluster currently
+                    // mounts. That's a real, expected runtime state, not a server bug; the plain
+                    // Error @flybyme/mesh throws for it isn't a MeshError, so it fell through to the
+                    // generic 500 below with no detail, found live stopping a real service.
+                    res.statusCode = 503;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: err.message }));
                 } else {
                     this.broker?.logger.error('Error handling api request', err);
                     res.statusCode = 500;
