@@ -33,11 +33,27 @@ const MESH_WEB_REF = 'console-demo';
 const MESH_CORE_URL = '/home/ubuntu/code/.git-remotes/mesh-core.git';
 const MESH_CORE_REF = 'master';
 
-const IDENTITY_CONTRACTS = [
-    'identity.ticket.issue', 'identity.ticket.signOut', 'identity.whoami', 'identity.user.setPassword',
-    'identity.organization.find', 'identity.organization.create',
-    'identity.membership.find', 'identity.membership.create', 'identity.membership.delete',
-    'identity.role.find',
+/**
+ * `role: 'operator'` on organization/membership/role -- found live, reported by a real person
+ * poking at the deployed page: `identity.organization.find` and `identity.role.find` have no
+ * `scopedBy` at all (an organization can't be scoped to itself; a role isn't tenant data), and
+ * `identity.organization.create`/`identity.membership.create` reach real mutation with no auth
+ * check of their own -- exposing any of these with no role, as this list originally did, let an
+ * anonymous caller list every organization and role on the cluster and create new ones. Matches
+ * what mesh-operator's own mesh.json already documented as the correct gate for exactly this
+ * reason, before this session ever wrote this list.
+ */
+const IDENTITY_CONTRACTS: readonly { contract: string; role?: string }[] = [
+    { contract: 'identity.ticket.issue' },
+    { contract: 'identity.ticket.signOut' },
+    { contract: 'identity.whoami' },
+    { contract: 'identity.user.setPassword' },
+    { contract: 'identity.organization.find', role: 'operator' },
+    { contract: 'identity.organization.create', role: 'operator' },
+    { contract: 'identity.membership.find', role: 'operator' },
+    { contract: 'identity.membership.create', role: 'operator' },
+    { contract: 'identity.membership.delete', role: 'operator' },
+    { contract: 'identity.role.find', role: 'operator' },
 ];
 
 function sleep(ms: number): Promise<void> {
@@ -134,11 +150,11 @@ async function main(): Promise<void> {
     console.log('== exposing identity contracts on api.localhost ==');
     const api = await app.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
     if (api === undefined) throw new Error('No api.localhost -- first boot did not run?');
-    for (const contract of IDENTITY_CONTRACTS) {
+    for (const { contract, role } of IDENTITY_CONTRACTS) {
         const existing = await app.call('serve.expose.find_one', { query: { apiId: api.id, contract } }, { meta });
         if (existing === undefined) {
-            await app.call('serve.expose.add', { apiId: api.id, contract }, { meta });
-            console.log(`  exposed ${contract}`);
+            await app.call('serve.expose.add', { apiId: api.id, contract, ...(role !== undefined ? { role } : {}) }, { meta });
+            console.log(`  exposed ${contract}${role !== undefined ? ` (role: ${role})` : ''}`);
         }
     }
 
