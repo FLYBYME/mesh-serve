@@ -5,7 +5,13 @@ import { artifactSchema } from '../schema/artifact.js';
 export const artifactCrud = defineCrud('serve.artifact', artifactSchema, {
     pluralPath: 'artifacts',
     scopedBy: 'tenantId',
-    visibility: {},
+    // Reads only -- create/update/delete stay internal, behind the validated requestBuild tool
+    // (resolving the part, checking driver kinds, defaulting status). Same gap as repo/part/
+    // composition had (visibility: {} meant nothing here was reachable over HTTP at all, for
+    // anyone, ever) -- found live checking a build's status from the CLI instead of raw Mongo.
+    visibility: {
+        find: 'public', findOne: 'public', get: 'public', count: 'public',
+    },
     dependencies: ['serve.part'],
 });
 

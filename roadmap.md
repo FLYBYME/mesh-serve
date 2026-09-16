@@ -7,6 +7,20 @@ hand-running a fresh install through it. That second part is what actually produ
 
 ---
 
+## Done — `serve.artifact` had the same unexposable-CRUD gap repo/part/composition already had
+
+Found live, exposing the catalog domain for real CLI use: `serve.artifact.find` refused with `"is
+not a public contract"` even at `role: 'operator'`. `artifactCrud`'s `visibility: {}` meant nothing
+on the collection -- find, get, count, all of it -- was reachable over HTTP for anyone, ever, the
+exact same gap already found and fixed for `serve.repo`/`serve.part`/`serve.composition` earlier this
+session. Fixed the same way: reads public, writes stay internal behind the validated
+`requestBuild` tool. `api.localhost` now has the full catalog domain exposed at `role: 'operator'`
+(`serve.repo`/`serve.part`/`serve.artifact`/`serve.composition`/`serve.api`/`serve.cdn`'s create/find
+actions, plus `serve.part.start`/`.stop`) so the whole org/api/site/repo/part/build/compose/deploy
+workflow is drivable from `mesh-serve`'s own CLI, not just from a script.
+
+---
+
 ## Done — `kind: 'service'`: a mesh ServiceModule as a real part, loaded by a running node
 
 The old Supervisor/Fleet system (`src/supervisor/`, `src/fleet/`, moved into mesh-serve from `mesh`
