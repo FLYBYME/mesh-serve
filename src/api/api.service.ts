@@ -58,6 +58,10 @@ const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[
     { contract: 'identity.whoami' },
     { contract: 'identity.user.setPassword' },
     { contract: 'serve.api.resolveByHost' },
+    // Public for the same reason as resolveByHost above: `mesh-serve init` needs a tenant's slug
+    // to construct a valid serve.part key ("<slug>/<name>", enforced by catalog.service.ts's own
+    // validatePartKey hook) and an organization's name/slug is routing metadata, not a secret.
+    { contract: 'identity.organization.get' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 ];

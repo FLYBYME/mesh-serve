@@ -4,6 +4,7 @@ import { call, defineApi } from '@flybyme/mesh-web/net';
 import { issueInputSchema, issueOutputSchema } from '../identity/contracts/ticket.contract.js';
 import { whoamiOutputSchema } from '../identity/contracts/identity.contract.js';
 import { setPasswordInputSchema, setPasswordOutputSchema } from '../identity/contracts/user.contract.js';
+import { organizationCrud } from '../identity/contracts/organization.contract.js';
 import { generateClientInputSchema, generateClientOutputSchema } from '../api/contracts/generateClient.contract.js';
 import { addInputSchema, addOutputSchema } from '../api/contracts/expose.contract.js';
 import { resolveApiByHostInputSchema, resolveApiByHostOutputSchema } from '../api/contracts/api.contract.js';
@@ -51,6 +52,9 @@ export const cliApi = defineApi({
         ),
         'serve.api.resolveByHost': call<z.infer<typeof resolveApiByHostInputSchema>, z.infer<typeof resolveApiByHostOutputSchema>>(
             'GET', '/apis/host/:apiHost',
+        ),
+        'identity.organization.get': call<z.infer<typeof organizationCrud.get.inputSchema>, z.infer<typeof organizationCrud.get.outputSchema>>(
+            'GET', '/organizations/:id',
         ),
         'serve.api.generateClient': call<z.infer<typeof generateClientInputSchema>, z.infer<typeof generateClientOutputSchema>>(
             'POST', '/generate-client',

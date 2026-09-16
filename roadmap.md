@@ -589,3 +589,14 @@ caller who has nothing else yet" gate) and a shared `resolveApi()` helper so `--
 optional overrides, defaulting to whatever api/tenant the CLI is currently logged into. Re-verified the
 whole bootstrap-to-deployed-site walkthrough end to end using only `mesh-serve` commands: `start` →
 `login` → `claim` → `init --org-slug <slug>` → `publish --host <host> --ref <ref>` -- no curl, no Mongo.
+
+**Closed the last real gap: `--org-slug` too, and `init -c <config.json>`.** `identity.organization.get`
+is `visibility: 'public'` but wasn't bootstrap-exposed either; added it (public, same reasoning as
+`resolveByHost`) so `init` looks up an organization's slug from `--tenant` when `--org-slug` is
+omitted. Separately, a real interactive run hit a genuine, unrelated failure four prompts deep (a
+`ref` that didn't exist on the repo actually named) and there was no way to fix one answer and
+continue -- only start the whole wizard over. `init` now takes `-c/--config <file>`, a JSON manifest
+(`{ host, compositionKey?, title?, repos: [{ url, ref, parts: [{ name, kind?, path?, entryPoint,
+imports? }] }] }`) validated with zod, run non-interactively through the exact same pipeline the
+interactive path uses (`collectInteractively`/`loadConfig` both just produce a `WizardInput`) -- so a
+real deployment becomes a file worth checking in and re-running, not a transcript to retype.
