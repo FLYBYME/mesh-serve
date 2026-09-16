@@ -3,8 +3,10 @@ import { call, defineApi } from '@flybyme/mesh-web/net';
 
 import { issueInputSchema, issueOutputSchema } from '../identity/contracts/ticket.contract.js';
 import { whoamiOutputSchema } from '../identity/contracts/identity.contract.js';
+import { setPasswordInputSchema, setPasswordOutputSchema } from '../identity/contracts/user.contract.js';
 import { generateClientInputSchema, generateClientOutputSchema } from '../api/contracts/generateClient.contract.js';
 import { addInputSchema, addOutputSchema } from '../api/contracts/expose.contract.js';
+import { resolveApiByHostInputSchema, resolveApiByHostOutputSchema } from '../api/contracts/api.contract.js';
 import { repoCrud } from '../catalog/contracts/repo.contract.js';
 import { partCrud } from '../catalog/contracts/part.contract.js';
 import { artifactCrud, requestBuildInputSchema, requestBuildOutputSchema } from '../catalog/contracts/artifact.contract.js';
@@ -22,11 +24,11 @@ import { siteCrud, deployInputSchema, deployOutputSchema, resolveHostInputSchema
 type Scoped<T> = Omit<T, 'tenantId'> & { readonly tenantId?: string };
 
 /**
- * The CLI's own baseline surface. `identity.ticket.issue`/`identity.whoami` are always exposed on
- * DEFAULT_API_HOST (see api.service.ts's BOOTSTRAP_EXPOSED_CONTRACTS); the `serve.*` operator calls
- * below are not -- `init`/`publish` expose themselves on whatever api they're pointed at (via
- * `serve.expose.add`, which is itself bootstrap-exposed) before using them, the same self-heal
- * `composeConsole.ts`'s demo script does by hand.
+ * The CLI's own baseline surface. `identity.*`/`serve.api.resolveByHost` are always exposed on
+ * DEFAULT_API_HOST (see api.service.ts's BOOTSTRAP_EXPOSED_CONTRACTS); the `serve.repo`/`part`/
+ * `artifact`/`composition`/`cdn` calls below are not -- `init`/`publish` expose themselves on
+ * whatever api they're pointed at (via `serve.expose.add`, which is itself bootstrap-exposed) before
+ * using them, the same self-heal `composeConsole.ts`'s demo script does by hand.
  *
  * Declared directly against this package's own contract schemas rather than generated: the CLI ships
  * inside mesh-serve itself, always at the same version as the server it's built to talk to, so there
@@ -43,6 +45,12 @@ export const cliApi = defineApi({
         ),
         'identity.whoami': call<void, z.infer<typeof whoamiOutputSchema>>(
             'GET', '/identity/whoami',
+        ),
+        'identity.user.setPassword': call<z.infer<typeof setPasswordInputSchema>, z.infer<typeof setPasswordOutputSchema>>(
+            'POST', '/identity/password',
+        ),
+        'serve.api.resolveByHost': call<z.infer<typeof resolveApiByHostInputSchema>, z.infer<typeof resolveApiByHostOutputSchema>>(
+            'GET', '/apis/host/:apiHost',
         ),
         'serve.api.generateClient': call<z.infer<typeof generateClientInputSchema>, z.infer<typeof generateClientOutputSchema>>(
             'POST', '/generate-client',

@@ -4,12 +4,13 @@ import { MeshCallError } from '@flybyme/mesh-web/net';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { buildClient } from '../client.js';
+import { resolveApi } from '../resolveApi.js';
 import { question, warm } from '../prompt.js';
 import type { Session } from '../session.js';
 
 interface InitArgs {
-    readonly api: string;
-    readonly tenant: string;
+    readonly api?: string;
+    readonly tenant?: string;
     readonly orgSlug: string;
 }
 
@@ -46,7 +47,7 @@ const REQUIRED_CONTRACTS: readonly string[] = [
  */
 export class InitCommand extends BaseCommand {
     public readonly name = 'init';
-    public readonly description = 'init --api <id> --tenant <id> --org-slug <slug>: walk through standing up a new site, step by step';
+    public readonly description = 'init --org-slug <slug> [--api <id>] [--tenant <id>]: walk through standing up a new site, step by step';
 
     constructor(private readonly session: Session) {
         super();
@@ -56,13 +57,13 @@ export class InitCommand extends BaseCommand {
         program
             .command(this.name)
             .description(this.description)
-            .requiredOption('--api <id>', 'The serve.api this site attaches to')
-            .requiredOption('--tenant <id>', 'The identity.organization everything is created in (an operator may name any tenant, not only the api\'s own)')
+            .option('--api <id>', 'The serve.api this site attaches to -- defaults to the api you\'re logged into')
+            .option('--tenant <id>', 'The identity.organization everything is created in -- defaults to that api\'s own (an operator may name a different one)')
             .requiredOption('--org-slug <slug>', 'That organization\'s slug -- every part key is "<org-slug>/<name>" by construction (serve.part.create rejects any other prefix)')
             .action(async (opts: InitArgs) => this.execute(opts));
     }
 
-    protected async execute({ api: apiId, tenant, orgSlug }: InitArgs): Promise<void> {
+    protected async execute({ api, tenant, orgSlug }: InitArgs): Promise<void> {
         if (this.session.credential === undefined) {
             this.logger.error('Not logged in. Run "login" first.');
             return;
@@ -74,6 +75,7 @@ export class InitCommand extends BaseCommand {
         warm(rl);
 
         try {
+            const { apiId, tenantId } = await resolveApi(client, this.session, { api, tenant });
             this.logger.info('Making sure this api can serve what init needs...');
             for (const contract of REQUIRED_CONTRACTS) {
                 try {
@@ -99,7 +101,7 @@ export class InitCommand extends BaseCommand {
                 if (url === '') break;
                 const defaultBranch = (await question(rl, 'Default branch/ref [master]: ')).trim() || 'master';
 
-                const repo = await client.call('serve.repo.create', { tenantId: tenant, url, defaultBranch });
+                const repo = await client.call('serve.repo.create', { tenantId, url, defaultBranch });
                 this.logger.info(`  repo ${repo.id}`);
                 repoCount++;
 
@@ -114,7 +116,7 @@ export class InitCommand extends BaseCommand {
                     const importsAnswer = (await question(rl, '  Import specifier other parts use to reach this one (blank = none): ')).trim();
 
                     const part = await client.call('serve.part.create', {
-                        tenantId: tenant,
+                        tenantId,
                         repoId: repo.id, key, kind, path, entryPoint, wants: [],
                         ...(importsAnswer === '' ? {} : { imports: importsAnswer }),
                     });
@@ -140,7 +142,7 @@ export class InitCommand extends BaseCommand {
 
             this.logger.info('Composing...');
             const composition = await client.call('serve.composition.create', {
-                tenantId: tenant,
+                tenantId,
                 key: compositionKey,
                 kernelPartKey: kernel.key,
                 drivers: [],
@@ -154,7 +156,7 @@ export class InitCommand extends BaseCommand {
 
             this.logger.info('Creating the site...');
             const site = await client.call('serve.cdn.create', {
-                tenantId: tenant,
+                tenantId,
                 host, apiId,
                 mcpHost: `mcp-${host}`,
                 application: compositionKey,

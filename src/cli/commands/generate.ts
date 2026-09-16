@@ -5,10 +5,11 @@ import { MeshCallError } from '@flybyme/mesh-web/net';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { buildClient } from '../client.js';
+import { resolveApi } from '../resolveApi.js';
 import type { Session } from '../session.js';
 
 interface GenerateArgs {
-    readonly api: string;
+    readonly api?: string;
     readonly out: string;
 }
 
@@ -22,7 +23,7 @@ interface GenerateArgs {
  */
 export class GenerateCommand extends BaseCommand {
     public readonly name = 'generate';
-    public readonly description = 'generate --api <id> [--out file]: render this app\'s typed client from the api\'s full current exposure';
+    public readonly description = 'generate [--api <id>] [--out file]: render this app\'s typed client from an api\'s full current exposure';
 
     constructor(private readonly session: Session) {
         super();
@@ -32,16 +33,17 @@ export class GenerateCommand extends BaseCommand {
         program
             .command(this.name)
             .description(this.description)
-            .requiredOption('--api <id>', 'The serve.api id to render a client for')
+            .option('--api <id>', 'The serve.api id to render a client for -- defaults to the api you\'re logged into')
             .option('--out <file>', 'Where to write the generated client', './generated/api.ts')
-            .action(async (opts: { api: string; out: string }) => this.execute(opts));
+            .action(async (opts: { api?: string; out: string }) => this.execute(opts));
     }
 
     protected async execute({ api, out }: GenerateArgs): Promise<void> {
         const client = buildClient(this.session);
         let source: string;
         try {
-            const result = await client.call('serve.api.generateClient', { apiId: api });
+            const { apiId } = await resolveApi(client, this.session, { api });
+            const result = await client.call('serve.api.generateClient', { apiId });
             source = result.source;
         } catch (err) {
             if (err instanceof MeshCallError) {

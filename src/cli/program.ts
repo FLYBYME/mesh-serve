@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { CommandRegistry } from './core/CommandRegistry.js';
 import { attachDynamicCommands } from './dynamic.js';
 import { LoginCommand } from './commands/login.js';
+import { ClaimCommand } from './commands/claim.js';
 import { LogoutCommand } from './commands/logout.js';
 import { SwitchCommand } from './commands/switch.js';
 import { RefreshCommand } from './commands/refresh.js';
@@ -32,6 +33,7 @@ export async function buildProgram(session: Session, replHandle: ReplHandle): Pr
 
     const commands = [
         new LoginCommand(session),
+        new ClaimCommand(session),
         new LogoutCommand(session),
         new SwitchCommand(session),
         new RefreshCommand(session),

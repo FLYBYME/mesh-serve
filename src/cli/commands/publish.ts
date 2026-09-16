@@ -3,10 +3,11 @@ import { MeshCallError } from '@flybyme/mesh-web/net';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { buildClient } from '../client.js';
+import { resolveApi } from '../resolveApi.js';
 import type { Session } from '../session.js';
 
 interface PublishArgs {
-    readonly api: string;
+    readonly api?: string;
     readonly host: string;
     readonly ref: string;
 }
@@ -27,7 +28,7 @@ const REQUIRED_CONTRACTS: readonly string[] = [
  */
 export class PublishCommand extends BaseCommand {
     public readonly name = 'publish';
-    public readonly description = 'publish --api <id> --host <site-host> --ref <ref>: rebuild and redeploy an existing site';
+    public readonly description = 'publish --host <site-host> --ref <ref> [--api <id>]: rebuild and redeploy an existing site';
 
     constructor(private readonly session: Session) {
         super();
@@ -37,13 +38,13 @@ export class PublishCommand extends BaseCommand {
         program
             .command(this.name)
             .description(this.description)
-            .requiredOption('--api <id>', 'The serve.api this site attaches to')
+            .option('--api <id>', 'The serve.api this site attaches to -- defaults to the api you\'re logged into')
             .requiredOption('--host <host>', 'The site to republish')
             .requiredOption('--ref <ref>', 'The git ref to build every part at')
             .action(async (opts: PublishArgs) => this.execute(opts));
     }
 
-    protected async execute({ api: apiId, host, ref }: PublishArgs): Promise<void> {
+    protected async execute({ api, host, ref }: PublishArgs): Promise<void> {
         if (this.session.credential === undefined) {
             this.logger.error('Not logged in. Run "login" first.');
             return;
@@ -52,6 +53,7 @@ export class PublishCommand extends BaseCommand {
         const client = buildClient(this.session);
 
         try {
+            const { apiId } = await resolveApi(client, this.session, { api });
             for (const contract of REQUIRED_CONTRACTS) {
                 try {
                     await client.call('serve.expose.add', { apiId, contract, role: 'operator' });

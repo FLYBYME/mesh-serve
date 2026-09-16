@@ -43,15 +43,21 @@ const BOOTSTRAP_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
 
 /**
  * Exposed on the bootstrap api the first time it's created -- how a fresh install gets anyone in at
- * all, plus the two calls that let an operator start configuring more without anything pre-seeded by
- * hand. Kept minimal on purpose: register, log in, ask who you are, set a real password. Anything
- * else goes through explicit expose rows once something needs it.
+ * all, plus the calls that let an operator start configuring more without anything pre-seeded by
+ * hand. Kept minimal on purpose: register, log in, ask who you are, set a real password, and (for the
+ * same "configure more" reason as expose.add/remove) resolve an api's own id/tenant from its
+ * hostname -- `mesh-serve init`/`publish`/`generate` all need this just to point their first real
+ * call at the right api, and until this was added the only way to get it was a raw Mongo query.
+ * Public (no role): it's a read of non-sensitive routing data, the same standing `serve.cdn.
+ * resolveHost` already has for exactly the same "for a caller who has nothing else yet" reason.
+ * Anything else goes through explicit expose rows once something needs it.
  */
 const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'identity.user.register' },
     { contract: 'identity.ticket.issue' },
     { contract: 'identity.whoami' },
     { contract: 'identity.user.setPassword' },
+    { contract: 'serve.api.resolveByHost' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 ];

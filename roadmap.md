@@ -575,3 +575,17 @@ Verified live end to end, not just typechecked: a fresh node, first-boot bootstr
 a real kernel part from `mesh-web`'s `console-demo` ref and deploying it as a reachable site (`curl`
 200, correct asset hash), then `publish` rebuilding and redeploying that same site to a new artifact
 hash, confirmed by the served HTML changing to point at it.
+
+**Two more real gaps, found walking a fresh install through the CLI alone (no curl, no Mongo).**
+After a first-boot account is created it's `provisional` and can, per identity.service.ts's own
+printed message, "do nothing except set its own password" -- but `identity.user.setPassword` is
+bootstrap-exposed and nothing in the CLI ever called it, so the only way to claim the account was a
+hand-built curl. Added `mesh-serve claim [password]` (prompts with confirmation if omitted). Separately,
+`init`/`publish`/`generate` all required `--api <id>` (and `init` also `--tenant <id>`), and the only
+way to learn either was a raw Mongo query against `serve.api` for the api you were already logged
+into -- `serve.api.resolveByHost` exists and is `visibility: 'public'` but was never bootstrap-exposed.
+Added it to `BOOTSTRAP_EXPOSED_CONTRACTS` (public, matching `serve.cdn.resolveHost`'s own "for a
+caller who has nothing else yet" gate) and a shared `resolveApi()` helper so `--api`/`--tenant` are now
+optional overrides, defaulting to whatever api/tenant the CLI is currently logged into. Re-verified the
+whole bootstrap-to-deployed-site walkthrough end to end using only `mesh-serve` commands: `start` →
+`login` → `claim` → `init --org-slug <slug>` → `publish --host <host> --ref <ref>` -- no curl, no Mongo.

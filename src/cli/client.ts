@@ -8,6 +8,16 @@ export function originOf(apiHost: string): string {
 }
 
 /**
+ * `session.apiHost` carries a port for the transport (`switch api.localhost:5005`); `serve.api`'s own
+ * `apiHost` field never does (`BOOTSTRAP_API_HOST` is the bare hostname `resolveByHost` matches
+ * against). The inverse of `originOf` -- that one adds a scheme for `fetch`, this one strips
+ * everything `serve.api` doesn't store.
+ */
+export function hostnameOf(apiHost: string): string {
+    return apiHost.replace(/^https?:\/\//, '').split(':')[0] ?? apiHost;
+}
+
+/**
  * `switch`'s whole job: the origin is a runtime argument to the transport, not baked into the typed
  * surface, so one typed client can point at whichever host the session currently selects. Exposure
  * checking is off -- this client isn't a generated one guarding against a site's exposure moving out
