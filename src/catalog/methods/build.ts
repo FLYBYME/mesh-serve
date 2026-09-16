@@ -46,7 +46,12 @@ async function git(args: string[], cwd?: string): Promise<string> {
 async function ensureNpmInstall(dir: string): Promise<void> {
     if (!(await exists(path.join(dir, 'package.json')))) return;
     const hasLockfile = await exists(path.join(dir, 'package-lock.json'));
-    await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund'], {
+    // --omit=dev: esbuild only ever resolves what the entry point actually imports, and a repo's
+    // dev tooling is exactly the kind of thing that assumes a full working checkout -- a sibling
+    // `file:../mesh-serve` devDependency, real in a normal clone, has no "sibling" in this builder's
+    // isolated per-repo workdir (~/.mesh/repos/<repoId>) and fails `npm ci` outright before esbuild
+    // ever runs, for a package the build was never going to import anyway.
+    await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund', '--omit=dev'], {
         cwd: dir,
         // npm's own install log easily clears the default 1MB maxBuffer on a real dependency tree;
         // this only needs to not throw, the output itself is never read.

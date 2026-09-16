@@ -10,7 +10,10 @@ export async function whoami(
     ctx: IServiceContext
 ): Promise<WhoamiOutput> {
     const userId = ctx.meta?.user?.id;
-    if (userId === undefined) {
+    // '' is api.service.ts's own stand-in for "no caller" (ApiService.handleRequest always
+    // resolves a tenant scope now, even anonymously, so it can no longer signal "no caller" by
+    // leaving meta.user absent entirely) -- treated the same as an absent id.
+    if (userId === undefined || userId === '') {
         throw new MeshError({ message: 'No caller.', code: 'UNAUTHENTICATED', status: 401 });
     }
     const user = await ctx.call('identity.user.resolve', { id: userId });

@@ -428,13 +428,17 @@ export class ApiService extends ServiceModule {
 
         const input = await this.parseInput(req, route.params);
 
-        // Tools like identity.whoami read ctx.meta.user.id, so an anonymous ctx.call is not the
-        // same call a caller made. tenant_id defaults to the target's own owning tenant -- the only
-        // exception is an operator explicitly naming a different one (resolveEffectiveTenantId).
+        // tenant_id is always known here -- it's the api's own owning tenant (or an operator's
+        // explicit override, resolveEffectiveTenantId) -- regardless of whether the caller is.
+        // meta used to be `undefined` outright for an anonymous caller, which meant a scoped
+        // collection exposed with NO role/permission gate (genuinely, deliberately public) still
+        // 401'd for anyone not signed in: DatabaseMiddleware requires *some* resolved scope before
+        // it will even run a gate-free find, and an absent meta can never resolve one. `id: ''`
+        // for an anonymous caller resolves to nothing under resolveCallerScope's own `.length > 0`
+        // check, so a userId-scoped collection (e.g. identity.membership) still correctly refuses
+        // anonymous access; tools like identity.whoami that need a real caller check `=== ''` too.
         const effectiveTenantId = await this.resolveEffectiveTenantId(caller, target.tenantId, input);
-        const meta = caller === undefined
-            ? undefined
-            : { user: { id: caller.userId, tenant_id: effectiveTenantId } };
+        const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId } };
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already
         // confirmed globalContractRegistry has a matching public contract for it) -- the broker's

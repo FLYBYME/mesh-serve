@@ -499,3 +499,40 @@ for a brand-new tenant that has no api exposing these calls yet has no path in a
 here — needs a deliberate decision (an operator-aware unscoped resolve, matching
 `serve.api.resolveById`'s own pattern, vs. requiring the target tenant's api to exist and be used
 directly) rather than a quick patch.
+
+**A gate-free (deliberately public) scoped collection 401'd for every anonymous caller, always.**
+`ApiService.handleRequest` set `meta` to `undefined` outright whenever `resolveCaller` found no
+bearer token, on the reasoning that "no caller" and "no meta" were the same fact. They are not:
+`target.tenantId` (the api's own owning tenant) is known regardless of who's asking, and
+`DatabaseMiddleware` hard-refuses to run *any* action on a scoped collection — including a `find`
+the site marked public with no role/permission — without a resolved scope in `ctx.meta`. So `serve.
+repo.find` exposed with no gate, or flowboard's `project.find`/`card.find`/`sprint.find` (same
+pattern), 401'd for a signed-out visitor even though nothing about the exposure said it should.
+Found live: flow.localhost's board loaded but every collection read failed for a not-yet-signed-in
+visitor.
+
+Fixed by always building `meta.user` with a resolved `tenant_id`, using `id: ''` in place of a real
+caller — `resolveCallerScope`'s own `.length > 0` check already treats an empty string as
+unresolved, so a *userId*-scoped collection (`identity.membership`) still correctly refuses
+anonymous access; only tenant-scoped, gate-free reads are unblocked. Two tools that used to check
+`ctx.meta?.user?.id === undefined` to detect "no caller" (`identity.whoami`, `identity.user.
+setPassword`) needed the same `=== ''` addition, since `meta.user` is no longer absent, just empty.
+Regression test in `test/bootstrap.integration.test.ts` (fails without the fix, confirmed by revert).
+
+**`ensureNpmInstall` needed `--omit=dev`.** A repo's own dev tooling can carry a `file:../sibling`
+devDependency that only resolves in a normal working-directory checkout — the catalog builder's
+isolated per-repo workdir (`~/.mesh/repos/<repoId>`) has no such sibling, and `npm ci` refuses the
+whole install over one unresolvable *dev* dependency for a package the build was never going to
+import. `--omit=dev` is correct in general, not just for this case: esbuild only ever resolves what
+the entry point actually imports, so a repo's own test/CLI tooling should never be able to block a
+production bundle from building at all. Found building mesh-core's `ui`/`auth` extensions
+(`@flybyme/mesh-serve: file:../mesh-serve` in `devDependencies`).
+
+**No real-time `/api/events` endpoint exists.** flowboard's generated client (and console's own,
+by the same convention) declares a live-update `events` list and mesh-web's `net/eventsource.ts`
+expects to open one — `ApiService` has never implemented an SSE (or any) `/api/events` route at
+all. Every collection read still works as a one-shot `find`; nothing crashes, a board just never
+updates itself when another tab or agent writes to it without a manual reload. Not attempted here —
+a real streaming endpoint is its own piece of work (source: which of a site's *scoped* collections'
+`created`/`updated` events a specific connected, authenticated caller may actually receive, matching
+`checkGate`'s own role/permission logic per event rather than per call).

@@ -353,4 +353,24 @@ describe('a fresh install, booted for real', () => {
         const site = await json(createSiteRes) as { tenantId: string };
         expect(site.tenantId).toBe(organizationId);
     });
+
+    it('a scoped collection exposed with no role/permission gate is readable with no credential at all', async () => {
+        // serve.repo is scopedBy tenantId and find/get/count are mesh-level public; exposing it with
+        // no role means the site intends anonymous reads. Before this fix, ApiService.handleRequest
+        // set meta to undefined outright for a caller-less request, so DatabaseMiddleware's "requires
+        // a resolved scope" guard 401'd every gate-free scoped read anyway -- found live, porting
+        // flowboard, when its board 401'd on card.find/project.find/sprint.find for a signed-out
+        // visitor despite none of them being role-gated.
+        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ apiId, contract: 'serve.repo.find' }),
+        });
+        expect(exposeRes.status).toBe(200);
+
+        const anonRes = await fetch(`${API_ORIGIN}/api/repos`);
+        expect(anonRes.status).toBe(200);
+        const rows = await json(anonRes) as { tenantId: string }[];
+        expect(rows.every((r) => r.tenantId === organizationId)).toBe(true);
+    });
 });
