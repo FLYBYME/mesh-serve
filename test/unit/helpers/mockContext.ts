@@ -1,4 +1,5 @@
 import type { IServiceContext, IServiceBroker } from '@flybyme/mesh';
+import { Logger, LogLevel, ServiceBroker } from '@flybyme/mesh';
 
 export interface MockContextOptions {
     meta?: Record<string, any>;
@@ -28,8 +29,22 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
         emitted.push({ event, params, options: emitOptions });
     };
 
+    // A mock has no real registry, so there's no "leader" to route to -- callOnLeader just calls
+    // directly, same as `call`. acquire/release/withLock borrow a real ServiceBroker purely for
+    // its lock implementation (pure in-memory, no network/registry needed to work), so code under
+    // test that uses withLock gets real TTL/fencing-token semantics in a unit test too, not a stub
+    // that silently no-ops and could hide a real locking bug.
+    const lockBroker = new ServiceBroker('mock-node', new Logger(LogLevel.ERROR));
+
+    const callOnLeaderFn = async (_domain: string, action: string, params: any, callOptions?: any) =>
+        callFn(action, params, callOptions);
+
     const broker = {
         call: callFn,
+        callOnLeader: callOnLeaderFn,
+        acquire: (key: string, lockOptions?: any) => lockBroker.acquire(key, lockOptions),
+        release: (key: string, token: string) => lockBroker.release(key, token),
+        withLock: (key: string, fn: () => Promise<any>, lockOptions?: any) => lockBroker.withLock(key, fn, lockOptions),
         emit: emitFn,
         logger: {
             debug: () => {},
@@ -46,6 +61,10 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
         correlationId: 'mock-correlation-id',
         meta: options.meta ?? {},
         call: callFn,
+        callOnLeader: callOnLeaderFn,
+        acquire: (key: string, lockOptions?: any) => lockBroker.acquire(key, lockOptions),
+        release: (key: string, token: string) => lockBroker.release(key, token),
+        withLock: (key: string, fn: () => Promise<any>, lockOptions?: any) => lockBroker.withLock(key, fn, lockOptions),
         emit: emitFn,
         logger: {
             debug: () => {},

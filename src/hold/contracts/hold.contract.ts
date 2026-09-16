@@ -51,6 +51,10 @@ export const holdDecideContract = defineContract({
     rest: { method: 'POST', path: '/hold/decide' },
     visibility: 'public',
     dependencies: ['serve.hold'],
+    // Two concurrent decide calls on the same hold (a double-click, a retried request) could both
+    // pass the "still held" check before either writes -- leaderScoped + withLock (in decide.ts)
+    // close that the same way infer.provider.acquire/release do.
+    leaderScoped: true,
     print: (o) => `${o.holdId}: ${o.status}`,
 });
 
