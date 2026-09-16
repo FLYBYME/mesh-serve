@@ -19,13 +19,33 @@ const BACKSPACE_CHARS = new Set(['\b', String.fromCharCode(127)]);
  */
 const iterators = new WeakMap<readline.Interface, AsyncIterator<string>>();
 
-function nextLine(rl: readline.Interface): Promise<string> {
+function getIterator(rl: readline.Interface): AsyncIterator<string> {
     let it = iterators.get(rl);
     if (it === undefined) {
         it = rl[Symbol.asyncIterator]();
         iterators.set(rl, it);
     }
-    return it.next().then((result) => result.value ?? '');
+    return it;
+}
+
+/**
+ * Attach the shared async iterator immediately, before any `await` with no `question()` in it runs.
+ *
+ * Lazy attachment (on first `question()` call) is fine when nothing happens before that first call --
+ * `login`'s two questions are back to back. It breaks the moment a command does awaited work first
+ * (a self-heal `expose.add` loop, a lookup) with piped, non-TTY stdin: readline's own input stream can
+ * reach EOF and close while nobody is listening yet, and requesting the async iterator *after* that
+ * close resolves every `.next()` against a dead source -- `question()` prints its prompt and then
+ * hangs forever, with no error. Reproduced directly (`await`s before the first `question()` vs. calling
+ * `warm()` first) before writing this. Call this right after `readline.createInterface(...)` in any
+ * command that does async work before its first prompt.
+ */
+export function warm(rl: readline.Interface): void {
+    getIterator(rl);
+}
+
+function nextLine(rl: readline.Interface): Promise<string> {
+    return getIterator(rl).next().then((result) => result.value ?? '');
 }
 
 export function question(rl: readline.Interface, query: string): Promise<string> {

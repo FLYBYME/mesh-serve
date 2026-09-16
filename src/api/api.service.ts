@@ -369,6 +369,31 @@ export class ApiService extends ServiceModule {
         });
     }
 
+    /**
+     * `mesh-web/net`'s own `toRequest` (the encoding side of this) JSON-stringifies any object or
+     * array input value into its GET query string -- `query: { partId }` becomes `?query=%7B...%7D`,
+     * a CrudParamsSchema `fields`/`sort` array becomes `?fields=%5B...%5D` -- because a `URLSearchParams`
+     * value can only ever be a plain string. This is the decode half, and until now it did not exist:
+     * every value came back as the raw string, so any find/find_one call that actually needed a
+     * `query` filter (or a multi-value `fields`/`sort`) over real HTTP failed schema validation
+     * ("Expected object, received string") -- found live wiring `mesh-serve init`'s build-status poll
+     * (`serve.artifact.find` with `{ query: { partId } }`) through the CLI's real generated-style
+     * client for the first time; every find call before this either passed no filter at all or was
+     * made through an in-process `ctx.call`, which never serializes to a query string to begin with.
+     * A plain string that only looks numeric or boolean is left alone -- only a value that actually
+     * round-trips to an object or array is treated as intentionally encoded, so an ordinary scalar
+     * filter (a `contract` key, a `host`) is never misinterpreted.
+     */
+    private decodeQueryValue(value: string): unknown {
+        if (value.length === 0 || (value[0] !== '{' && value[0] !== '[')) return value;
+        try {
+            const parsed: unknown = JSON.parse(value);
+            return typeof parsed === 'object' && parsed !== null ? parsed : value;
+        } catch {
+            return value;
+        }
+    }
+
     private async parseInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
         const method = (req.method ?? 'GET').toUpperCase();
 
@@ -376,7 +401,7 @@ export class ApiService extends ServiceModule {
             const url = new URL(req.url ?? '/', 'http://localhost');
             const query: Record<string, unknown> = {};
             for (const [key, value] of url.searchParams) {
-                query[key] = value;
+                query[key] = this.decodeQueryValue(value);
             }
             return { ...query, ...params };
         }

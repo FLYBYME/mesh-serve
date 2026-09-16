@@ -536,3 +536,42 @@ updates itself when another tab or agent writes to it without a manual reload. N
 a real streaming endpoint is its own piece of work (source: which of a site's *scoped* collections'
 `created`/`updated` events a specific connected, authenticated caller may actually receive, matching
 `checkGate`'s own role/permission logic per event rather than per call).
+
+**Added `mesh-serve init`/`publish`, and found three more real bugs building them.** The One SDK
+plan's Part 5 (resume the console port) turned out to already be waiting on this: mesh-operator's
+own `composeConsole.ts` names it directly — `site.seed`'s single-call convenience was deleted before
+this session's rebuild because stacking repo/part/build/compose/deploy behind one server-side
+contract made the steps unobservable and hard to retry from the middle. `init` (a wizard) and
+`publish` (rebuild+recompose+redeploy an existing site) rebuild that convenience client-side, over
+the real primitives, using the same generated-style typed client (`src/cli/api.ts`, extended) every
+other CLI command already uses. Driving them against a real, freshly-bootstrapped node surfaced:
+
+- **Piped, non-interactive stdin silently hangs if any `await` runs before the first `question()`.**
+  `prompt.ts`'s shared async iterator was created lazily, on first use — fine when nothing happens
+  first (`login`'s two questions are back to back), but `init`'s self-heal `expose.add` loop runs
+  several awaited HTTP calls *before* its first prompt, and on piped input the readline stream can
+  reach EOF and close before anything ever asks for the iterator; requesting it afterward resolves
+  every future `.next()` against a dead source with no error. Reproduced directly (delay before vs.
+  after the first `question()`) before fixing. Fixed with a new `warm(rl)`, called immediately after
+  `readline.createInterface(...)` in any command whose first prompt isn't also its first line.
+- **A GET `find`/`find_one` call with an object `query` filter never worked over real HTTP, for
+  anyone, ever.** `mesh-web/net`'s client-side `toRequest` JSON-stringifies an object/array input
+  value into the query string (`query: { partId }` → `?query=%7B...%7D`) — correct encoding, but
+  `ApiService.parseInput`'s GET branch took every query-string value as a literal string with no
+  decode step, so the schema saw `"query": "{\"partId\":...}"` and rejected it ("Expected object,
+  received string"). Never caught before because every find call anywhere in this codebase either
+  passed no filter (relying on defaults) or ran through an in-process `ctx.call`, which is a real JS
+  object end to end and never touches a query string. Fixed with a symmetric decode (`decodeQueryValue`):
+  a query-string value is JSON-parsed and used only if the result is actually an object or array,
+  so an ordinary scalar filter is never misinterpreted.
+- **`--omit=dev` (this file, one entry up) broke the very first repo it was tried against for real.**
+  mesh-web's `package.json` has `"prepare": "npm run build"` (its own `tsc`), which `npm ci` runs
+  automatically — and fails outright once `--omit=dev` removes `typescript`. esbuild bundles straight
+  from a part's `.ts` source and was never going to read that lifecycle script's output anyway.
+  Fixed by adding `--ignore-scripts` alongside `--omit=dev`, which was always the correct pairing:
+  skip a checkout's own build tooling entirely rather than merely its resolution.
+
+Verified live end to end, not just typechecked: a fresh node, first-boot bootstrap, `init` building
+a real kernel part from `mesh-web`'s `console-demo` ref and deploying it as a reachable site (`curl`
+200, correct asset hash), then `publish` rebuilding and redeploying that same site to a new artifact
+hash, confirmed by the served HTML changing to point at it.

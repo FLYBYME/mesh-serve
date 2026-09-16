@@ -51,7 +51,13 @@ async function ensureNpmInstall(dir: string): Promise<void> {
     // `file:../mesh-serve` devDependency, real in a normal clone, has no "sibling" in this builder's
     // isolated per-repo workdir (~/.mesh/repos/<repoId>) and fails `npm ci` outright before esbuild
     // ever runs, for a package the build was never going to import anyway.
-    await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund', '--omit=dev'], {
+    // --ignore-scripts: omitting devDependencies broke a *different* repo the first time this ran
+    // for real against one -- mesh-web's own package.json has `"prepare": "npm run build"` (tsc,
+    // producing its own dist/), which `npm ci` runs automatically and which then fails outright
+    // ("tsc: not found") because tsc is itself a devDependency this just omitted. esbuild bundles
+    // straight from source (entryPoint is always a .ts file under src/, never a repo's own dist/),
+    // so no lifecycle script's output was ever going to be used regardless of whether it succeeded.
+    await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund', '--omit=dev', '--ignore-scripts'], {
         cwd: dir,
         // npm's own install log easily clears the default 1MB maxBuffer on a real dependency tree;
         // this only needs to not throw, the output itself is never read.
