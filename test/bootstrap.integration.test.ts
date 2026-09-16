@@ -238,6 +238,42 @@ describe('a fresh install, booted for real', () => {
         expect(source).toContain('z.object(');
     });
 
+    it('an operator naming an explicit tenantId creates the row in that tenant, not the api\'s own', async () => {
+        const exposeApiCreateRes = await fetch(`${API_ORIGIN}/api/expose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ apiId, contract: 'serve.api.create', role: 'operator' }),
+        });
+        expect(exposeApiCreateRes.status).toBe(200);
+
+        const exposeOrgCreateRes = await fetch(`${API_ORIGIN}/api/expose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ apiId, contract: 'identity.organization.create' }),
+        });
+        expect(exposeOrgCreateRes.status).toBe(200);
+
+        const createOrgRes = await fetch(`${API_ORIGIN}/api/organizations`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: 'Flow', slug: 'flow', ownerId: operatorUserId }),
+        });
+        expect(createOrgRes.status).toBe(200);
+        const flowOrg = await json(createOrgRes) as { id: string };
+
+        // Calling through Platform's own api, but naming Flow's org explicitly -- without the
+        // operator override this would silently land as tenantId === organizationId (Platform's),
+        // the exact bootstrap deadlock this fix closes.
+        const createApiRes = await fetch(`${API_ORIGIN}/api/apis`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ tenantId: flowOrg.id, apiHost: 'flow-api.localhost' }),
+        });
+        expect(createApiRes.status).toBe(200);
+        const flowApi = await json(createApiRes) as { tenantId: string };
+        expect(flowApi.tenantId).toBe(flowOrg.id);
+    });
+
     it('a site created with a real apiId links to a real serve.api, not a duplicated hostname string', async () => {
         const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
             method: 'POST',
@@ -265,5 +301,36 @@ describe('a fresh install, booted for real', () => {
         expect(createSiteRes.status).toBe(200);
         const site = await json(createSiteRes) as { apiId: string };
         expect(site.apiId).toBe(apiId);
+    });
+
+    it('a non-operator\'s explicit tenantId is silently ignored, not honored or rejected', async () => {
+        const issueRes = await fetch(`${API_ORIGIN}/api/identity/ticket`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'nobody@example.com', password: 'not-an-operator-12' }),
+        });
+        const { token } = await json(issueRes) as { token: string };
+
+        // serve.cdn.create is exposed with no role gate (previous test) -- reaches
+        // resolveEffectiveTenantId with a real, signed-in, non-operator caller.
+        const createSiteRes = await fetch(`${API_ORIGIN}/api/sites`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+                host: 'nobody-site.localhost',
+                apiId,
+                mcpHost: 'nobody-site-mcp.localhost',
+                tenantId: 'not-a-real-tenant-id',
+                application: 'platform/nobody-site',
+                policy: {},
+                theme: {},
+                title: 'Nobody Site',
+                description: '',
+                indexable: false,
+            }),
+        });
+        expect(createSiteRes.status).toBe(200);
+        const site = await json(createSiteRes) as { tenantId: string };
+        expect(site.tenantId).toBe(organizationId);
     });
 });

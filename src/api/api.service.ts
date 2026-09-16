@@ -326,6 +326,40 @@ export class ApiService extends ServiceModule {
         }
     }
 
+    /**
+     * Every scoped-by-tenantId collection's create/find/etc. is normally locked to the api being
+     * called through (DatabaseMiddleware's own createData[scopedBy] = callerScope, unconditional --
+     * mesh is frozen, this is not a place to patch). That lock is what stops any caller from writing
+     * into a tenant they didn't call through, and it must stay unconditional for everyone else.
+     *
+     * The one deliberate exception: identity.hasRole treats account-level roles ("operator") as king,
+     * applying everywhere regardless of which org you're calling through (methods/roles.ts). An
+     * operator naming an explicit tenantId in the request body is trusted the same way -- checked
+     * fresh, every call, against the *account* role (never a membership role, which could be
+     * tenant-local and forged-adjacent by joining the wrong org). A non-operator's tenantId field is
+     * silently ignored, not rejected, so this can never turn into a signal an attacker can probe.
+     */
+    private async resolveEffectiveTenantId(
+        caller: Caller | undefined,
+        targetTenantId: string,
+        input: Record<string, unknown>,
+    ): Promise<string> {
+        if (caller === undefined) return targetTenantId;
+
+        const requested = input.tenantId;
+        if (typeof requested !== 'string' || requested === '' || requested === targetTenantId) {
+            return targetTenantId;
+        }
+
+        const meta = { user: { id: caller.userId, tenant_id: targetTenantId } };
+        const result = await this.broker.call('identity.hasRole', {
+            userId: caller.userId,
+            role: 'operator',
+            organizationId: targetTenantId,
+        }, { meta });
+        return result.granted ? requested : targetTenantId;
+    }
+
     private readBody(req: http.IncomingMessage): Promise<string> {
         return new Promise((resolve, reject) => {
             let data = '';
@@ -395,10 +429,12 @@ export class ApiService extends ServiceModule {
         const input = await this.parseInput(req, route.params);
 
         // Tools like identity.whoami read ctx.meta.user.id, so an anonymous ctx.call is not the
-        // same call a caller made. tenant_id is the target's own owning tenant.
+        // same call a caller made. tenant_id defaults to the target's own owning tenant -- the only
+        // exception is an operator explicitly naming a different one (resolveEffectiveTenantId).
+        const effectiveTenantId = await this.resolveEffectiveTenantId(caller, target.tenantId, input);
         const meta = caller === undefined
             ? undefined
-            : { user: { id: caller.userId, tenant_id: target.tenantId } };
+            : { user: { id: caller.userId, tenant_id: effectiveTenantId } };
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already
         // confirmed globalContractRegistry has a matching public contract for it) -- the broker's
