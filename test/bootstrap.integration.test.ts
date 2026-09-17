@@ -134,6 +134,21 @@ describe('a fresh install, booted for real', () => {
         expect(keys).toContain('identity.user.setPassword');
     });
 
+    it('answers serve.api.describe with the same descriptor shape, real JSON Schema and destructive flags included', async () => {
+        const res = await fetch(`${API_ORIGIN}/api/apis/host/api.localhost/describe`);
+        expect(res.status).toBe(200);
+        const descriptor = await json(res) as {
+            host: string;
+            calls: { key: string; destructive?: boolean; input: unknown }[];
+        };
+        expect(descriptor.host).toBe('api.localhost');
+        const setPassword = descriptor.calls.find((c) => c.key === 'identity.user.setPassword');
+        expect(setPassword).toBeDefined();
+        expect(setPassword?.input).toBeTruthy();
+        const exposeAdd = descriptor.calls.find((c) => c.key === 'serve.expose.add');
+        expect(exposeAdd?.destructive).toBe(true);
+    });
+
     it('404s a request missing the /api prefix -- the routing mismatch this session found and fixed', async () => {
         const res = await fetch(`${API_ORIGIN}/identity/whoami`);
         expect(res.status).toBe(404);

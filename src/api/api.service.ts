@@ -5,7 +5,7 @@ import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybym
 
 import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
 import { wantCrud } from './contracts/want.contract.js';
-import { apiCrud, apiResolveByIdContract, apiResolveByHostContract } from './contracts/api.contract.js';
+import { apiCrud, apiResolveByIdContract, apiResolveByHostContract, apiDescribeContract } from './contracts/api.contract.js';
 import { generateClientContract } from './contracts/generateClient.contract.js';
 import { buildDescriptor, API_BASE } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
@@ -14,6 +14,7 @@ import { remove } from './tools/remove.js';
 import { resolveApiById } from './tools/resolveApiById.js';
 import { resolveApiByHost } from './tools/resolveApiByHost.js';
 import { generateClient } from './tools/generateClient.js';
+import { describe } from './tools/describe.js';
 import type { Api } from './contracts/api.contract.js';
 
 interface Caller {
@@ -95,6 +96,10 @@ const HOLD_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'serve.hold.find', role: 'operator' },
     { contract: 'serve.hold.get', role: 'operator' },
     { contract: 'serve.hold.decide', role: 'operator' },
+    // Public, on every api: the same descriptor _describe already reveals unauthenticated (real
+    // JSON Schema + destructive per call) -- reachable by ctx.call for a peer that isn't an HTTP
+    // client. Gating it further than _describe already is would add friction, not safety.
+    { contract: 'serve.api.describe' },
 ];
 
 export class ApiService extends ServiceModule {
@@ -111,6 +116,7 @@ export class ApiService extends ServiceModule {
         this.mountCrud(wantCrud);
         this.mountTool(apiResolveByIdContract, resolveApiById);
         this.mountTool(apiResolveByHostContract, resolveApiByHost);
+        this.mountTool(apiDescribeContract, describe);
         this.mountTool(exposeAddContract, add);
         this.mountTool(exposeRemoveContract, remove);
         this.mountTool(generateClientContract, generateClient);
