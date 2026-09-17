@@ -34,7 +34,7 @@ export async function decide(
         }
 
         const decidedBy = ctx.meta?.user?.id ?? '';
-        const decidedAt = new Date().toISOString();
+        const decidedAt = new Date();
 
         if (!input.approved) {
             await ctx.call('serve.hold.update', {

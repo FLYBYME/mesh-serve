@@ -571,9 +571,9 @@ export class ApiService extends ServiceModule {
             host: target.host,
             input,
             requestedBy: { userId: caller.userId, agent: caller.agentName, roles: [...caller.roles] },
-            requestedAt: new Date(now).toISOString(),
+            requestedAt: new Date(now),
             status: 'held',
-            expiresAt: new Date(now + ApiService.HOLD_TTL_MS).toISOString(),
+            expiresAt: new Date(now + ApiService.HOLD_TTL_MS),
         }, { meta: { tenant_id: tenantId } });
     }
 }

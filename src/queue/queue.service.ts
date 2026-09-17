@@ -1,32 +1,27 @@
-import { Database, ServiceModule } from '@flybyme/mesh';
+import { ServiceModule } from '@flybyme/mesh';
 import type { IServiceBroker, IServiceToolRegistry } from '@flybyme/mesh';
 
-import { queueCrud, type QueueJob } from './contracts/queue.contract.js';
+import { queueCrud, queueClaimContract, type QueueJob } from './contracts/queue.contract.js';
+import { claim } from './tools/claim.js';
 
 /**
- * Generic job queue: claim (atomic, lease-based), dispatch under the original caller's identity,
- * retry with backoff, reclaim an abandoned lease. Built to replace two separate half-versions of
- * this that already existed -- catalog.service.ts's watchRelease (60s sweep, one build at a time,
- * no lease, a crash leaves a row at 'running' forever) and an older standalone JobQueueService
- * (single-job-per-tick, a plain by-id update with no precondition claiming to be "atomic" when it
- * wasn't, a 30s lease hardcoded regardless of the job's own timeout). Neither consumer has been
- * moved onto this yet -- that's a separate, deliberate follow-up, not done here.
+ * Generic job queue: claim (leader-pinned, lock-serialized, no database-specific atomicity
+ * assumed), dispatch under the original caller's identity, retry with backoff. Built to replace
+ * two separate half-versions of this that already existed -- catalog.service.ts's watchRelease
+ * (60s sweep, one build at a time, no lease, a crash leaves a row at 'running' forever) and an
+ * older standalone JobQueueService (single-job-per-tick, a plain by-id update with no precondition
+ * claiming to be "atomic" when it wasn't, a 30s lease hardcoded regardless of the job's own
+ * timeout). Neither consumer has been moved onto this yet -- that's a separate, deliberate
+ * follow-up, not done here.
+ *
+ * Claiming (tools/claim.ts) is the only leader-pinned, lock-serialized step -- running a claimed
+ * job (`run`, below) is neither of those things and never has been: every node keeps running its
+ * own claimed jobs fully in parallel, on its own tick loop. Claiming is cheap and needs exactly one
+ * process deciding at a time; running is the actual work, and that's exactly what should scale
+ * across the cluster.
  */
 export class QueueService extends ServiceModule {
     public readonly domain = 'serve.queue';
-
-    /** How far past a job's own timeoutMs its lease extends -- long enough that a legitimately
-     *  slow-but-still-running call is never reclaimed out from under itself. */
-    private static readonly LEASE_SLACK_MS = 5_000;
-
-    /**
-     * The claim step's own initial lease, before the job's real timeoutMs is known (see claim()).
-     * Deliberately generous: this only has to survive the instant between the claiming
-     * findOneAndUpdate and the immediately-following correction to the job's real lease, not
-     * protect the job for its whole run. A job whose own timeoutMs exceeds this is still safe --
-     * the correction below sets the real, longer lease before this default one could ever expire.
-     */
-    private static readonly CLAIM_DEFAULT_LEASE_MS = 5 * 60_000;
 
     private broker!: IServiceBroker;
     private timer: NodeJS.Timeout | undefined;
@@ -36,6 +31,7 @@ export class QueueService extends ServiceModule {
         super();
 
         this.mountCrud(queueCrud);
+        this.mountTool(queueClaimContract, claim);
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
@@ -54,12 +50,14 @@ export class QueueService extends ServiceModule {
     /**
      * Tops up in-flight work to maxConcurrency, rather than leasing one job per tick -- the
      * predecessor's real bug wasn't the tick rate, it was that only one job was ever running at
-     * once. Claims fire sequentially within a tick (each is a fast single findOneAndUpdate), but
-     * the work they kick off runs concurrently: `run()` below is deliberately not awaited here.
+     * once. Claims fire sequentially within a tick (each is a fast dispatched call, not a direct
+     * method call anymore -- see tools/claim.ts for why that distinction is what makes leaderScoped
+     * apply to it at all), but the work they kick off runs concurrently: `run()` below is
+     * deliberately not awaited here.
      */
     private async tick(): Promise<void> {
         while (this.inFlight.size < this.maxConcurrency) {
-            const job = await this.claim();
+            const job = await this.broker.call('serve.queue.claim', {});
             if (job === undefined) return;
 
             this.inFlight.add(job.id);
@@ -71,52 +69,6 @@ export class QueueService extends ServiceModule {
                     this.inFlight.delete(job.id);
                 });
         }
-    }
-
-    /**
-     * The one atomic step. `serve.queue.update` (the generated crud action) takes an id and no
-     * other precondition, so it cannot express "only if still pending" -- that's exactly what a
-     * job-queue claim needs, and exactly what the predecessor's find-then-update pair didn't
-     * actually provide (two workers can both find_one the same row before either updates it). A
-     * raw findOneAndUpdate against the real collection is a single round trip to Mongo with the
-     * precondition baked into the filter, which is what makes this safe under real concurrency --
-     * multiple QueueService instances, not just multiple in-process claims.
-     */
-    private async claim(): Promise<QueueJob | undefined> {
-        const db = this.broker.getProvider<Database>('database');
-        const repo = db.repo(queueCrud.get.outputSchema, 'serve.queue');
-
-        const now = new Date();
-        const nowIso = now.toISOString();
-
-        const doc = await repo.rawCollection.findOneAndUpdate(
-            {
-                $or: [
-                    { status: 'pending', $or: [{ nextAttemptAt: { $exists: false } }, { nextAttemptAt: { $lte: nowIso } }] },
-                    { status: 'processing', lockedUntil: { $lt: nowIso } },
-                ],
-            },
-            {
-                $set: {
-                    status: 'processing',
-                    lockedUntil: new Date(now.getTime() + QueueService.CLAIM_DEFAULT_LEASE_MS).toISOString(),
-                },
-                $inc: { attempts: 1 },
-            },
-            { sort: { priority: -1, createdAt: 1 }, returnDocument: 'after' },
-        );
-        if (doc === null) return undefined;
-
-        const job = queueCrud.get.outputSchema.parse({ ...doc, id: String(doc._id ?? doc.id) });
-
-        // Correct the generous default lease above to the job's own real timeoutMs, now that it's
-        // known. Safe as a separate, unconditional-by-id update: this worker already owns the row
-        // (nothing else can match it -- status is 'processing' and the default lease hasn't
-        // lapsed), so there's nothing to race against.
-        const lockedUntil = new Date(now.getTime() + job.timeoutMs + QueueService.LEASE_SLACK_MS).toISOString();
-        await this.broker.call('serve.queue.update', { id: job.id, lockedUntil }, { meta: { tenant_id: job.tenantId } });
-
-        return { ...job, lockedUntil };
     }
 
     private async run(job: QueueJob): Promise<void> {
@@ -154,7 +106,7 @@ export class QueueService extends ServiceModule {
             const backoffMs = Math.min(1000 * job.attempts ** 2, 60_000);
             await this.broker.call('serve.queue.update', {
                 id: job.id, status: 'pending', error: message,
-                nextAttemptAt: new Date(Date.now() + backoffMs).toISOString(),
+                nextAttemptAt: new Date(Date.now() + backoffMs),
             }, { meta: { tenant_id: job.tenantId } });
             this.broker.logger.debug(`serve.queue: ${job.id} failed, retrying in ${backoffMs}ms`);
         }

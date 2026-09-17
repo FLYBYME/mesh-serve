@@ -31,9 +31,19 @@ export const queueSchema = z.object({
      * got reclaimed and re-dispatched while its first attempt was still legitimately in flight).
      */
     timeoutMs: z.number().default(30_000),
-    lockedUntil: z.string().optional().describe('ISO timestamp; a processing row past this is treated as abandoned and reclaimed'),
+    /**
+     * `z.coerce.date()`, not `z.string()` -- matching createdAt/updatedAt, not an accident. mesh's
+     * JSONSerializer revives any full-ISO-instant *string* crossing a network hop into a real
+     * `Date` (documented in JSONSerializer.ts: a rolling-upgrade-safe trade-off, not a bug), so a
+     * `z.string()` field storing one fails its own schema the moment a call carrying it crosses a
+     * real node boundary -- serve.queue.claim being leaderScoped means every claim from a
+     * non-leader node does exactly that. `z.coerce.date()` accepts a string OR a Date, so it's
+     * correct whichever one arrives, and matches the one pattern in this codebase already proven
+     * to survive a remote call (see mesh's own RemoteDateCall.spec.ts).
+     */
+    lockedUntil: z.coerce.date().optional().describe('A processing row past this is treated as abandoned and reclaimed'),
     /** Backoff: a failed row isn't eligible for reclaim again until this passes -- unset means
      *  eligible immediately (used only for the first attempt, never after a failure). */
-    nextAttemptAt: z.string().optional().describe('ISO timestamp'),
+    nextAttemptAt: z.coerce.date().optional(),
     error: z.string().optional(),
 }).describe('One dispatch of a contract call, claimed and leased rather than run inline');
