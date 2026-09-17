@@ -21,10 +21,19 @@
             "contract": "identity.user.register"
         },
         {
+            "contract": "infer.thread.find"
+        },
+        {
             "contract": "infer.thread.find_one"
         },
         {
             "contract": "infer.thread.create"
+        },
+        {
+            "contract": "infer.thread.update"
+        },
+        {
+            "contract": "infer.thread.delete"
         },
         {
             "contract": "infer.thread.prompt"
@@ -36,10 +45,31 @@
             "contract": "infer.provider.find_one"
         },
         {
+            "contract": "infer.model.find"
+        },
+        {
             "contract": "infer.model.find_one"
         },
         {
+            "contract": "infer.model.update"
+        },
+        {
+            "contract": "infer.model.delete"
+        },
+        {
+            "contract": "infer.provider.find",
+            "role": "operator"
+        },
+        {
             "contract": "infer.provider.create",
+            "role": "operator"
+        },
+        {
+            "contract": "infer.provider.update",
+            "role": "operator"
+        },
+        {
+            "contract": "infer.provider.delete",
             "role": "operator"
         },
         {
