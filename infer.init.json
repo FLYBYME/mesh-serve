@@ -1,0 +1,104 @@
+{
+    "org": "platform",
+    "api": "api-infer.localhost",
+    "host": "infer.localhost",
+    "compositionKey": "infer",
+    "title": "Infer",
+    "contracts": [
+        {
+            "contract": "identity.ticket.issue"
+        },
+        {
+            "contract": "identity.whoami"
+        },
+        {
+            "contract": "identity.ticket.signOut"
+        },
+        {
+            "contract": "identity.user.setPassword"
+        },
+        {
+            "contract": "identity.user.register"
+        },
+        {
+            "contract": "infer.thread.find_one"
+        },
+        {
+            "contract": "infer.thread.create"
+        },
+        {
+            "contract": "infer.thread.prompt"
+        },
+        {
+            "contract": "infer.message.find"
+        },
+        {
+            "contract": "infer.provider.find_one"
+        },
+        {
+            "contract": "infer.model.find_one"
+        },
+        {
+            "contract": "infer.provider.create",
+            "role": "operator"
+        },
+        {
+            "contract": "infer.model.create",
+            "role": "operator"
+        }
+    ],
+    "repos": [
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
+            "ref": "master",
+            "parts": [
+                {
+                    "name": "kernel",
+                    "kind": "kernel",
+                    "path": ".",
+                    "entryPoint": "src/index.ts",
+                    "imports": "@flybyme/mesh-web"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-core.git",
+            "ref": "rebuild",
+            "parts": [
+                {
+                    "name": "ui",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/ui/index.ts",
+                    "imports": "@flybyme/mesh-core/ui"
+                },
+                {
+                    "name": "auth",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/auth/index.ts",
+                    "imports": "@flybyme/mesh-core/auth"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-infer.git",
+            "ref": "master",
+            "parts": [
+                {
+                    "name": "app",
+                    "kind": "application",
+                    "path": ".",
+                    "entryPoint": "src/app/index.ts"
+                }
+            ]
+        }
+    ],
+    "service": {
+        "url": "/home/ubuntu/code/.git-remotes/mesh-infer.git",
+        "ref": "master",
+        "name": "server",
+        "path": ".",
+        "entryPoint": "src/infer/infer.service.ts"
+    }
+}
