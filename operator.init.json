@@ -29,6 +29,10 @@
             "role": "operator"
         },
         {
+            "contract": "serve.cdn.create",
+            "role": "operator"
+        },
+        {
             "contract": "serve.cdn.deploy",
             "role": "operator"
         },
@@ -38,6 +42,42 @@
         },
         {
             "contract": "serve.release.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.repo.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.repo.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.artifact.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.artifact.requestBuild",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.compose",
             "role": "operator"
         }
     ],

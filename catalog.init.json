@@ -98,7 +98,7 @@
     "repos": [
         {
             "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
-            "ref": "console-demo",
+            "ref": "master",
             "parts": [
                 {
                     "name": "kernel",
