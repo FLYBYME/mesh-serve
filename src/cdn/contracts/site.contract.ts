@@ -9,8 +9,10 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
         { fields: 'host', scope: 'global' },
         { fields: 'mcpHost', scope: 'global' },
     ],
+    // update: `mesh-serve init -c` reconciles an existing site's `open` array against the config's
+    // current application parts on a rerun -- same reasoning as serve.composition (composition.contract.ts).
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: [],
 });

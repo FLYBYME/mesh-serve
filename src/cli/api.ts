@@ -110,6 +110,9 @@ export const cliApi = defineApi({
         'serve.composition.compose': call<z.infer<typeof composeInputSchema>, z.infer<typeof composeOutputSchema>>(
             'POST', '/compositions/:id/compose',
         ),
+        'serve.composition.update': call<z.infer<typeof compositionCrud.update.inputSchema>, z.infer<typeof compositionCrud.update.outputSchema>>(
+            'PATCH', '/compositions/:id',
+        ),
         'serve.release.getRelease': call<z.infer<typeof getReleaseInputSchema>, z.infer<typeof getReleaseOutputSchema>>(
             'GET', '/releases/:hash',
         ),
@@ -121,6 +124,9 @@ export const cliApi = defineApi({
         ),
         'serve.cdn.resolveHost': call<z.infer<typeof resolveHostInputSchema>, z.infer<typeof resolveHostOutputSchema>>(
             'GET', '/sites/:host',
+        ),
+        'serve.cdn.update': call<z.infer<typeof siteCrud.update.inputSchema>, z.infer<typeof siteCrud.update.outputSchema>>(
+            'PATCH', '/sites/:id',
         ),
         'serve.part.start': call<z.infer<typeof partStartInputSchema>, z.infer<typeof partStartOutputSchema>>(
             'POST', '/parts/:id/start',

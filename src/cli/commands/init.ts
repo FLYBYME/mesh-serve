@@ -185,9 +185,11 @@ const REQUIRED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'serve.composition.create', role: 'operator' },
     { contract: 'serve.composition.find_one', role: 'operator' },
     { contract: 'serve.composition.compose', role: 'operator' },
+    { contract: 'serve.composition.update', role: 'operator' },
     { contract: 'serve.cdn.create', role: 'operator' },
     { contract: 'serve.cdn.resolveHost', role: 'operator' },
     { contract: 'serve.cdn.deploy', role: 'operator' },
+    { contract: 'serve.cdn.update', role: 'operator' },
     // No role: only read when --org-slug is omitted, to construct a valid part key -- see
     // BOOTSTRAP_EXPOSED_CONTRACTS's own comment on why this one is public.
     { contract: 'identity.organization.get' },
@@ -494,15 +496,25 @@ export class InitCommand extends BaseCommand {
         }
 
         this.logger.info('Composing...');
+        const wantedParts = nonKernel.map((p) => p.key);
         const composition = await this.findOrCreate(
             () => client.call('serve.composition.create', {
                 tenantId,
                 key: input.compositionKey,
                 kernelPartKey: kernel.key,
                 drivers: [],
-                parts: nonKernel.map((p) => p.key),
+                parts: wantedParts,
             }),
             () => client.call('serve.composition.find_one', { query: { tenantId, key: input.compositionKey } }),
+            async (existing) => {
+                const samePartSet = existing.parts.length === wantedParts.length
+                    && [...existing.parts].sort().every((k, i) => k === [...wantedParts].sort()[i]);
+                const drifted = existing.kernelPartKey !== kernel.key || !samePartSet;
+                if (!drifted) return existing;
+                return client.call('serve.composition.update', {
+                    id: existing.id, kernelPartKey: kernel.key, parts: wantedParts,
+                });
+            },
         );
         const release = await client.call('serve.composition.compose', { id: composition.id });
         this.logger.info(`  release ${release.hash} (${release.parts.length} parts pinned)`);
@@ -510,6 +522,7 @@ export class InitCommand extends BaseCommand {
         const applications = parts.filter((p) => p.kind === 'application');
 
         this.logger.info('Creating the site...');
+        const wantedOpen = applications.map((p) => ({ application: p.key }));
         const site = await this.findOrCreate(
             () => client.call('serve.cdn.create', {
                 tenantId,
@@ -517,7 +530,7 @@ export class InitCommand extends BaseCommand {
                 mcpHost: `mcp-${input.host}`,
                 application: input.compositionKey,
                 policy: {},
-                ...(applications.length > 0 ? { open: applications.map((p) => ({ application: p.key })) } : {}),
+                ...(wantedOpen.length > 0 ? { open: wantedOpen } : {}),
                 theme: {},
                 title: input.title,
                 description: '',
@@ -525,6 +538,14 @@ export class InitCommand extends BaseCommand {
                 maintenance: false,
             }),
             () => client.call('serve.cdn.resolveHost', { host: input.host }),
+            async (existing) => {
+                const existingApps = (existing.open ?? []).map((o) => o.application).sort();
+                const wantedApps = wantedOpen.map((o) => o.application).sort();
+                const sameOpen = existingApps.length === wantedApps.length
+                    && existingApps.every((a, i) => a === wantedApps[i]);
+                if (sameOpen) return existing;
+                return client.call('serve.cdn.update', { id: existing.id, open: wantedOpen });
+            },
         );
 
         const deployed = await client.call('serve.cdn.deploy', { siteId: site.id, releaseHash: release.hash });

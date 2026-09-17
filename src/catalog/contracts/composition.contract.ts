@@ -7,8 +7,12 @@ export const compositionCrud = defineCrud('serve.composition', compositionSchema
     pluralPath: 'compositions',
     scopedBy: 'tenantId',
     unique: [{ fields: 'key', scope: 'scoped' }],
+    // update: same reasoning as serve.repo/serve.part -- `mesh-serve init -c` reconciles a
+    // composition's declared parts/kernelPartKey against what's already there on a rerun. Found
+    // live: a part added to a config after the composition already existed silently never made it
+    // into the release, because findOrCreate had nothing to reconcile with on a conflict.
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: ['serve.part'],
 });
