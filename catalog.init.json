@@ -1,0 +1,132 @@
+{
+    "org": "platform",
+    "api": "api.localhost",
+    "host": "catalog.localhost",
+    "compositionKey": "catalog",
+    "title": "Catalog Manager",
+    "contracts": [
+        {
+            "contract": "identity.whoami"
+        },
+        {
+            "contract": "identity.ticket.issue"
+        },
+        {
+            "contract": "identity.ticket.signOut"
+        },
+        {
+            "contract": "serve.repo.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.repo.find_one",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.repo.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.repo.update",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.find_one",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.part.update",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.artifact.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.artifact.find_one",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.artifact.requestBuild",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.find_one",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.create",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.composition.compose",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.release.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.release.find_one",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.cdn.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.cdn.resolveHost",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.cdn.deploy",
+            "role": "operator"
+        }
+    ],
+    "repos": [
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
+            "ref": "console-demo",
+            "parts": [
+                {
+                    "name": "kernel",
+                    "kind": "kernel",
+                    "path": ".",
+                    "entryPoint": "src/index.ts",
+                    "imports": "@flybyme/mesh-web"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-demos.git",
+            "ref": "rebuild",
+            "parts": [
+                {
+                    "name": "catalog",
+                    "kind": "application",
+                    "path": ".",
+                    "entryPoint": "src/catalog/index.ts"
+                },
+                {
+                    "name": "theme",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/theme/index.ts",
+                    "imports": "@flybyme/mesh-demos/theme"
+                }
+            ]
+        }
+    ]
+}

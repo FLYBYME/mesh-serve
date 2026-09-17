@@ -1,0 +1,97 @@
+{
+    "org": "platform",
+    "api": "api.localhost",
+    "host": "console.localhost",
+    "compositionKey": "console",
+    "title": "Operator Console",
+    "contracts": [
+        {
+            "contract": "identity.ticket.issue"
+        },
+        {
+            "contract": "identity.ticket.signOut"
+        },
+        {
+            "contract": "identity.whoami"
+        },
+        {
+            "contract": "identity.user.setPassword"
+        },
+        {
+            "contract": "identity.user.register"
+        },
+        {
+            "contract": "identity.membership.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.cdn.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.cdn.deploy",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.expose.find",
+            "role": "operator"
+        },
+        {
+            "contract": "serve.release.find",
+            "role": "operator"
+        }
+    ],
+    "repos": [
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
+            "ref": "console-demo",
+            "parts": [
+                {
+                    "name": "kernel",
+                    "kind": "kernel",
+                    "path": ".",
+                    "entryPoint": "src/index.ts",
+                    "imports": "@flybyme/mesh-web"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-core.git",
+            "ref": "rebuild",
+            "parts": [
+                {
+                    "name": "ui",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/ui/index.ts",
+                    "imports": "@flybyme/mesh-core/ui"
+                },
+                {
+                    "name": "auth",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/auth/index.ts",
+                    "imports": "@flybyme/mesh-core/auth"
+                },
+                {
+                    "name": "chrome",
+                    "kind": "extension",
+                    "path": ".",
+                    "entryPoint": "src/chrome/index.ts"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-operator.git",
+            "ref": "master",
+            "parts": [
+                {
+                    "name": "console",
+                    "kind": "application",
+                    "path": ".",
+                    "entryPoint": "src/console/index.ts"
+                }
+            ]
+        }
+    ]
+}

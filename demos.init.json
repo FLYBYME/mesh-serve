@@ -1,0 +1,41 @@
+{
+    "org": "platform",
+    "api": "api.localhost",
+    "host": "demos.localhost",
+    "compositionKey": "demos",
+    "title": "demos",
+    "contracts": [],
+    "repos": [
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-web.git",
+            "ref": "console-demo",
+            "parts": [
+                {
+                    "name": "kernel",
+                    "kind": "kernel",
+                    "path": ".",
+                    "entryPoint": "src/index.ts",
+                    "imports": "@flybyme/mesh-web"
+                }
+            ]
+        },
+        {
+            "url": "/home/ubuntu/code/.git-remotes/mesh-demos.git",
+            "ref": "rebuild",
+            "parts": [
+                {
+                    "name": "clock",
+                    "kind": "application",
+                    "path": ".",
+                    "entryPoint": "src/clock/index.ts"
+                },
+                {
+                    "name": "calculator",
+                    "kind": "application",
+                    "path": ".",
+                    "entryPoint": "src/calc/index.ts"
+                }
+            ]
+        }
+    ]
+}
