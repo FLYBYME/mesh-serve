@@ -45,15 +45,17 @@ const DEFAULT_OUT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url
 
 /** Set once, at the top of main(), before any sync* function below (all of which read it) runs. */
 let site: SiteSpec;
+let force: boolean = false;
 
-function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string } {
+function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string; force: boolean } {
     let sitePath = DEFAULT_SITE_PATH;
     let outPath = DEFAULT_OUT_PATH;
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--site') sitePath = argv[++i] ?? sitePath;
         else if (argv[i] === '--out') outPath = argv[++i] ?? outPath;
+        else if (argv[i] === '--force') force = true;
     }
-    return { sitePath, outPath };
+    return { sitePath, outPath, force };
 }
 
 const AdminUser: RegisterInput = {
@@ -252,7 +254,7 @@ async function resolveRef(repo: RepoSpec, part: PartSpec): Promise<string> {
 /** Ensures each part has a successful artifact at its pinned/resolved commit -- building it if
  *  none exists yet, reusing ("linking") the existing one otherwise. Does not build the release
  *  itself; serve.composition.compose resolves each part's latest successful artifact on its own. */
-async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: Part[]): Promise<void> {
+async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: Part[], force: boolean): Promise<void> {
     const meta = { tenant_id: org.id };
 
     for (const part of parts) {
@@ -269,7 +271,7 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
             query: { tenantId: org.id, partId: part.id, ref, status: 'success' },
         }, { meta });
 
-        if (existing) {
+        if (existing && !force) {
             console.log(`Artifact cached for ${part.key}@${shortRef}, linking`, existing.id);
             continue;
         }
@@ -418,8 +420,18 @@ async function syncGeneratedClient(broker: IServiceBroker, org: Organization, co
     console.log('Generated client written', outPath, `(${generated.source.length} bytes)`);
 }
 
-async function main(): Promise<void> {
-    const { sitePath, outPath } = parseArgs(process.argv.slice(2));
+/**
+ * Applies one site spec end to end -- everything main() used to do inline. Exported so a caller
+ * that knows about more than one site (sync-all.ts) can run this in a loop instead of reimplementing
+ * orchestration a second time; sync.ts's own CLI (main(), below) is just the single-site case of
+ * this with argv-parsed arguments.
+ *
+ * `outPath` is optional here (main()'s own parseArgs still always resolves a concrete one, via
+ * DEFAULT_OUT_PATH, so single-site CLI behavior is unchanged) -- when absent, the site spec's own
+ * `generatedClientOut` is used, and if that's absent too, client generation is skipped rather than
+ * guessing a path that belongs to some other site's app.
+ */
+export async function syncSpec(sitePath: string, outPath?: string, force = false): Promise<void> {
     site = loadSite(sitePath);
     console.log('Site spec', sitePath);
 
@@ -433,7 +445,7 @@ async function main(): Promise<void> {
         const repos = await syncRepos(broker, org);
         const parts = await syncParts(broker, org, repos);
 
-        await syncArtifacts(broker, org, parts);
+        await syncArtifacts(broker, org, parts, force);
         await syncServices(broker, org, parts);
 
         const composition = await syncComposition(broker, org, parts);
@@ -443,18 +455,34 @@ async function main(): Promise<void> {
         await syncSite(broker, org, consoleApi, release.id, applications);
 
         await syncExposed(broker, org, consoleApi);
-        await syncGeneratedClient(broker, org, consoleApi, outPath);
+
+        const effectiveOut = outPath ?? site.generatedClientOut;
+        if (effectiveOut !== undefined) {
+            await syncGeneratedClient(broker, org, consoleApi, effectiveOut);
+        } else {
+            console.log('No generated-client output path (--out or the site spec\'s own generatedClientOut); skipping.');
+        }
     } finally {
         await mesh.stop();
     }
 }
 
-main().catch((err) => {
-    // Not console.error(err) directly: a MeshError crossing the remote boundary nests a full
-    // stack-trace string inside its own `cause.data.stack`, and a few hops of that (RPC ->
-    // rethrow -> this catch) is enough for util.inspect's pretty-printer to blow past V8's max
-    // string length and crash with an unrelated "RangeError: Invalid string length" -- hiding
-    // the real error behind a Node internals stack trace instead of showing it.
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
-});
+async function main(): Promise<void> {
+    const { sitePath, outPath, force } = parseArgs(process.argv.slice(2));
+    await syncSpec(sitePath, outPath, force);
+}
+
+// Only when run directly (`npx tsx src/sync.ts`), not when sync-all.ts imports syncSpec from this
+// module -- an unconditional call here ran this file's own CLI a second time, on import, for every
+// site sync-all.ts was trying to sync one at a time.
+if (import.meta.url === `file://${process.argv[1]}`) {
+    main().catch((err) => {
+        // Not console.error(err) directly: a MeshError crossing the remote boundary nests a full
+        // stack-trace string inside its own `cause.data.stack`, and a few hops of that (RPC ->
+        // rethrow -> this catch) is enough for util.inspect's pretty-printer to blow past V8's max
+        // string length and crash with an unrelated "RangeError: Invalid string length" -- hiding
+        // the real error behind a Node internals stack trace instead of showing it.
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+    });
+}

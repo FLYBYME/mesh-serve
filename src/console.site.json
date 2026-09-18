@@ -2,6 +2,7 @@
     "cdn": "console.localhost",
     "theme": "console-theme",
     "api": "console-api.localhost",
+    "generatedClientOut": "/home/ubuntu/code/mesh/mesh-operator/src/console/generated/api.ts",
     "repos": [
         {
             "name": "mesh-web",

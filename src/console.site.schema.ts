@@ -46,5 +46,12 @@ export const siteSpecSchema = z.object({
     repos: z.array(repoSpecSchema),
     parts: z.array(partSpecSchema),
     exposed: z.array(z.string()).describe('Every domain.action contract the api exposes'),
+    // Where sync.ts writes this site's generated client. A site declares its own, rather than a
+    // separate script maintaining a {site path -> out path} list that can drift the same way the
+    // hand-maintained `exposed` list already drifted once (console.site.json missing
+    // identity.ticket.signOut while git.site.json had it, found live) -- a --out CLI flag still
+    // overrides this for a one-off. Absent means "this site has no generated client to write"
+    // (not every site necessarily calls exposed contracts of its own).
+    generatedClientOut: z.string().min(1).optional().describe("Absolute path sync.ts writes this site's generated client to, unless --out overrides it"),
 }).describe('Everything details.ts needs to provision one site end to end');
 export type SiteSpec = z.infer<typeof siteSpecSchema>;
