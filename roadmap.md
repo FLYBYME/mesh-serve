@@ -694,3 +694,19 @@ never moved it. Fixed: when `origin/<ref>` exists, force the local branch to mat
 raw commit sha (no moving `origin/<ref>` to reconcile against) keeps the original plain `checkout`/
 `reset --hard` behavior, since forcing those into a same-named local branch would wrongly replace a
 tag's detached-HEAD checkout with an attached one.
+
+**`sync.ts`'s CLI silently overwrites the wrong site's generated client if you run it directly against
+anything but console.localhost.** `parseArgs`'s `outPath` defaults to `DEFAULT_OUT_PATH` --
+`mesh-operator/src/console/generated/api.ts`, hardcoded -- and `main()` always passes that concrete
+value to `syncSpec`, never `undefined`. So `effectiveOut = outPath ?? site.generatedClientOut` never
+falls through to the site's own declared path when invoked from the CLI: every `--site` argument
+still writes to mesh-operator's console client unless `--out` is given explicitly. `sync-all.ts`
+avoids this correctly (it calls `syncSpec(file, undefined, force)`, letting each site's own
+`generatedClientOut` govern), which is exactly why it went unnoticed until `sync.ts` was run by hand
+against a non-console site. Found live: `npx tsx src/sync.ts --site
+/home/ubuntu/code/company/sites/company.site.json --force` overwrote mesh-operator's real console
+client with one generated from company.site.json's much larger `exposed` list -- caught immediately
+only because console.localhost was checked right after, and fixed by re-running `sync.ts --site
+src/console.site.json` to restore it. `DEFAULT_OUT_PATH` should fall back to the site spec's own
+`generatedClientOut` the same way `syncSpec`'s own default parameter already does, rather than a
+second, contradicting default living in `parseArgs`.

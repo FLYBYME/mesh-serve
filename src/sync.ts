@@ -28,7 +28,6 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { IServiceBroker, IMeshApp, IServiceRegistry, z } from '@flybyme/mesh';
 import type { RegisterInput, User } from './identity/contracts/user.contract.js';
 import type { roleCrud } from './identity/contracts/role.contract.js';
@@ -40,16 +39,23 @@ import { loadSite, DEFAULT_SITE_PATH, type RepoSpec, type PartSpec, type SiteSpe
 
 type RoleType = z.infer<typeof roleCrud.baseSchema>;
 
-/** The default output before --out was added: the operator console's own generated client. */
-const DEFAULT_OUT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../mesh-operator/src/console/generated/api.ts');
-
 /** Set once, at the top of main(), before any sync* function below (all of which read it) runs. */
 let site: SiteSpec;
 let force: boolean = false;
 
-function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string; force: boolean } {
+/**
+ * `outPath` defaults to `undefined`, not some hardcoded path -- it used to default to the operator
+ * console's own generated client (`mesh-operator/src/console/generated/api.ts`), which meant running
+ * this CLI against *any other* site with no `--out` silently overwrote the console's client with one
+ * generated from that other site's `exposed` list. `syncSpec` already falls back to the site spec's
+ * own `generatedClientOut` when `outPath` is `undefined` (console.site.json declares its own, which
+ * is that same path) -- this only needs to stop shadowing that fallback with a second, contradicting
+ * default. Found live: `sync.ts --site company.site.json --force` overwrote the console's client;
+ * `roadmap.md` has the rest.
+ */
+function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string | undefined; force: boolean } {
     let sitePath = DEFAULT_SITE_PATH;
-    let outPath = DEFAULT_OUT_PATH;
+    let outPath: string | undefined;
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--site') sitePath = argv[++i] ?? sitePath;
         else if (argv[i] === '--out') outPath = argv[++i] ?? outPath;
@@ -426,10 +432,9 @@ async function syncGeneratedClient(broker: IServiceBroker, org: Organization, co
  * orchestration a second time; sync.ts's own CLI (main(), below) is just the single-site case of
  * this with argv-parsed arguments.
  *
- * `outPath` is optional here (main()'s own parseArgs still always resolves a concrete one, via
- * DEFAULT_OUT_PATH, so single-site CLI behavior is unchanged) -- when absent, the site spec's own
- * `generatedClientOut` is used, and if that's absent too, client generation is skipped rather than
- * guessing a path that belongs to some other site's app.
+ * `outPath` is optional here, and undefined by default from main()'s own parseArgs too now -- when
+ * absent, the site spec's own `generatedClientOut` is used, and if that's absent too, client
+ * generation is skipped rather than guessing a path that belongs to some other site's app.
  */
 export async function syncSpec(sitePath: string, outPath?: string, force = false): Promise<void> {
     site = loadSite(sitePath);
