@@ -53,5 +53,18 @@ export const siteSpecSchema = z.object({
     // overrides this for a one-off. Absent means "this site has no generated client to write"
     // (not every site necessarily calls exposed contracts of its own).
     generatedClientOut: z.string().min(1).optional().describe("Absolute path sync.ts writes this site's generated client to, unless --out overrides it"),
+    /**
+     * Values frozen into this deployment -- matches `serve.cdn`'s own `policy` field and mesh-web's
+     * `BuildPolicy` exactly (`{ "window-manager/mode": "single" }` is how a blog is locked). Absent
+     * means `{}`, the same as every site before this existed: nothing frozen, mesh-web's own default
+     * (windowed) applies and a person can change it.
+     *
+     * This was previously unreachable from a site spec at all -- `syncSite` hardcoded `policy: {}` on
+     * create and never sent `policy` on update, even though the DB schema, the generated boot script,
+     * mesh-web's `WindowManager` and (as of this session) `ConsoleChrome` all already supported a
+     * locked single mode end to end. Found live, looking for exactly this field while trying to
+     * actually build a "blog" site.
+     */
+    policy: z.record(z.string(), z.unknown()).optional().describe('Values frozen into this deployment, e.g. { "window-manager/mode": "single" } to lock a blog'),
 }).describe('Everything details.ts needs to provision one site end to end');
 export type SiteSpec = z.infer<typeof siteSpecSchema>;

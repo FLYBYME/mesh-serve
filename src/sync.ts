@@ -354,15 +354,19 @@ async function syncSite(
     const open = applications.map((p) => ({ application: p.key }));
 
     const found = await broker.call('serve.cdn.find_one', { query: { tenantId: org.id, host: site.cdn } }, { meta });
+    // `?? {}` matches the create branch's own default below -- a site spec declaring no `policy`
+    // means "nothing frozen," the same as every site before this field existed, not "leave whatever
+    // was there" (which is what leaving `policy` out of the update call entirely used to silently do).
+    const policy = site.policy ?? {};
 
     const cdn = found
         ? await broker.call('serve.cdn.update', {
-            id: found.id, apiId: consoleApi.id, application: 'console', open,
+            id: found.id, apiId: consoleApi.id, application: 'console', open, policy,
             title: 'Console', description: '',
         }, { meta })
         : await broker.call('serve.cdn.create', {
             tenantId: org.id, host: site.cdn, apiId: consoleApi.id, application: 'console',
-            policy: {}, theme: {}, open,
+            policy, theme: {}, open,
             title: 'Console', description: '',
             indexable: false, maintenance: false,
         }, { meta });
