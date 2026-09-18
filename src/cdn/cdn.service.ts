@@ -34,6 +34,10 @@ interface WebAsset {
 interface BootPart {
     id: string;
     url: string;
+    /** Becomes `PartRef.options` -- the site's decision, never the part's. Must already be
+     *  JSON-serializable (validated at the schema layer, `catalog/schema/part.ts`): it is baked
+     *  into the generated boot module as a literal, not handed a live object at runtime. */
+    options?: Record<string, unknown>;
 }
 
 interface WebAssetRequest {
@@ -157,6 +161,16 @@ export class CdnService extends ServiceModule {
         this.mountTool(siteResolveHostContract, resolveHost);
         this.mountTool(siteResolveByIdContract, resolveById);
         this.mountTool(siteDeployContract, deploy);
+
+        this.mountCrudHook('serve.cdn', 'create', {
+            before: async (input) => {
+                const record = input as { mcpHost?: string; host: string };
+                if (record.mcpHost !== undefined) {
+                    return input;
+                }
+                return { ...record, mcpHost: `mcp-${record.host}` };
+            },
+        });
     }
 
 
@@ -179,10 +193,12 @@ export class CdnService extends ServiceModule {
             } catch (err) {
                 if (err instanceof MeshError) {
                     res.statusCode = err.status;
+                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                     res.end(err.message);
                 } else {
                     this.broker?.logger.error('Error handling request', err);
                     res.statusCode = 500;
+                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                     res.end('Internal Server Error');
                 }
 
@@ -261,7 +277,14 @@ export class CdnService extends ServiceModule {
      * release.parts -- there is nothing to resolve here for them.
      */
     private async resolveWebRequest(release: Release): Promise<ResolvedWebAssetRequest> {
-        const cached = this.webRequestCache.get(release.hash);
+        // hash is optional only on serve.release.create's input (the before-hook mints it when
+        // absent) -- a release actually reaching here was already stored, so it always has one.
+        if (release.hash === undefined) {
+            throw new MeshError({ message: `Release "${release.id}" has no hash.`, code: 'INTERNAL', status: 500 });
+        }
+        const hash = release.hash;
+
+        const cached = this.webRequestCache.get(hash);
         if (cached !== undefined) {
             return cached;
         }
@@ -274,16 +297,23 @@ export class CdnService extends ServiceModule {
             importMap: {},
         }
 
-        const artifacts = await Promise.all(
-            release.parts.map((part) => this.broker.call('serve.artifact.getArtifact', { hash: part.artifactHash })),
+        // release.artifacts embeds the full, already-built serve.artifact row -- no per-item fetch
+        // needed for those. kind/imports/key live on the serve.part instead (not copied onto the
+        // release, see schema/release.ts), so that's the one lookup still needed here, per artifact.
+        const parts = await Promise.all(
+            release.artifacts.map((artifact) => this.broker.call('serve.part.resolve', { id: artifact.partId }, { meta: { tenant_id: release.tenantId } })),
         );
 
-        for (let i = 0; i < release.parts.length; i++) {
-            const part = release.parts[i]!;
-            const artifact = artifacts[i]!;
+        for (let i = 0; i < release.artifacts.length; i++) {
+            const artifact = release.artifacts[i]!;
+            const part = parts[i]!;
+            if (part === undefined) {
+                throw new MeshError({ message: `No part "${artifact.partId}" for artifact "${artifact.id}".`, code: 'INTERNAL', status: 500 });
+            }
+            const artifactHash = artifact.hash as string;
             const jsEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
             if (part.imports !== undefined && jsEntry !== undefined) {
-                webRequest.importMap[part.imports] = `${part.artifactHash}/${jsEntry.url}`;
+                webRequest.importMap[part.imports] = `${artifactHash}/${jsEntry.url}`;
 
                 // `@flybyme/mesh-web`'s own entry re-exports everything `@flybyme/mesh-web/net`
                 // does (call, defineApi, createClient, fetchTransport, withHeaders, MeshCallError
@@ -295,13 +325,13 @@ export class CdnService extends ServiceModule {
                 // "Failed to resolve module specifier" the instant that file's own top-level
                 // import runs, since only the bare specifier was ever in the import map.
                 if (part.imports === '@flybyme/mesh-web') {
-                    webRequest.importMap['@flybyme/mesh-web/net'] = `${part.artifactHash}/${jsEntry.url}`;
+                    webRequest.importMap['@flybyme/mesh-web/net'] = `${artifactHash}/${jsEntry.url}`;
                 }
             }
 
             if (part.kind === 'kernel') {
                 if (jsEntry) {
-                    webRequest.kernel = { url: `${part.artifactHash}/${jsEntry.url}`, integrity: jsEntry.integrity };
+                    webRequest.kernel = { url: `${artifactHash}/${jsEntry.url}`, integrity: jsEntry.integrity };
                 }
                 // mesh-web's own entry does `import './kernel.css'`, so esbuild emits a real
                 // entry.css alongside entry.js -- this `continue` skipped straight past the CSS
@@ -309,7 +339,7 @@ export class CdnService extends ServiceModule {
                 // the page rendered (the boot-module fix held) but with no kernel styling at all.
                 const cssEntry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.css');
                 if (cssEntry) {
-                    webRequest.css.push({ url: `${part.artifactHash}/${cssEntry.url}`, integrity: cssEntry.integrity });
+                    webRequest.css.push({ url: `${artifactHash}/${cssEntry.url}`, integrity: cssEntry.integrity });
                 }
                 continue;
             }
@@ -317,14 +347,14 @@ export class CdnService extends ServiceModule {
             if (part.kind === 'theme') {
                 const entry = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.css');
                 if (entry) {
-                    webRequest.theme = { url: `${part.artifactHash}/${entry.url}`, integrity: entry.integrity };
+                    webRequest.theme = { url: `${artifactHash}/${entry.url}`, integrity: entry.integrity };
                 }
                 continue;
             }
 
             for (const asset of artifact.assets ?? []) {
                 if (asset.fileExtension === '.css') {
-                    webRequest.css.push({ url: `${part.artifactHash}/${asset.url}`, integrity: asset.integrity });
+                    webRequest.css.push({ url: `${artifactHash}/${asset.url}`, integrity: asset.integrity });
                 }
             }
             // Every application/extension part is a boot.js entry -- start() constructs each one's
@@ -335,7 +365,11 @@ export class CdnService extends ServiceModule {
             // fully silent set of scripts. Found live: no console error, because there wasn't one --
             // the page had genuinely finished doing everything it was told to do.
             if (jsEntry !== undefined) {
-                webRequest.parts.push({ id: part.partKey, url: `${part.artifactHash}/${jsEntry.url}` });
+                webRequest.parts.push({
+                    id: part.key,
+                    url: `${artifactHash}/${jsEntry.url}`,
+                    ...(part.options !== undefined ? { options: part.options } : {}),
+                });
             }
         }
 
@@ -349,7 +383,7 @@ export class CdnService extends ServiceModule {
         }
 
         const resolved: ResolvedWebAssetRequest = { ...webRequest, kernel };
-        this.webRequestCache.set(release.hash, resolved);
+        this.webRequestCache.set(hash, resolved);
         return resolved;
     }
 
@@ -418,7 +452,7 @@ export class CdnService extends ServiceModule {
         if (apiHost !== undefined) bootLines.push(`  api: ${JSON.stringify(apiOrigin(apiHost))},`);
         bootLines.push(`  policy: ${JSON.stringify(site.policy)},`);
         if (site.open !== undefined) bootLines.push(`  open: ${JSON.stringify(site.open)},`);
-        bootLines.push(`  parts: [${webRequest.parts.map((part, i) => `{ id: ${JSON.stringify(part.id)}, contribution: part_${String(i)} }`).join(', ')}],`);
+        bootLines.push(`  parts: [${webRequest.parts.map((part, i) => `{ id: ${JSON.stringify(part.id)}, contribution: part_${String(i)}${part.options !== undefined ? `, options: ${JSON.stringify(part.options)}` : ''} }`).join(', ')}],`);
         bootLines.push('});');
         const boot = inlineScript(bootLines.join('\n'));
 
@@ -558,7 +592,11 @@ export class CdnService extends ServiceModule {
 
                 this.broker?.logger.error(`Error streaming asset: ${assetFilePath}`, err);
                 if (!res.headersSent) {
+                    // Overrides the asset's own Content-Type already staged by setHeader earlier in
+                    // this path (setHeader hasn't flushed yet, so headersSent is still false) --
+                    // without this, an error body would go out mislabeled as e.g. application/javascript.
                     res.statusCode = 500;
+                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                     res.end('Internal Server Error');
                 }
                 resolve();

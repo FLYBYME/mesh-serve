@@ -22,7 +22,10 @@ import {
     RegistryModule,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -202,6 +205,7 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
                 ...(part.imports !== undefined ? { imports: part.imports } : {}),
                 wants: part.wants,
                 description: part.description,
+                ...(part.options !== undefined ? { options: part.options } : {}),
             }, { meta });
             console.log('Created part', created.id, part.key);
             parts.push(created);
@@ -217,6 +221,7 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
             ...(part.imports !== undefined ? { imports: part.imports } : {}),
             wants: part.wants,
             description: part.description,
+            ...(part.options !== undefined ? { options: part.options } : {}),
         }, { meta });
         console.log('Part reconciled', updated.id, part.key);
         parts.push(updated);
@@ -226,12 +231,18 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
 }
 
 /** `part.ref` if the spec pins one; otherwise resolves the owning repo's branch to its current
- *  commit sha via `git ls-remote`, so the artifact cache below is always keyed by a real commit. */
-function resolveRef(repo: RepoSpec, part: PartSpec): string {
+ *  commit sha via `git ls-remote`, so the artifact cache below is always keyed by a real commit.
+ *
+ *  Async, not execFileSync: this script is itself a mesh peer node (WSTransport), and a
+ *  synchronous git call against a real network remote (e.g. github.com, as opposed to the local
+ *  bare mirrors) blocks the event loop for however long that takes -- long enough to miss the
+ *  peer heartbeat's pong and get dropped mid-RPC, surfacing as an unrelated-looking
+ *  "RPC Timeout calling serve.artifact.find_one" a few lines later, not as a git/network error. */
+async function resolveRef(repo: RepoSpec, part: PartSpec): Promise<string> {
     if (part.ref !== undefined) return part.ref;
 
-    const output = execFileSync('git', ['ls-remote', repo.url, repo.ref], { encoding: 'utf-8' });
-    const sha = output.split('\n')[0]?.split('\t')[0]?.trim();
+    const { stdout } = await execFileAsync('git', ['ls-remote', repo.url, repo.ref]);
+    const sha = stdout.split('\n')[0]?.split('\t')[0]?.trim();
     if (!sha) {
         throw new Error(`Could not resolve ref "${repo.ref}" on ${repo.url} (part "${part.key}").`);
     }
@@ -251,7 +262,7 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
             throw new Error(`No spec for built part "${part.key}".`);
         }
 
-        const ref = resolveRef(repoSpec, partSpec);
+        const ref = await resolveRef(repoSpec, partSpec);
         const shortRef = ref.slice(0, 12);
 
         const existing = await broker.call('serve.artifact.find_one', {
@@ -374,6 +385,31 @@ async function syncExposed(broker: IServiceBroker, org: Organization, consoleApi
     }
 }
 
+/**
+ * Starts every `kind: 'service'` part that isn't already running, so its contracts actually exist
+ * in the live broker's registry before syncExposed tries to publish them -- building the artifact
+ * (syncArtifacts, above) never runs the module, only serve.part.start's own import() +
+ * registerModule does that (startService.ts). Idempotent: "already running on this node" is the
+ * expected outcome on a rerun, not a failure; anything else still throws.
+ */
+async function syncServices(broker: IServiceBroker, org: Organization, parts: Part[]): Promise<void> {
+    const meta = { tenant_id: org.id };
+
+    for (const part of parts.filter((p) => p.kind === 'service')) {
+        try {
+            const started = await broker.call('serve.part.start', { id: part.id }, { meta });
+            console.log('Started service', part.key, started.domain);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message.includes('already running')) {
+                console.log('Service already running', part.key);
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+
 async function syncGeneratedClient(broker: IServiceBroker, org: Organization, consoleApi: Api, outPath: string): Promise<void> {
     const meta = { tenant_id: org.id };
     const generated = await broker.call('serve.api.generateClient', { apiId: consoleApi.id }, { meta });
@@ -398,6 +434,7 @@ async function main(): Promise<void> {
         const parts = await syncParts(broker, org, repos);
 
         await syncArtifacts(broker, org, parts);
+        await syncServices(broker, org, parts);
 
         const composition = await syncComposition(broker, org, parts);
         const release = await syncRelease(broker, org, composition.id);
@@ -413,6 +450,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-    console.error(err);
+    // Not console.error(err) directly: a MeshError crossing the remote boundary nests a full
+    // stack-trace string inside its own `cause.data.stack`, and a few hops of that (RPC ->
+    // rethrow -> this catch) is enough for util.inspect's pretty-printer to blow past V8's max
+    // string length and crash with an unrelated "RangeError: Invalid string length" -- hiding
+    // the real error behind a Node internals stack trace instead of showing it.
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
 });

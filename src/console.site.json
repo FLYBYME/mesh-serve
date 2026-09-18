@@ -1,0 +1,111 @@
+{
+    "cdn": "console.localhost",
+    "theme": "console-theme",
+    "api": "console-api.localhost",
+    "repos": [
+        {
+            "name": "mesh-web",
+            "url": "https://github.com/flybyme/mesh-web.git",
+            "ref": "master",
+            "kernel": true
+        },
+        {
+            "name": "mesh-core",
+            "url": "https://github.com/flybyme/mesh-core.git",
+            "ref": "master"
+        },
+        {
+            "name": "mesh-operator",
+            "url": "https://github.com/FLYBYME/mesh-operator.git",
+            "ref": "master"
+        }
+    ],
+    "parts": [
+        {
+            "repoName": "mesh-web",
+            "key": "platform/kernel",
+            "kind": "kernel",
+            "path": ".",
+            "entryPoint": "src/index.ts",
+            "imports": "@flybyme/mesh-web",
+            "wants": [],
+            "description": "Kernel for mesh-web"
+        },
+        {
+            "repoName": "mesh-core",
+            "key": "platform/auth",
+            "kind": "extension",
+            "path": ".",
+            "entryPoint": "src/auth/index.ts",
+            "wants": [],
+            "description": "Authentication service for mesh-web",
+            "options": { "persist": true }
+        },
+        {
+            "repoName": "mesh-core",
+            "key": "platform/ui",
+            "kind": "extension",
+            "path": ".",
+            "entryPoint": "src/ui/index.ts",
+            "imports": "@flybyme/mesh-core/ui",
+            "wants": [],
+            "description": "The twelve-component design system extension"
+        },
+        {
+            "repoName": "mesh-core",
+            "key": "platform/chrome",
+            "kind": "extension",
+            "path": ".",
+            "entryPoint": "src/chrome/index.ts",
+            "wants": [],
+            "description": "Window chrome extension (ConsoleChrome)"
+        },
+        {
+            "repoName": "mesh-operator",
+            "key": "platform/operator",
+            "kind": "application",
+            "path": ".",
+            "entryPoint": "src/console/index.ts",
+            "wants": [],
+            "description": "The operator console: organization, apis & exposure, catalog, sites, services"
+        }
+    ],
+    "exposed": [
+        "identity.ticket.issue",
+        "identity.whoami",
+        "identity.user.setPassword",
+        "identity.user.register",
+        "identity.user.grantRole",
+        "identity.organization.find",
+        "identity.membership.find",
+        "identity.membership.create",
+        "identity.membership.update",
+        "identity.membership.delete",
+        "identity.role.find",
+
+        "serve.api.find",
+        "serve.api.create",
+        "serve.expose.find",
+        "serve.expose.add",
+        "serve.expose.remove",
+        "serve.want.find",
+
+        "serve.repo.find",
+        "serve.repo.create",
+        "serve.part.find",
+        "serve.part.create",
+        "serve.part.start",
+        "serve.part.stop",
+        "serve.artifact.find",
+        "serve.artifact.requestBuild",
+        "serve.composition.find",
+        "serve.composition.create",
+        "serve.composition.compose",
+        "serve.release.find",
+
+        "serve.cdn.find",
+        "serve.cdn.create",
+        "serve.cdn.update",
+        "serve.cdn.deploy"
+    ]
+}
