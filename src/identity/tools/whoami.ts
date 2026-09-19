@@ -1,8 +1,9 @@
-import { MeshError } from '@flybyme/mesh';
+import { Database, MeshError } from '@flybyme/mesh';
 import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { WhoamiInput, WhoamiOutput } from '../contracts/identity.contract.js';
+import { membershipCrud } from '../contracts/membership.contract.js';
 
 export async function whoami(
     this: IdentityService,
@@ -21,7 +22,12 @@ export async function whoami(
         throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
     }
 
-    const memberships = await ctx.call('identity.membership.find', { query: {} });
+    // Raw lookup, not the scoped identity.membership.find -- that collection is scoped by
+    // organizationId now (see membership.contract.ts), so a plain find here would need an org id
+    // this caller doesn't have yet; finding every org a user belongs to is exactly the one place
+    // that still needs a query by userId across all orgs.
+    const db = ctx.broker.getProvider<Database>('database');
+    const memberships = await db.repo(membershipCrud.outputSchema, 'identity.membership').find({ query: { userId } });
     const organizations = await Promise.all(memberships.map(async (m) => {
         const org = await ctx.call('identity.organization.resolve', { id: m.organizationId });
         return {

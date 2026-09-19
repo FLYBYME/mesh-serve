@@ -152,7 +152,7 @@ export class IdentityService extends ServiceModule {
         });
         await broker.call('identity.membership.create', {
             userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
-        }, { meta: { user: { id: user.id, tenant_id: '' } } });
+        }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
 
         broker.logger.info('\nFIRST BOOT -- no accounts existed, so one was created.\n\n'
             + '  email     operator@node.invalid\n'

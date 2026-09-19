@@ -83,25 +83,6 @@ const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[
     { contract: 'serve.expose.remove', role: 'operator' },
 ];
 
-/**
- * Exposed on every api the moment it's created, not just the bootstrap one -- unlike
- * BOOTSTRAP_EXPOSED_CONTRACTS above, whose 'once, on the platform api only' reach was correct for
- * "how does anyone get in at all" but wrong for this: the whole point of holding a call is that a
- * site's own author never had to remember to grant a way to see or decide the queue it produces.
- * `serve.api.create`'s own after-hook (below) is what actually does this, on every tenant's every
- * api, forever. `role: 'operator'` -- a non-operator gets a 403 deciding someone else's held call,
- * not a 404 pretending the queue doesn't exist.
- */
-const HOLD_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
-    { contract: 'serve.hold.find', role: 'operator' },
-    { contract: 'serve.hold.get', role: 'operator' },
-    { contract: 'serve.hold.decide', role: 'operator' },
-    // Public, on every api: the same descriptor _describe already reveals unauthenticated (real
-    // JSON Schema + destructive per call) -- reachable by ctx.call for a peer that isn't an HTTP
-    // client. Gating it further than _describe already is would add friction, not safety.
-    { contract: 'serve.api.describe' },
-];
-
 export class ApiService extends ServiceModule {
     public readonly domain = 'serve.api';
 
@@ -120,21 +101,6 @@ export class ApiService extends ServiceModule {
         this.mountTool(exposeAddContract, add);
         this.mountTool(exposeRemoveContract, remove);
         this.mountTool(generateClientContract, generateClient);
-
-        this.mountCrudHook('serve.api', 'create', {
-            after: async (output, ctx) => {
-                const api = output as Api;
-                for (const { contract, role } of HOLD_EXPOSED_CONTRACTS) {
-                    await ctx.call('serve.expose.create', {
-                        tenantId: api.tenantId,
-                        apiId: api.id,
-                        contract,
-                        ...(role !== undefined ? { role } : {}),
-                    });
-                }
-                return output;
-            },
-        });
     }
 
     public async onStart(broker: IServiceBroker): Promise<void> {
@@ -197,6 +163,13 @@ export class ApiService extends ServiceModule {
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
+            // Without this, `fetch()` silently withholds x-exposure-shape from response.headers on
+            // any cross-origin call (site and api are almost always different hosts) -- DevTools'
+            // Network tab still shows the raw header regardless of CORS, which is what made this
+            // easy to miss live: it "looked" present while client.ts's own staleness check
+            // (net/client.ts:166) never actually saw it, silently disabling the exact detection
+            // that comment's own history says was already found broken once before, differently.
+            res.setHeader('Access-Control-Expose-Headers', 'x-exposure-shape');
             if ((req.method ?? 'GET').toUpperCase() === 'OPTIONS') {
                 res.statusCode = 204;
                 res.end();
@@ -204,7 +177,7 @@ export class ApiService extends ServiceModule {
             }
 
             try {
-                this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
+                this.broker.logger.debug(`${req.method} ${req.url}`);
                 await this.handleRequest(req, res);
             } catch (err) {
                 if (err instanceof MeshError) {
@@ -224,7 +197,8 @@ export class ApiService extends ServiceModule {
                 } else {
                     this.broker?.logger.error('Error handling api request', err);
                     res.statusCode = 500;
-                    res.end('Internal Server Error');
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: 'Internal Server Error' }));
                 }
                 this.broker.logger.debug(`Response: ${res.statusCode} ${res.statusMessage}`);
             }
@@ -365,10 +339,11 @@ export class ApiService extends ServiceModule {
             throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
         }
 
-        // identity.membership is scopedBy: 'userId', which resolveCallerScope special-cases from
-        // meta.user.id -- hasRole/permits resolve that account's own membership internally via
-        // ctx.call, which inherits whatever meta this entry call carries, so it has to be set here.
-        const meta = { user: { id: caller.userId, tenant_id: tenantId } };
+        // identity.membership is scopedBy: 'organizationId', not 'tenantId' like every other
+        // collection here -- hasRole/permits resolve that account's own membership internally via
+        // ctx.call, which inherits whatever meta this entry call carries, so organizationId has to
+        // be set here too, aliasing the same value tenant_id already carries.
+        const meta = { user: { id: caller.userId, tenant_id: tenantId, organizationId: tenantId } };
 
         if (row.role !== undefined) {
             const result = await this.broker.call('identity.hasRole', {
@@ -418,7 +393,7 @@ export class ApiService extends ServiceModule {
             return targetTenantId;
         }
 
-        const meta = { user: { id: caller.userId, tenant_id: targetTenantId } };
+        const meta = { user: { id: caller.userId, tenant_id: targetTenantId, organizationId: targetTenantId } };
         const result = await this.broker.call('identity.hasRole', {
             userId: caller.userId,
             role: 'operator',
@@ -511,7 +486,8 @@ export class ApiService extends ServiceModule {
         const route = this.findRoute(target.rows, req);
         if (route === undefined) {
             res.statusCode = 404;
-            res.end('Not Found');
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Not Found' }));
             return;
         }
 
@@ -529,8 +505,13 @@ export class ApiService extends ServiceModule {
         // for an anonymous caller resolves to nothing under resolveCallerScope's own `.length > 0`
         // check, so a userId-scoped collection (e.g. identity.membership) still correctly refuses
         // anonymous access; tools like identity.whoami that need a real caller check `=== ''` too.
+        // organizationId aliases tenant_id here too: identity.membership is scopedBy:
+        // 'organizationId', not 'tenantId' like every other collection reached through this gateway,
+        // and resolveCallerScope (DatabaseMiddleware) only ever reads the field a collection's own
+        // scopedBy names -- an api-wide meta that only ever set tenant_id left membership as the one
+        // collection this gateway's automatic scoping could never satisfy.
         const effectiveTenantId = await this.resolveEffectiveTenantId(caller, target.tenantId, input);
-        const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId } };
+        const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
 
         // The agent surface: a destructive call made by an api token (never by a signed-in person's
         // ticket -- viaApiToken is exactly that distinction) is frozen and held instead of run.

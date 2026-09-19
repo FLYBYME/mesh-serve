@@ -20,7 +20,10 @@ export async function resolveEffectiveRoleKeys(
     const keys = new Set<string>(user?.roles ?? []);
 
     if (organizationId !== undefined) {
-        const membership = await ctx.call('identity.membership.find_one', { query: { userId, organizationId } });
+        // Explicit meta override, not ambient ctx.meta -- identity.membership is scoped by
+        // organizationId, but a caller's own ambient meta carries tenant_id (the same value, different
+        // field name), so relying on ambient meta here would resolve no scope at all and 401.
+        const membership = await ctx.call('identity.membership.find_one', { query: { userId, organizationId } }, { meta: { organization_id: organizationId } });
         if (membership !== undefined) {
             const role = await ctx.call('identity.role.find_one', { query: { key: membership.roleKey } });
             if (role !== undefined && role.scope !== 'global') {
