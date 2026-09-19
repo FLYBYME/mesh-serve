@@ -73,6 +73,7 @@
     ],
     "exposed": [
         "identity.ticket.issue",
+        "identity.ticket.signOut",
         "identity.whoami",
         "identity.user.setPassword",
         "identity.user.register",
