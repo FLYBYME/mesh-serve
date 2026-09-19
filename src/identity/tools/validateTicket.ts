@@ -10,11 +10,12 @@ export async function validateTicket(
 ): Promise<ValidateOutput> {
     const ticket = await ctx.call('identity.ticket.find_one', { query: { token: input.token } });
     if (ticket === undefined || ticket.revokedAt !== undefined || ticket.expiresAt.getTime() < Date.now()) {
-        ctx.logger.debug(`ticket "${input.token}" not found or already revoked`, { token: input.token });
+        // Never the raw token -- a bearer credential has no business sitting in a log line.
+        ctx.logger.debug('ticket not found or already revoked');
         return { valid: false };
     }
 
-    ctx.logger.debug(`validated ticket "${input.token}"`, { id: ticket.userId, token: input.token });
+    ctx.logger.debug(`validated ticket for ${ticket.userId}`);
 
     return { valid: true, userId: ticket.userId, roles: ticket.roles };
 }

@@ -3,7 +3,10 @@ import { z } from 'zod';
 export const siteSchema = z.object({
   host: z.string().describe('The frontend hostname that resolves to this site\'s cdn; normalized by lowercasing, stripping port and trailing dot'),
   apiId: z.string().optional().describe('The serve.api backing this site, if any -- absent means this site calls no exposed contracts of its own'),
-  mcpHost: z.string().describe('The hostname that resolves to this site\'s mcp endpoint'),
+  // Optional on create -- CdnService's before-hook mints `mcp-${host}` when absent. mesh-serve
+  // carries this purely as inert config (baked into preconnect links/CSP); the actual MCP protocol
+  // endpoint has no implementation here -- that responsibility moved to mesh-infer.
+  mcpHost: z.string().describe('The hostname that resolves to this site\'s mcp endpoint').optional(),
   tenantId: z.string().describe('The organization that owns this site'),
   releaseHash: z.string().optional().describe('The release this site serves; absent means not deployed yet'),
   application: z.string().describe('Namespaces this page\'s settings, so two Applications cannot collide in one backing store'),

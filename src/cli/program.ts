@@ -10,7 +10,6 @@ import { RefreshCommand } from './commands/refresh.js';
 import { GenerateCommand } from './commands/generate.js';
 import { OrgCreateCommand } from './commands/orgCreate.js';
 import { ApiCreateCommand } from './commands/apiCreate.js';
-import { InitCommand } from './commands/init.js';
 import { PublishCommand } from './commands/publish.js';
 import { StartCommand } from './commands/start.js';
 import { HelpCommand } from './commands/help.js';
@@ -42,7 +41,6 @@ export async function buildProgram(session: Session, replHandle: ReplHandle): Pr
         new GenerateCommand(session),
         new OrgCreateCommand(session),
         new ApiCreateCommand(session),
-        new InitCommand(session),
         new PublishCommand(session),
         new StartCommand(),
         new ExitCommand(replHandle),

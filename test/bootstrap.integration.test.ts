@@ -135,6 +135,15 @@ describe('a fresh install, booted for real', () => {
     });
 
     it('answers serve.api.describe with the same descriptor shape, real JSON Schema and destructive flags included', async () => {
+        // serve.api.describe isn't auto-exposed on every api any more (no hidden magic left in
+        // ApiService -- every exposure is an explicit serve.expose row an operator asked for).
+        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify({ apiId, contract: 'serve.api.describe' }),
+        });
+        expect(exposeRes.status).toBe(200);
+
         const res = await fetch(`${API_ORIGIN}/api/apis/host/api.localhost/describe`);
         expect(res.status).toBe(200);
         const descriptor = await json(res) as {
@@ -218,7 +227,7 @@ describe('a fresh install, booted for real', () => {
         const createRepoRes = await fetch(`${API_ORIGIN}/api/repos`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ tenantId: organizationId, url: 'https://example.invalid/repo.git' }),
+            body: JSON.stringify({ tenantId: organizationId, name: 'repo', url: 'https://example.invalid/repo.git' }),
         });
         expect(createRepoRes.status).toBe(200);
 
