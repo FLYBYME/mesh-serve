@@ -21,7 +21,7 @@ export async function add(
     // The target api can belong to any tenant, unrelated to the caller's own, so its tenant isn't
     // known yet -- serve.api.resolveById is api's own anonymous-lookup tool for exactly this, same
     // pattern as serve.cdn.resolveById.
-    const api = await ctx.broker.call('serve.api.resolveById', { id: input.apiId });
+    const api = await ctx.call('serve.api.resolveById', { id: input.apiId });
 
     // Nested under `user`, not a flat `{ tenant_id }` -- ServiceBroker.internalCall shallow-merges
     // `{...activeCtx.meta, ...options.meta}`, and this call runs inside the ambient ctx of the
@@ -33,7 +33,7 @@ export async function add(
     // `id` carries forward from the caller's own ambient meta since it is still who did this.
     const meta = { user: { id: ctx.meta?.user?.id ?? '', tenant_id: api.tenantId } };
 
-    const existing = await ctx.broker.call('serve.expose.find_one', {
+    const existing = await ctx.call('serve.expose.find_one', {
         query: { apiId: input.apiId, contract: input.contract },
     }, { meta });
     if (existing !== undefined) {
@@ -42,7 +42,7 @@ export async function add(
 
     // Passing role/permission: undefined explicitly (rather than omitting the key) stores null,
     // which the schema's z.string().optional() fields then reject on the next read.
-    const row = await ctx.broker.call('serve.expose.create', {
+    const row = await ctx.call('serve.expose.create', {
         tenantId: api.tenantId,
         apiId: input.apiId,
         contract: input.contract,
