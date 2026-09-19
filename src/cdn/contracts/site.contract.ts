@@ -15,6 +15,8 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: [],
+    filePath: 'src/cdn/contracts/site.contract.ts',
+    permissions: [],
 });
 
 export type Site = z.infer<typeof siteCrud.outputSchema>;
@@ -33,6 +35,7 @@ export const siteResolveHostContract = defineContract({
     outputSchema: resolveHostOutputSchema,
     rest: { method: 'GET', path: '/sites/:host' },
     visibility: 'public',
+    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.host} (${o.tenantId})`,
 });
 
@@ -53,6 +56,7 @@ export const siteResolveByIdContract = defineContract({
     outputSchema: resolveByIdOutputSchema,
     rest: { method: 'GET', path: '/sites/id/:id' },
     visibility: 'public',
+    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.host} (${o.tenantId})`,
 });
 
@@ -79,6 +83,7 @@ export const siteDeployContract = defineContract({
     rest: { method: 'POST', path: '/sites/:siteId/deploy' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.site.host} -> ${o.site.releaseHash}`,
 });
 

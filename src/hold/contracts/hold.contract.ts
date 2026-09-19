@@ -25,6 +25,8 @@ export const holdCrud = defineCrud('serve.hold', holdSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: [],
+    filePath: 'src/hold/contracts/hold.contract.ts',
+    permissions: [],
 });
 
 export type Hold = z.infer<typeof holdCrud.outputSchema>;
@@ -55,6 +57,7 @@ export const holdDecideContract = defineContract({
     // pass the "still held" check before either writes -- leaderScoped + withLock (in decide.ts)
     // close that the same way infer.provider.acquire/release do.
     leaderScoped: true,
+    filePath: 'src/hold/contracts/hold.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.holdId}: ${o.status}`,
 });
 

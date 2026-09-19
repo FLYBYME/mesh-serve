@@ -13,6 +13,8 @@ export const artifactCrud = defineCrud('serve.artifact', artifactSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: ['serve.part'],
+    filePath: 'src/catalog/contracts/artifact.contract.ts',
+    permissions: [],
 });
 
 export type Artifact = z.infer<typeof artifactCrud.outputSchema>;
@@ -64,6 +66,7 @@ export const artifactGetArtifactContract = defineContract({
     outputSchema: getArtifactOutputSchema,
     rest: { method: 'GET', path: '/artifacts/:hash' },
     visibility: 'public',
+    filePath: 'src/catalog/contracts/artifact.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.hash ?? o.id} (${o.status})`,
 });
 
@@ -94,6 +97,7 @@ export const artifactGetAssetContract = defineContract({
     outputSchema: getAssetOutputSchema,
     rest: { method: 'GET', path: '/artifacts/:artifactHash/assets/:path' },
     visibility: 'public',
+    filePath: 'src/catalog/contracts/artifact.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.name} ${o.path}`,
 });
 
@@ -117,6 +121,7 @@ export const artifactRequestBuildContract = defineContract({
     rest: { method: 'POST', path: '/artifacts/requestBuild' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/catalog/contracts/artifact.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.id} (${o.status})`,
 });
 
@@ -151,6 +156,7 @@ export const artifactBuildContract = defineContract({
     // that overrides this, but a direct ctx.call (tests, a future non-queue caller) still wants a
     // sane bound rather than whatever the framework's own default is.
     timeout: 5 * 60_000,
+    filePath: 'src/catalog/contracts/artifact.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.success ? 'built' : 'build failed'),
 });
 

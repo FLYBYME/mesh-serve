@@ -10,6 +10,8 @@ export const apiCrud = defineCrud('serve.api', apiSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
     },
     dependencies: [],
+    filePath: 'src/api/contracts/api.contract.ts',
+    permissions: [],
 });
 
 export type Api = z.infer<typeof apiCrud.outputSchema>;
@@ -28,6 +30,7 @@ export const apiResolveByIdContract = defineContract({
     outputSchema: resolveApiByIdOutputSchema,
     rest: { method: 'GET', path: '/apis/id/:id' },
     visibility: 'public',
+    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.apiHost} (${o.tenantId})`,
 });
 
@@ -48,6 +51,7 @@ export const apiResolveByHostContract = defineContract({
     outputSchema: resolveApiByHostOutputSchema,
     rest: { method: 'GET', path: '/apis/host/:apiHost' },
     visibility: 'public',
+    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.apiHost} (${o.tenantId})`,
 });
 
@@ -98,6 +102,7 @@ export const apiDescribeContract = defineContract({
     outputSchema: describeOutputSchema,
     rest: { method: 'GET', path: '/apis/host/:host/describe' },
     visibility: 'public',
+    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.calls.length} calls on ${o.host}`,
 });
 

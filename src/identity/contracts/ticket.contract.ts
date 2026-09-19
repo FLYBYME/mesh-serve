@@ -7,6 +7,8 @@ export const ticketCrud = defineCrud('identity.ticket', ticketSchema, {
     unique: [{ fields: 'token', scope: 'global' }],
     visibility: {},
     dependencies: [],
+    filePath: 'src/identity/contracts/ticket.contract.ts',
+    permissions: [],
 });
 
 export type Ticket = z.infer<typeof ticketCrud.outputSchema>;
@@ -50,6 +52,7 @@ export const ticketIssueContract = defineContract({
     rest: { method: 'POST', path: '/identity/ticket' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/ticket.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `ticket for ${o.userId}`,
 });
 
@@ -73,6 +76,7 @@ export const ticketValidateContract = defineContract({
     inputSchema: validateInputSchema,
     outputSchema: validateOutputSchema,
     rest: { method: 'POST', path: '/identity/ticket/validate' },
+    filePath: 'src/identity/contracts/ticket.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
 });
 
@@ -98,6 +102,7 @@ export const ticketRevokeContract = defineContract({
     outputSchema: revokeOutputSchema,
     rest: { method: 'POST', path: '/identity/ticket/revoke' },
     destructive: true,
+    filePath: 'src/identity/contracts/ticket.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `revoked ${String(o.revoked)} at epoch ${String(o.epoch)}`,
 });
 
@@ -121,6 +126,7 @@ export const ticketSignOutContract = defineContract({
     rest: { method: 'POST', path: '/identity/signOut' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/ticket.contract.ts', concurrency: 'on-demand', permissions: [],
     print: () => 'signed out',
 });
 
@@ -147,6 +153,7 @@ export const ticketResolveContract = defineContract({
     inputSchema: ticketResolveInputSchema,
     outputSchema: ticketResolveOutputSchema,
     rest: { method: 'POST', path: '/identity/ticket/resolve' },
+    filePath: 'src/identity/contracts/ticket.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.ticket !== undefined ? `resolved: ${o.ticket.userId}` : 'invalid'),
 });
 

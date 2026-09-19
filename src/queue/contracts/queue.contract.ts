@@ -15,6 +15,8 @@ export const queueCrud = defineCrud('serve.queue', queueSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
     },
     dependencies: [],
+    filePath: 'src/queue/contracts/queue.contract.ts',
+    permissions: [],
 });
 
 export type QueueJob = z.infer<typeof queueCrud.outputSchema>;
@@ -43,6 +45,7 @@ export const queueClaimContract = defineContract({
     destructive: true,
     leaderScoped: true,
     dependencies: ['serve.queue'],
+    filePath: 'src/queue/contracts/queue.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o === undefined ? 'nothing to claim' : `claimed ${o.id} (${o.contract})`),
 });
 

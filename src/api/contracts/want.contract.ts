@@ -14,6 +14,8 @@ export const wantCrud = defineCrud('serve.want', wantSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: ['serve.site'],
+    filePath: 'src/api/contracts/want.contract.ts',
+    permissions: [],
 });
 
 export type Want = z.infer<typeof wantCrud.outputSchema>;

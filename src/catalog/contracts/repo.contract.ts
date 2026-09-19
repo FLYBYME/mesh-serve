@@ -13,6 +13,8 @@ export const repoCrud = defineCrud('serve.repo', repoSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: [],
+    filePath: 'src/catalog/contracts/repo.contract.ts',
+    permissions: [],
 });
 
 export type Repo = z.infer<typeof repoCrud.outputSchema>;

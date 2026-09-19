@@ -13,5 +13,6 @@ export const siteComposeContract = defineContract({
     inputSchema: z.object({ siteId: z.string() }),
     outputSchema: z.object({ ok: z.boolean() }),
     rest: { method: 'POST', path: '/cdn/compose' },
+    filePath: 'test/fixtures/split-domain/site.contract.ts', concurrency: 'on-demand', permissions: [],
     print: defaultPrint,
 });

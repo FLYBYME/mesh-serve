@@ -12,6 +12,8 @@ export const exposeCrud = defineCrud('serve.expose', exposeSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: ['serve.api'],
+    filePath: 'src/api/contracts/expose.contract.ts',
+    permissions: [],
 });
 
 export type Expose = z.infer<typeof exposeCrud.outputSchema>;
@@ -34,6 +36,7 @@ export const exposeAddContract = defineContract({
     rest: { method: 'POST', path: '/expose' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/api/contracts/expose.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.contract} on ${o.apiId}`,
 });
 
@@ -58,6 +61,7 @@ export const exposeRemoveContract = defineContract({
     rest: { method: 'DELETE', path: '/expose/:apiId/:contract' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/api/contracts/expose.contract.ts', concurrency: 'on-demand', permissions: [],
     print: () => 'removed',
 });
 

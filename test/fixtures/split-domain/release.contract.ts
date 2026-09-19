@@ -17,9 +17,12 @@ export const releaseDeployContract = defineContract({
     inputSchema: z.object({ version: z.string() }),
     outputSchema: z.object({ success: z.boolean() }),
     rest: { method: 'POST', path: '/cdn/deploy' },
+    filePath: 'test/fixtures/split-domain/release.contract.ts', concurrency: 'on-demand', permissions: [],
     print: defaultPrint,
 });
 
 export const releaseCrud = defineCrud('cdn', ReleaseSchema, {
     dependencies: [],
+    filePath: 'test/fixtures/split-domain/release.contract.ts',
+    permissions: [],
 });

@@ -7,6 +7,8 @@ export const userCrud = defineCrud('identity.user', userSchema, {
     unique: [{ fields: 'email', scope: 'global' }],
     visibility: {},
     dependencies: [],
+    filePath: 'src/identity/contracts/user.contract.ts',
+    permissions: [],
 });
 
 export type User = z.infer<typeof userCrud.outputSchema>;
@@ -44,6 +46,7 @@ export const userRegisterContract = defineContract({
     rest: { method: 'POST', path: '/identity/register' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `registered ${o.userId}`,
 });
 
@@ -68,6 +71,7 @@ export const userSetPasswordContract = defineContract({
     rest: { method: 'POST', path: '/identity/password' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.claimed ? 'password set, account claimed' : 'password set'),
 });
 
@@ -97,6 +101,7 @@ export const userGrantRoleContract = defineContract({
     dependencies: ['identity.role'],
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
 });
 

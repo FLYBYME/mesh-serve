@@ -10,6 +10,8 @@ export const releaseCrud = defineCrud('serve.release', releaseSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: ['serve.composition', 'serve.artifact'],
+    filePath: 'src/catalog/contracts/release.contract.ts',
+    permissions: [],
 });
 
 export type Release = z.infer<typeof releaseCrud.outputSchema>;
@@ -29,6 +31,7 @@ export const releaseGetReleaseContract = defineContract({
     outputSchema: getReleaseOutputSchema,
     rest: { method: 'GET', path: '/releases/:hash' },
     visibility: 'public',
+    filePath: 'src/catalog/contracts/release.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.hash} (${o.compositionId})`,
 });
 

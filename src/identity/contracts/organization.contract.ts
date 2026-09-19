@@ -9,6 +9,8 @@ export const organizationCrud = defineCrud('identity.organization', organization
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
     },
     dependencies: ['identity.user'],
+    filePath: 'src/identity/contracts/organization.contract.ts',
+    permissions: [],
 });
 
 export type Organization = z.infer<typeof organizationCrud.outputSchema>;

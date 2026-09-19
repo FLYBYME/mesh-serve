@@ -9,6 +9,8 @@ export const roleCrud = defineCrud('identity.role', roleSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
     dependencies: [],
+    filePath: 'src/identity/contracts/role.contract.ts',
+    permissions: [],
 });
 
 export type Role = z.infer<typeof roleCrud.outputSchema>;
@@ -27,6 +29,7 @@ export const roleUpsertContract = defineContract({
     rest: { method: 'POST', path: '/identity/roles/define' },
     dependencies: ['identity.role'],
     visibility: 'public',
+    filePath: 'src/identity/contracts/role.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.key} ${o.created ? 'defined' : 'updated'}`,
 });
 

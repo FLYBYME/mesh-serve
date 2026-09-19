@@ -16,6 +16,8 @@ export const partCrud = defineCrud('serve.part', partSchema, {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: ['serve.repo'],
+    filePath: 'src/catalog/contracts/part.contract.ts',
+    permissions: [],
 });
 
 export type Part = z.infer<typeof partCrud.outputSchema>;
@@ -45,6 +47,7 @@ export const partStartContract = defineContract({
     rest: { method: 'POST', path: '/parts/:id/start' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/catalog/contracts/part.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.domain} started on ${o.nodeID}`,
 });
 
@@ -68,6 +71,7 @@ export const partStopContract = defineContract({
     rest: { method: 'POST', path: '/parts/:id/stop' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/catalog/contracts/part.contract.ts', concurrency: 'on-demand', permissions: [],
     print: () => 'stopped',
 });
 

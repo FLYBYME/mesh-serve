@@ -15,6 +15,8 @@ export const compositionCrud = defineCrud('serve.composition', compositionSchema
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
     dependencies: ['serve.part'],
+    filePath: 'src/catalog/contracts/composition.contract.ts',
+    permissions: [],
 });
 
 export type Composition = z.infer<typeof compositionCrud.outputSchema>;
@@ -34,6 +36,7 @@ export const compositionComposeContract = defineContract({
     rest: { method: 'POST', path: '/compositions/:id/compose' },
     visibility: 'public',
     destructive: true,
+    filePath: 'src/catalog/contracts/composition.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.hash} (${o.artifacts.length} artifacts)`,
 });
 

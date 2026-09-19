@@ -7,6 +7,8 @@ export const apiTokenCrud = defineCrud('identity.apiToken', apiTokenSchema, {
     unique: [{ fields: 'tokenHash', scope: 'global' }],
     visibility: {},
     dependencies: [],
+    filePath: 'src/identity/contracts/apiToken.contract.ts',
+    permissions: [],
 });
 
 export type ApiToken = z.infer<typeof apiTokenCrud.outputSchema>;
@@ -40,6 +42,7 @@ export const apiTokenIssueContract = defineContract({
     // theoretical: nothing could ever authenticate as `viaApiToken` in the first place.
     visibility: 'public',
     destructive: true,
+    filePath: 'src/identity/contracts/apiToken.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `issued api token "${o.name}" for ${o.userId}`,
 });
 
@@ -64,6 +67,7 @@ export const apiTokenValidateContract = defineContract({
     inputSchema: validateInputSchema,
     outputSchema: validateOutputSchema,
     rest: { method: 'POST', path: '/identity/apiToken/validate' },
+    filePath: 'src/identity/contracts/apiToken.contract.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
 });
 
