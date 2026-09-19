@@ -16,16 +16,16 @@ export async function resolveEffectiveRoleKeys(
     organizationId: string | undefined,
     ctx: IServiceContext,
 ): Promise<Set<string>> {
-    const user = await ctx.call('identity.user.resolve', { id: userId });
+    const user = await ctx.db('identity.user').resolve({ id: userId });
     const keys = new Set<string>(user?.roles ?? []);
 
     if (organizationId !== undefined) {
         // Explicit meta override, not ambient ctx.meta -- identity.membership is scoped by
         // organizationId, but a caller's own ambient meta carries tenant_id (the same value, different
         // field name), so relying on ambient meta here would resolve no scope at all and 401.
-        const membership = await ctx.call('identity.membership.find_one', { query: { userId, organizationId } }, { meta: { organization_id: organizationId } });
+        const membership = await ctx.db('identity.membership', { organization_id: organizationId }).findOne({ query: { userId, organizationId } });
         if (membership !== undefined) {
-            const role = await ctx.call('identity.role.find_one', { query: { key: membership.roleKey } });
+            const role = await ctx.db('identity.role').findOne({ query: { key: membership.roleKey } });
             if (role !== undefined && role.scope !== 'global') {
                 keys.add(membership.roleKey);
             }
@@ -43,7 +43,7 @@ export async function expandRoles(
     roleKeys: ReadonlySet<string>,
     ctx: IServiceContext,
 ): Promise<Map<string, readonly string[]>> {
-    const roles = await ctx.call('identity.role.find', { query: {} });
+    const roles = await ctx.db('identity.role').find({ query: {} });
     const byKey = new Map(roles.map((r) => [r.key, r]));
     const seen = new Map<string, readonly string[]>();
     const stack = [...roleKeys];

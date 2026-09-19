@@ -17,12 +17,12 @@ export async function build(
     input: BuildInput,
     ctx: IServiceContext,
 ): Promise<BuildOutput> {
-    const artifact = await ctx.call('serve.artifact.resolve', { id: input.id });
+    const artifact = await ctx.db('serve.artifact').resolve({ id: input.id });
     if (artifact === undefined) {
         throw new MeshError({ message: `No artifact "${input.id}".`, code: 'NOT_FOUND', status: 404 });
     }
 
-    const part = await ctx.call('serve.part.resolve', { id: artifact.partId });
+    const part = await ctx.db('serve.part').resolve({ id: artifact.partId });
     if (part === undefined) {
         throw new MeshError({ message: `No part "${artifact.partId}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -32,7 +32,7 @@ export async function build(
     const duration = Date.now() - start;
 
 
-    const after = await ctx.call('serve.artifact.resolve', { id: input.id });
+    const after = await ctx.db('serve.artifact').resolve({ id: input.id });
     if (after?.status === 'failed') {
         throw new MeshError({ message: after.error ?? 'Build failed.', code: 'BUILD_FAILED', status: 500 });
     }

@@ -9,7 +9,7 @@ export async function validateApiToken(
     ctx: IServiceContext
 ): Promise<ValidateOutput> {
     const tokenHash = hashToken(input.token);
-    const token = await ctx.call('identity.apiToken.find_one', { query: { tokenHash } });
+    const token = await ctx.db('identity.apiToken').findOne({ query: { tokenHash } });
     if (token === undefined || token.revokedAt !== undefined
         || (token.expiresAt !== undefined && token.expiresAt.getTime() < Date.now())) {
         return { valid: false };

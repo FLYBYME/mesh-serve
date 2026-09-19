@@ -56,7 +56,7 @@ export class CatalogService extends ServiceModule {
                 if (key === undefined) {
                     return input;
                 }
-                const part = await ctx.call('serve.part.resolve', { id });
+                const part = await ctx.db('serve.part').resolve({ id });
                 if (part === undefined) {
                     throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
                 }
@@ -81,7 +81,7 @@ export class CatalogService extends ServiceModule {
      * so a part built by one org can't claim another org's namespace.
      */
     private async validatePartKey(input: { key: string }, tenantId: string, ctx: IServiceContext): Promise<void> {
-        const org = await ctx.call('identity.organization.resolve', { id: tenantId });
+        const org = await ctx.db('identity.organization').resolve({ id: tenantId });
         if (org === undefined) {
             throw new MeshError({ message: `No organization "${tenantId}".`, code: 'NOT_FOUND', status: 404 });
         }

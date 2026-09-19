@@ -64,7 +64,7 @@ export class IdentityService extends ServiceModule {
         this.mountCrudHook('identity.organization', 'create', {
             before: async (input, ctx) => {
                 const { ownerId } = input as { ownerId: string };
-                const owner = await ctx.call('identity.user.resolve', { id: ownerId });
+                const owner = await ctx.db('identity.user').resolve({ id: ownerId });
                 if (owner === undefined) {
                     throw new MeshError({ message: `No account "${ownerId}".`, code: 'NOT_FOUND', status: 404 });
                 }
@@ -75,7 +75,7 @@ export class IdentityService extends ServiceModule {
         this.mountCrudHook('identity.membership', 'create', {
             before: async (input, ctx) => {
                 const { organizationId } = input as { organizationId: string };
-                const org = await ctx.call('identity.organization.resolve', { id: organizationId });
+                const org = await ctx.db('identity.organization').resolve({ id: organizationId });
                 if (org === undefined) {
                     throw new MeshError({ message: `No organization "${organizationId}".`, code: 'NOT_FOUND', status: 404 });
                 }

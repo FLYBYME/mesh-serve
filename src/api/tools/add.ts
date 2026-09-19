@@ -33,22 +33,22 @@ export async function add(
     // `id` carries forward from the caller's own ambient meta since it is still who did this.
     const meta = { user: { id: ctx.meta?.user?.id ?? '', tenant_id: api.tenantId } };
 
-    const existing = await ctx.call('serve.expose.find_one', {
+    const existing = await ctx.db('serve.expose', meta).findOne({
         query: { apiId: input.apiId, contract: input.contract },
-    }, { meta });
+    });
     if (existing !== undefined) {
         throw new MeshError({ message: `"${input.contract}" is already exposed on this api.`, code: 'CONFLICT', status: 409 });
     }
 
     // Passing role/permission: undefined explicitly (rather than omitting the key) stores null,
     // which the schema's z.string().optional() fields then reject on the next read.
-    const row = await ctx.call('serve.expose.create', {
+    const row = await ctx.db('serve.expose', meta).create({
         tenantId: api.tenantId,
         apiId: input.apiId,
         contract: input.contract,
         ...(input.role !== undefined ? { role: input.role } : {}),
         ...(input.permission !== undefined ? { permission: input.permission } : {}),
-    }, { meta });
+    });
 
     ctx.logger.debug(`exposed "${input.contract}" on api "${input.apiId}"`, { role: input.role, permission: input.permission });
 

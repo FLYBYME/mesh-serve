@@ -21,7 +21,7 @@ function sameDrivers(a: readonly string[], b: readonly string[]): boolean {
  */
 async function resolvePart(id: string, tenantId: string, kind: Part['kind'], ctx: IServiceContext): Promise<Part> {
     const meta = { tenant_id: tenantId };
-    const part = await ctx.call('serve.part.resolve', { id }, { meta });
+    const part = await ctx.db('serve.part', meta).resolve({ id });
     if (part === undefined) {
         throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -38,10 +38,10 @@ async function resolvePart(id: string, tenantId: string, kind: Part['kind'], ctx
  */
 async function latestArtifact(part: Part, tenantId: string, drivers: readonly string[] | undefined, ctx: IServiceContext) {
     const meta = { tenant_id: tenantId };
-    const candidates = await ctx.call('serve.artifact.find', {
+    const candidates = await ctx.db('serve.artifact', meta).find({
         query: { partId: part.id, status: 'success' },
         sort: '-createdAt',
-    }, { meta });
+    });
 
     const match = drivers === undefined
         ? candidates[0]
@@ -63,7 +63,7 @@ export async function compose(
     input: ComposeInput,
     ctx: IServiceContext,
 ): Promise<ComposeOutput> {
-    const composition = await ctx.call('serve.composition.resolve', { id: input.id });
+    const composition = await ctx.db('serve.composition').resolve({ id: input.id });
     if (composition === undefined) {
         throw new MeshError({ message: `No composition "${input.id}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -86,7 +86,7 @@ export async function compose(
     // never shipped to a browser, so composition.services is never touched here either.
 
     for (const id of [...composition.extensions, ...composition.applications]) {
-        const part = await ctx.call('serve.part.resolve', { id }, { meta });
+        const part = await ctx.db('serve.part', meta).resolve({ id });
         if (part === undefined) {
             throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
         }
@@ -100,15 +100,15 @@ export async function compose(
 
     const hash = computeReleaseHash(composition.id, artifacts);
 
-    const existing = await ctx.call('serve.release.find_one', { query: { hash } }, { meta });
+    const existing = await ctx.db('serve.release', meta).findOne({ query: { hash } });
     if (existing !== undefined) {
         return existing;
     }
 
-    return ctx.call('serve.release.create', {
+    return ctx.db('serve.release', meta).create({
         tenantId,
         compositionId: composition.id,
         hash,
         artifacts,
-    }, { meta });
+    });
 }

@@ -9,7 +9,7 @@ import { ensureArtifactNodeModules } from '../methods/build.js';
 import { getRunningService, markServiceRunning } from '../methods/services.js';
 
 export async function startService(input: PartStartInput, ctx: IServiceContext): Promise<PartStartOutput> {
-    const part = await ctx.call('serve.part.resolve', { id: input.id });
+    const part = await ctx.db('serve.part').resolve({ id: input.id });
     if (part === undefined) {
         throw new MeshError({ message: `No part "${input.id}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -22,10 +22,10 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
 
     const meta = { tenant_id: part.tenantId };
     // Same "latest successful artifact" query compose.ts's own latestArtifact already uses.
-    const artifacts = await ctx.call('serve.artifact.find', {
+    const artifacts = await ctx.db('serve.artifact', meta).find({
         query: { partId: part.id, status: 'success' },
         sort: '-createdAt',
-    }, { meta });
+    });
     const artifact = artifacts[0];
     if (artifact === undefined || artifact.hash === undefined) {
         throw new MeshError({

@@ -9,7 +9,7 @@ export async function requestBuild(
     input: RequestBuildInput,
     ctx: IServiceContext,
 ): Promise<RequestBuildOutput> {
-    const part = await ctx.call('serve.part.resolve', { id: input.partId });
+    const part = await ctx.db('serve.part').resolve({ id: input.partId });
     if (part === undefined) {
         throw new MeshError({ message: `No part "${input.partId}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -24,7 +24,7 @@ export async function requestBuild(
 
     if (input.drivers !== undefined) {
         for (const key of input.drivers) {
-            const driver = await ctx.call('serve.part.find_one', { query: { key, tenantId: part.tenantId } });
+            const driver = await ctx.db('serve.part').findOne({ query: { key, tenantId: part.tenantId } });
             if (driver === undefined) {
                 throw new MeshError({ message: `No driver part "${key}".`, code: 'NOT_FOUND', status: 404 });
             }
@@ -36,7 +36,7 @@ export async function requestBuild(
 
     // Passing drivers: undefined explicitly (rather than omitting the key) stores null, which the
     // schema's z.array(z.string()).optional() then rejects on the next read.
-    return ctx.call('serve.artifact.create', {
+    return ctx.db('serve.artifact').create({
         tenantId: part.tenantId,
         partId: part.id,
         ref: input.ref,

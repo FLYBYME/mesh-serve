@@ -8,9 +8,9 @@ export async function signOut(
     input: SignOutInput,
     ctx: IServiceContext
 ): Promise<SignOutOutput> {
-    const ticket = await ctx.call('identity.ticket.find_one', { query: { token: input.token } });
+    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: input.token } });
     if (ticket !== undefined && ticket.revokedAt === undefined) {
-        await ctx.call('identity.ticket.update', { id: ticket.id, revokedAt: new Date() });
+        await ctx.db('identity.ticket').update({ id: ticket.id, revokedAt: new Date() });
 
         ctx.emit('identity.user.signed_out', { userId: ticket.userId });
 

@@ -22,7 +22,7 @@ export async function decide(
     ctx: IServiceContext
 ): Promise<HoldDecideOutput> {
     return ctx.withLock(`serve.hold:${input.holdId}`, async () => {
-        const row = await ctx.call('serve.hold.resolve', { id: input.holdId });
+        const row = await ctx.db('serve.hold').resolve({ id: input.holdId });
         if (row === undefined) {
             throw new MeshError({ message: `No held call "${input.holdId}".`, code: 'NOT_FOUND', status: 404 });
         }
@@ -37,7 +37,7 @@ export async function decide(
         const decidedAt = new Date();
 
         if (!input.approved) {
-            await ctx.call('serve.hold.update', {
+            await ctx.db('serve.hold').update({
                 id: input.holdId, status: 'rejected', decidedBy, decidedAt, reason: input.reason,
             });
             return { holdId: input.holdId, status: 'rejected' };
@@ -51,13 +51,13 @@ export async function decide(
                 row.input as never,
                 { meta: replayMeta },
             );
-            await ctx.call('serve.hold.update', {
+            await ctx.db('serve.hold').update({
                 id: input.holdId, status: 'released', decidedBy, decidedAt, reason: input.reason, result,
             });
             return { holdId: input.holdId, status: 'released', result };
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            await ctx.call('serve.hold.update', {
+            await ctx.db('serve.hold').update({
                 id: input.holdId, status: 'released', decidedBy, decidedAt, reason: input.reason, error: message,
             });
             return { holdId: input.holdId, status: 'released', error: message };

@@ -18,7 +18,7 @@ export async function generateClient(
 ): Promise<GenerateClientOutput> {
     const api = await ctx.call('serve.api.resolveById', { id: input.apiId });
     const meta = { tenant_id: api.tenantId };
-    const allRows = await ctx.call('serve.expose.find', { query: { apiId: input.apiId } }, { meta });
+    const allRows = await ctx.db('serve.expose', meta).find({ query: { apiId: input.apiId } });
 
     // A wanted-but-unexposed contract is silently dropped, same as buildDescriptor already does for
     // a stale row -- the caller asked for what it calls, not for a guarantee everything it calls is

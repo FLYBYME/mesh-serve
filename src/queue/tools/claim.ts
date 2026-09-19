@@ -80,11 +80,11 @@ export async function claim(
         const attempts = job.attempts ?? 0;
 
         const lockedUntil = new Date(now.getTime() + timeoutMs + LEASE_SLACK_MS);
-        return ctx.call('serve.queue.update', {
+        return ctx.db('serve.queue', { tenant_id: job.tenantId }).update({
             id: job.id,
             status: 'processing',
             attempts: attempts + 1,
             lockedUntil,
-        }, { meta: { tenant_id: job.tenantId } });
+        });
     });
 }

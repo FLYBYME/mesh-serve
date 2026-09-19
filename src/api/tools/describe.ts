@@ -18,7 +18,7 @@ export async function describe(
     if (api === undefined) {
         throw new MeshError({ message: `No api for host "${input.host}".`, code: 'NOT_FOUND', status: 404 });
     }
-    const rows = await ctx.call('serve.expose.find', { query: { apiId: api.id } }, { meta: { tenant_id: api.tenantId } });
+    const rows = await ctx.db('serve.expose', { tenant_id: api.tenantId }).find({ query: { apiId: api.id } });
     const descriptor = buildDescriptor(api.apiHost, rows);
     return { ...descriptor, calls: descriptor.calls.map((c) => ({ ...c })) };
 }

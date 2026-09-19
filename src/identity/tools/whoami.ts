@@ -17,7 +17,7 @@ export async function whoami(
     if (userId === undefined || userId === '') {
         throw new MeshError({ message: 'No caller.', code: 'UNAUTHENTICATED', status: 401 });
     }
-    const user = await ctx.call('identity.user.resolve', { id: userId });
+    const user = await ctx.db('identity.user').resolve({ id: userId });
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
     }
@@ -29,7 +29,7 @@ export async function whoami(
     const db = ctx.broker.getProvider<Database>('database');
     const memberships = await db.repo(membershipCrud.outputSchema, 'identity.membership').find({ query: { userId } });
     const organizations = await Promise.all(memberships.map(async (m) => {
-        const org = await ctx.call('identity.organization.resolve', { id: m.organizationId });
+        const org = await ctx.db('identity.organization').resolve({ id: m.organizationId });
         return {
             organizationId: m.organizationId,
             name: org?.name ?? 'unknown',

@@ -12,14 +12,14 @@ export async function revokeTicket(
     let revoked = 0;
 
     const tickets = input.token !== undefined
-        ? [await ctx.call('identity.ticket.find_one', { query: { token: input.token } })].filter((t) => t !== undefined)
+        ? [await ctx.db('identity.ticket').findOne({ query: { token: input.token } })].filter((t) => t !== undefined)
         : input.userId !== undefined
-            ? await ctx.call('identity.ticket.find', { query: { userId: input.userId } })
+            ? await ctx.db('identity.ticket').find({ query: { userId: input.userId } })
             : [];
 
     for (const ticket of tickets) {
         if (ticket.revokedAt !== undefined) continue;
-        await ctx.call('identity.ticket.update', {
+        await ctx.db('identity.ticket').update({
             id: ticket.id,
             revokedAt: now,
             ...(input.reason === undefined ? {} : { revokedReason: input.reason }),

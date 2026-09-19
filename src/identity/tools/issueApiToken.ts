@@ -10,7 +10,7 @@ export async function issueApiToken(
     input: IssueInput,
     ctx: IServiceContext
 ): Promise<IssueOutput> {
-    const user = await ctx.call('identity.user.resolve', { id: input.userId });
+    const user = await ctx.db('identity.user').resolve({ id: input.userId });
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'NOT_FOUND', status: 404 });
     }
@@ -20,7 +20,7 @@ export async function issueApiToken(
     const expiresAt = input.expiresInMs === undefined ? undefined : new Date(Date.now() + input.expiresInMs);
     const roles = input.roles ?? [];
 
-    await ctx.call('identity.apiToken.create', {
+    await ctx.db('identity.apiToken').create({
         tokenHash,
         name: input.name,
         userId: input.userId,

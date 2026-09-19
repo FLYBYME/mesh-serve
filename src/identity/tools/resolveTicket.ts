@@ -8,7 +8,7 @@ export async function resolveTicket(
     input: TicketResolveInput,
     ctx: IServiceContext
 ): Promise<TicketResolveOutput> {
-    const ticket = await ctx.call('identity.ticket.find_one', { query: { token: input.token } });
+    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: input.token } });
     if (ticket === undefined) {
         ctx.logger.debug(`ticket "${input.token}" not found`, { token: input.token });
         return { ticket: undefined };

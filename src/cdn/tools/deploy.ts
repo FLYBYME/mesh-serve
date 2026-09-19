@@ -39,7 +39,7 @@ export async function deploy(this: CdnService, input: DeployInput, ctx: IService
         throw new MeshError({ message: `Release "${input.releaseId}" has no hash.`, code: 'INTERNAL', status: 500 });
     }
 
-    const composition = await ctx.call('serve.composition.resolve', { id: release.compositionId }, { meta });
+    const composition = await ctx.db('serve.composition', meta).resolve({ id: release.compositionId });
     if (composition === undefined) {
         throw new MeshError({ message: `Release "${input.releaseId}" has no composition.`, code: 'NOT_FOUND', status: 404 });
     }
@@ -53,17 +53,17 @@ export async function deploy(this: CdnService, input: DeployInput, ctx: IService
 
     const wanted = new Set<string>();
     for (const artifact of release.artifacts) {
-        const resolved = await ctx.call('serve.part.resolve', { id: artifact.partId }, { meta });
+        const resolved = await ctx.db('serve.part', meta).resolve({ id: artifact.partId });
         for (const w of resolved?.wants ?? []) wanted.add(w);
     }
 
-    const existing = await ctx.call('serve.want.find', { query: { siteId: input.siteId } }, { meta });
+    const existing = await ctx.db('serve.want', meta).find({ query: { siteId: input.siteId } });
     const existingContracts = new Set(existing.map((w) => w.contract));
 
     const wantsAdded: string[] = [];
     for (const contract of wanted) {
         if (!existingContracts.has(contract)) {
-            await ctx.call('serve.want.create', { tenantId: site.tenantId, siteId: input.siteId, contract }, { meta });
+            await ctx.db('serve.want', meta).create({ tenantId: site.tenantId, siteId: input.siteId, contract });
             wantsAdded.push(contract);
         }
     }
@@ -71,12 +71,12 @@ export async function deploy(this: CdnService, input: DeployInput, ctx: IService
     const wantsRemoved: string[] = [];
     for (const row of existing) {
         if (!wanted.has(row.contract)) {
-            await ctx.call('serve.want.delete', { id: row.id }, { meta });
+            await ctx.db('serve.want', meta).delete({ id: row.id });
             wantsRemoved.push(row.contract);
         }
     }
 
-    const updatedSite = await ctx.call('serve.cdn.update', { id: site.id, releaseHash: release.hash }, { meta });
+    const updatedSite = await ctx.db('serve.cdn', meta).update({ id: site.id, releaseHash: release.hash });
 
     return { site: updatedSite, wantsAdded, wantsRemoved };
 }

@@ -15,13 +15,13 @@ export async function setPassword(
     if (userId === undefined || userId === '') {
         throw new MeshError({ message: 'No caller.', code: 'UNAUTHENTICATED', status: 401 });
     }
-    const user = await ctx.call('identity.user.resolve', { id: userId });
+    const user = await ctx.db('identity.user').resolve({ id: userId });
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
     }
     const passwordHash = await hashPassword(input.password);
     const wasProvisional = user.provisional === true;
-    await ctx.call('identity.user.update', {
+    await ctx.db('identity.user').update({
         id: userId,
         passwordHash,
         ...(wasProvisional ? { provisional: false } : {}),

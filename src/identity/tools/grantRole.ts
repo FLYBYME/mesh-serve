@@ -9,7 +9,7 @@ export async function grantRole(
     input: GrantRoleInput,
     ctx: IServiceContext
 ): Promise<GrantRoleOutput> {
-    const role = await ctx.call('identity.role.find_one', { query: { key: input.role } });
+    const role = await ctx.db('identity.role').findOne({ query: { key: input.role } });
     if (role === undefined) {
         throw new MeshError({ message: `No role "${input.role}".`, code: 'NOT_FOUND', status: 404 });
     }
@@ -18,8 +18,8 @@ export async function grantRole(
     }
 
     const user = input.userId !== undefined
-        ? await ctx.call('identity.user.resolve', { id: input.userId })
-        : await ctx.call('identity.user.find_one', { query: { email: input.email } });
+        ? await ctx.db('identity.user').resolve({ id: input.userId })
+        : await ctx.db('identity.user').findOne({ query: { email: input.email } });
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'NOT_FOUND', status: 404 });
     }
@@ -32,7 +32,7 @@ export async function grantRole(
 
     if (changed) {
         ctx.logger.debug(`granting role "${input.role}" to "${user.id}"`, { id: user.id, roles });
-        await ctx.call('identity.user.update', { id: user.id, roles });
+        await ctx.db('identity.user').update({ id: user.id, roles });
     } else {
         ctx.logger.debug(`role "${input.role}" already granted to "${user.id}"`, { id: user.id, roles });
     }

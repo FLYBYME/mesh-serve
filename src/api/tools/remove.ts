@@ -15,14 +15,14 @@ export async function remove(
     // caller's own ambient `user.tenant_id` (ServiceBroker.internalCall's shallow meta merge).
     const meta = { user: { id: ctx.meta?.user?.id ?? '', tenant_id: api.tenantId } };
 
-    const row = await ctx.call('serve.expose.find_one', {
+    const row = await ctx.db('serve.expose', meta).findOne({
         query: { apiId: input.apiId, contract: input.contract },
-    }, { meta });
+    });
     if (row === undefined) {
         throw new MeshError({ message: `"${input.contract}" is not exposed on this api.`, code: 'NOT_FOUND', status: 404 });
     }
 
-    await ctx.call('serve.expose.delete', { id: row.id }, { meta });
+    await ctx.db('serve.expose', meta).delete({ id: row.id });
 
     ctx.logger.debug(`removed expose "${input.contract}" from api "${input.apiId}"`, {});
 

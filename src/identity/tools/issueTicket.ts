@@ -12,7 +12,7 @@ export async function issueTicket(
     input: IssueInput,
     ctx: IServiceContext
 ): Promise<IssueOutput> {
-    const user = await ctx.call('identity.user.find_one', { query: { email: input.email } });
+    const user = await ctx.db('identity.user').findOne({ query: { email: input.email } });
     if (user === undefined || !(await verifyPassword(input.password, user.passwordHash ?? ''))) {
         throw new MeshError({ message: 'Invalid email or password.', code: 'INVALID_CREDENTIALS', status: 401 });
     }
@@ -27,7 +27,7 @@ export async function issueTicket(
     const token = issuedToken();
     const issuedAt = new Date();
     const expiresAt = new Date(issuedAt.getTime() + TICKET_TTL_MS);
-    await ctx.call('identity.ticket.create', {
+    await ctx.db('identity.ticket').create({
         token,
         userId: user.id,
         roles: user.roles,

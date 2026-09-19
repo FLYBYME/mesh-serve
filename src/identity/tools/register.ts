@@ -10,7 +10,7 @@ export async function register(
     ctx: IServiceContext
 ): Promise<RegisterOutput> {
     const passwordHash = await hashPassword(input.password);
-    const user = await ctx.call('identity.user.create', {
+    const user = await ctx.db('identity.user').create({
         email: input.email,
         displayName: input.displayName,
         passwordHash,

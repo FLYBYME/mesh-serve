@@ -9,7 +9,7 @@ export async function upsertRole(
     input: UpsertInput,
     ctx: IServiceContext
 ): Promise<UpsertOutput> {
-    const roles = await ctx.call('identity.role.find', { query: {} });
+    const roles = await ctx.db('identity.role').find({ query: {} });
     const byKey = new Map(roles.map((r) => [r.key, r]));
     const existing = byKey.get(input.key);
 
@@ -49,13 +49,13 @@ export async function upsertRole(
     }
 
     if (existing === undefined) {
-        await ctx.call('identity.role.create', { ...input });
+        await ctx.db('identity.role').create({ ...input });
 
         ctx.logger.debug(`created role "${input.key}"`, { key: input.key });
 
         return { key: input.key, created: true };
     }
-    await ctx.call('identity.role.update', { id: existing.id, ...input });
+    await ctx.db('identity.role').update({ id: existing.id, ...input });
 
     ctx.logger.debug(`updated role "${input.key}"`, { key: input.key });
 
