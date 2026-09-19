@@ -22,12 +22,20 @@ export async function build(
         throw new MeshError({ message: `No artifact "${input.id}".`, code: 'NOT_FOUND', status: 404 });
     }
 
+    const part = await ctx.call('serve.part.resolve', { id: artifact.partId });
+    if (part === undefined) {
+        throw new MeshError({ message: `No part "${artifact.partId}".`, code: 'NOT_FOUND', status: 404 });
+    }
+
+    const start = Date.now();
     await this.buildArtifact(artifact);
+    const duration = Date.now() - start;
+
 
     const after = await ctx.call('serve.artifact.resolve', { id: input.id });
     if (after?.status === 'failed') {
         throw new MeshError({ message: after.error ?? 'Build failed.', code: 'BUILD_FAILED', status: 500 });
     }
 
-    return { success: true };
+    return { success: true, duration, hash: after?.hash };
 }

@@ -1,6 +1,7 @@
-import { MeshError } from '@flybyme/mesh';
+import { Database, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
+import { releaseCrud } from '../../catalog/contracts/release.contract.js';
 import type { DeployInput, DeployOutput } from '../contracts/site.contract.js';
 import type { CdnService } from '../cdn.service.js';
 
@@ -18,30 +19,41 @@ export async function deploy(this: CdnService, input: DeployInput, ctx: IService
     const site = await ctx.broker.call('serve.cdn.resolveById', { id: input.siteId });
     const meta = { tenant_id: site.tenantId };
 
-    const release = await ctx.broker.call('serve.release.getRelease', { hash: input.releaseHash });
+    // Raw db lookup, not serve.release.resolve -- that's scoped by the caller's own tenant meta,
+    // which here is the *site's* tenant, and would silently report "not found" for a cross-tenant
+    // release instead of letting the explicit tenant check below produce the real 400. Same
+    // reasoning as getRelease.ts's own anonymous, unscoped lookup.
+    const db = ctx.broker.getProvider<Database>('database');
+    const release = await db.repo(releaseCrud.outputSchema, 'serve.release').get(input.releaseId);
+    if (release === undefined) {
+        throw new MeshError({ message: `No release "${input.releaseId}".`, code: 'NOT_FOUND', status: 404 });
+    }
     if (release.tenantId !== site.tenantId) {
         throw new MeshError({
-            message: `Release "${input.releaseHash}" belongs to a different organization than site "${input.siteId}".`,
+            message: `Release "${input.releaseId}" belongs to a different organization than site "${input.siteId}".`,
             code: 'BAD_REQUEST',
             status: 400,
         });
     }
+    if (release.hash === undefined) {
+        throw new MeshError({ message: `Release "${input.releaseId}" has no hash.`, code: 'INTERNAL', status: 500 });
+    }
 
     const composition = await ctx.broker.call('serve.composition.resolve', { id: release.compositionId }, { meta });
     if (composition === undefined) {
-        throw new MeshError({ message: `Release "${input.releaseHash}" has no composition.`, code: 'NOT_FOUND', status: 404 });
+        throw new MeshError({ message: `Release "${input.releaseId}" has no composition.`, code: 'NOT_FOUND', status: 404 });
     }
     if (composition.key !== site.application) {
         throw new MeshError({
-            message: `Release "${input.releaseHash}" composes "${composition.key}", but site "${input.siteId}" serves "${site.application}".`,
+            message: `Release "${input.releaseId}" composes "${composition.key}", but site "${input.siteId}" serves "${site.application}".`,
             code: 'BAD_REQUEST',
             status: 400,
         });
     }
 
     const wanted = new Set<string>();
-    for (const part of release.parts) {
-        const resolved = await ctx.broker.call('serve.part.find_one', { query: { key: part.partKey, tenantId: site.tenantId } }, { meta });
+    for (const artifact of release.artifacts) {
+        const resolved = await ctx.broker.call('serve.part.resolve', { id: artifact.partId }, { meta });
         for (const w of resolved?.wants ?? []) wanted.add(w);
     }
 

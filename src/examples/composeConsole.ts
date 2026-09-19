@@ -102,8 +102,8 @@ async function main(): Promise<void> {
     const meta = { tenant_id: org.id };
 
     console.log('\n== repos ==');
-    const meshWebRepo = await app.call('serve.repo.create', { tenantId: org.id, url: MESH_WEB_URL, defaultBranch: MESH_WEB_REF }, { meta });
-    const meshCoreRepo = await app.call('serve.repo.create', { tenantId: org.id, url: MESH_CORE_URL, defaultBranch: MESH_CORE_REF }, { meta });
+    const meshWebRepo = await app.call('serve.repo.create', { tenantId: org.id, name: 'mesh-web', url: MESH_WEB_URL, defaultBranch: MESH_WEB_REF }, { meta });
+    const meshCoreRepo = await app.call('serve.repo.create', { tenantId: org.id, name: 'mesh-core', url: MESH_CORE_URL, defaultBranch: MESH_CORE_REF }, { meta });
 
     console.log('== parts ==');
     const kernelPart = await app.call('serve.part.create', {
@@ -141,11 +141,13 @@ async function main(): Promise<void> {
 
     console.log('== composition ==');
     const composition = await app.call('serve.composition.create', {
-        tenantId: org.id, key: 'console', kernelPartKey: kernelPart.key, drivers: [],
-        parts: [uiPart.key, authPart.key, identityPart.key, chromePart.key],
+        tenantId: org.id, key: 'console', kernelPartKey: kernelPart.id, drivers: [],
+        extensions: [uiPart.id, authPart.id, chromePart.id],
+        applications: [identityPart.id],
+        services: [],
     }, { meta });
     const release = await app.call('serve.composition.compose', { id: composition.id }, { meta });
-    console.log(`  release ${release.hash}, ${release.parts.length} parts pinned`);
+    console.log(`  release ${release.hash}, ${release.artifacts.length} artifacts pinned`);
 
     console.log('== exposing identity contracts on api.localhost ==');
     const api = await app.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
@@ -173,7 +175,7 @@ async function main(): Promise<void> {
         indexable: false,
     }, { meta });
 
-    const deployed = await app.call('serve.cdn.deploy', { siteId: site.id, releaseHash: release.hash }, { meta });
+    const deployed = await app.call('serve.cdn.deploy', { siteId: site.id, releaseId: release.id }, { meta });
     console.log(`  deployed: ${deployed.site.host} -> ${deployed.site.releaseHash}`);
 
     console.log(`\nconsole.localhost is live: http://127.0.0.1:${CDN_PORT}  (Host: console.localhost)`);

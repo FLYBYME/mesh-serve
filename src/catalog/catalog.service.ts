@@ -5,7 +5,8 @@ import { repoCrud, type Repo } from './contracts/repo.contract.js';
 import { partCrud, partStartContract, partStopContract, type Part } from './contracts/part.contract.js';
 import { compositionCrud, compositionComposeContract } from './contracts/composition.contract.js';
 import { artifactCrud, artifactGetArtifactContract, artifactGetAssetContract, artifactRequestBuildContract, artifactBuildContract, type Artifact } from './contracts/artifact.contract.js';
-import { releaseCrud, releaseGetReleaseContract } from './contracts/release.contract.js';
+import { releaseCrud, releaseGetReleaseContract, type ReleaseArtifact } from './contracts/release.contract.js';
+import { computeReleaseHash } from './methods/release.js';
 
 import { getArtifact } from './tools/getArtifact.js';
 import { getAsset } from './tools/getAsset.js';
@@ -61,6 +62,16 @@ export class CatalogService extends ServiceModule {
                 }
                 await this.validatePartKey({ key }, part.tenantId, ctx);
                 return input;
+            },
+        });
+
+        this.mountCrudHook('serve.release', 'create', {
+            before: async (input) => {
+                const record = input as { hash?: string; compositionId: string; artifacts: ReleaseArtifact[] };
+                if (record.hash !== undefined) {
+                    return input;
+                }
+                return { ...record, hash: computeReleaseHash(record.compositionId, record.artifacts) };
             },
         });
     }

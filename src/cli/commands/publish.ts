@@ -71,21 +71,21 @@ export class PublishCommand extends BaseCommand {
             if (site.releaseHash === undefined) throw new Error(`"${host}" has never been deployed -- nothing to republish from.`);
 
             const release = await client.call('serve.release.getRelease', { hash: site.releaseHash });
-            this.logger.info(`Rebuilding ${release.parts.length} part(s) from composition ${release.compositionId} at "${ref}"...`);
+            this.logger.info(`Rebuilding ${release.artifacts.length} part(s) from composition ${release.compositionId} at "${ref}"...`);
 
-            for (const entry of release.parts) {
-                const part = await client.call('serve.part.find_one', { query: { key: entry.partKey } });
-                if (part === undefined) throw new Error(`serve.part "${entry.partKey}" no longer exists.`);
+            for (const artifact of release.artifacts) {
+                const part = await client.call('serve.part.find_one', { query: { id: artifact.partId } });
+                if (part === undefined) throw new Error(`serve.part "${artifact.partId}" no longer exists.`);
 
                 await client.call('serve.artifact.requestBuild', { partId: part.id, ref });
-                await this.waitForBuild(client, entry.partKey, part.id);
+                await this.waitForBuild(client, part.key, part.id);
             }
 
             this.logger.info('Composing a new release...');
             const newRelease = await client.call('serve.composition.compose', { id: release.compositionId });
-            this.logger.info(`  release ${newRelease.hash} (${newRelease.parts.length} parts pinned)`);
+            this.logger.info(`  release ${newRelease.hash} (${newRelease.artifacts.length} artifacts pinned)`);
 
-            const deployed = await client.call('serve.cdn.deploy', { siteId: site.id, releaseHash: newRelease.hash });
+            const deployed = await client.call('serve.cdn.deploy', { siteId: site.id, releaseId: newRelease.id });
             this.logger.info(`Done. ${deployed.site.host} -> ${deployed.site.releaseHash}`);
         } catch (err) {
             if (err instanceof MeshCallError) {

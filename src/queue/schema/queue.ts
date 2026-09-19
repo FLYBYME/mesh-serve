@@ -20,6 +20,17 @@ export const queueSchema = z.object({
     requestedBy: z.object({
         userId: z.string().describe('Dispatch replays under this account, not the queue service\'s own identity'),
     }).optional(),
+    /**
+     * Optional mutual-exclusion lane: at most one job in the same group is ever 'processing' at
+     * once, cluster-wide, even though different groups all run fully concurrently up to
+     * maxConcurrency. Absent means unlocked/ungrouped -- claims exactly as before, no behavior
+     * change for an existing caller that never sets this (mesh-infer's provider-slot acquisition,
+     * most concretely). Added for catalog builds: two parts built from the *same* repo share one
+     * on-disk checkout directory (build.ts's ensureRepoCheckout), so running them concurrently
+     * would have two `git checkout`/`reset --hard` calls stomping the same directory -- group:
+     * repo.id keeps same-repo builds serialized while different repos build in parallel.
+     */
+    group: z.string().optional().describe('At most one job per group runs at a time, cluster-wide'),
     priority: z.number().default(0).describe('Higher claims first'),
     status: z.enum(['pending', 'processing', 'completed', 'failed']).default('pending'),
     attempts: z.number().default(0),

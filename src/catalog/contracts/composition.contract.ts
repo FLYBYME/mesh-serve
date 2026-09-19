@@ -34,7 +34,7 @@ export const compositionComposeContract = defineContract({
     rest: { method: 'POST', path: '/compositions/:id/compose' },
     visibility: 'public',
     destructive: true,
-    print: (o) => `${o.hash} (${o.parts.length} parts)`,
+    print: (o) => `${o.hash} (${o.artifacts.length} artifacts)`,
 });
 
 export type ComposeInput = z.infer<typeof compositionComposeContract.inputSchema>;

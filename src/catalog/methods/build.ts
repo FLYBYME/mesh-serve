@@ -239,10 +239,9 @@ export async function buildPart(part: Part, repo: Repo, ref: string, external: s
  * `node_modules/@flybyme/mesh` in the resolved entry path, since the entry itself can be nested
  * arbitrarily deep (`dist/index.js`, etc.) and only the root needs symlinking.
  */
-async function ensureArtifactNodeModules(pkg: string): Promise<void> {
+export async function ensureArtifactNodeModules(pkg: string): Promise<void> {
     const segments = pkg.split('/');
     const linkPath = path.join(artifactDir, 'node_modules', ...segments);
-    if (await exists(linkPath)) return;
 
     const entryUrl = import.meta.resolve(pkg);
     const entry = fileURLToPath(entryUrl);
@@ -252,6 +251,16 @@ async function ensureArtifactNodeModules(pkg: string): Promise<void> {
         throw new Error(`Could not locate the "${pkg}" package root from its resolved entry: ${entry}`);
     }
     const packageRoot = entry.slice(0, idx + marker.length);
+
+    // Not exists() (fs.stat, follows the link): a link whose target has since moved -- this repo
+    // itself relocated from ~/code/mesh-serve to ~/code/mesh/mesh-serve between sessions, and the
+    // artifact store's symlink kept pointing at the old path -- reads as "doesn't exist" via
+    // stat, so a plain exists()-then-symlink either recreates it correctly (the original bug) or,
+    // worse, silently accepts the dangling link forever (an EEXIST-means-done fix would do this).
+    // fs.readlink (no follow) is the only way to tell "already correct" apart from "stale" here.
+    const current = await fs.readlink(linkPath).catch(() => undefined);
+    if (current === packageRoot) return;
+    if (current !== undefined) await fs.unlink(linkPath);
 
     await fs.mkdir(path.dirname(linkPath), { recursive: true });
     await fs.symlink(packageRoot, linkPath, 'dir');

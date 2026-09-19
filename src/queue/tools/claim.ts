@@ -31,6 +31,11 @@ const LEASE_SLACK_MS = 5_000;
  * own claimed jobs fully in parallel. Claiming is cheap; only the "who gets to decide" moment needs
  * to be single-threaded, not the work itself.
  */
+/** How many top-priority candidates a claim looks at before giving up on this tick when the
+ *  leading ones are all blocked by a busy group -- a bound, not an exhaustive scan, so a large
+ *  backlog dominated by a few busy groups can't turn every claim into a full-table scan. */
+const GROUP_SCAN_LIMIT = 50;
+
 export async function claim(
     this: QueueService,
     _input: QueueClaimInput,
@@ -50,10 +55,22 @@ export async function claim(
                 ],
             },
             sort: { priority: -1, createdAt: 1 },
-            limit: 1,
+            limit: GROUP_SCAN_LIMIT,
         });
 
-        const job = candidates[0];
+        if (candidates.length === 0) return undefined;
+
+        // Only a job actively within its lease blocks its group -- one past lockedUntil is exactly
+        // the abandoned-and-reclaimable case the $lt clause above already admits as a candidate, and
+        // it must not also count as "busy" and block its own reclaim.
+        const activelyProcessing = await repo.find({
+            query: { status: 'processing', lockedUntil: { $gte: now } },
+        });
+        const busyGroups = new Set(
+            activelyProcessing.map((j) => j.group).filter((g): g is string => g !== undefined),
+        );
+
+        const job = candidates.find((c) => c.group === undefined || !busyGroups.has(c.group));
         if (job === undefined) return undefined;
 
         // The schema declares real defaults (timeoutMs: 30_000, attempts: 0) that always apply at

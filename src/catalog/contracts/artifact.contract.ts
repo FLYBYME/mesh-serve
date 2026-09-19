@@ -129,6 +129,8 @@ export const buildInputSchema = z.object({
 
 export const buildOutputSchema = z.object({
     success: z.boolean(),
+    duration: z.number(),
+    hash: z.string().optional(),
 });
 
 /**

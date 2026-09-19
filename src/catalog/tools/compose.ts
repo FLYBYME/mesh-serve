@@ -1,11 +1,10 @@
-import crypto from 'node:crypto';
-
 import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { ComposeInput, ComposeOutput } from '../contracts/composition.contract.js';
 import type { Part } from '../contracts/part.contract.js';
 import type { CatalogService } from '../catalog.service.js';
+import { computeReleaseHash } from '../methods/release.js';
 
 function sameDrivers(a: readonly string[], b: readonly string[]): boolean {
     if (a.length !== b.length) return false;
@@ -15,19 +14,19 @@ function sameDrivers(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /**
- * Resolves and returns the part named by `key`, verifying its kind matches what the caller of this
+ * Resolves and returns the part named by `id`, verifying its kind matches what the caller of this
  * function expects it to be -- e.g. a composition's kernelPartKey pointing at something that is no
  * longer kind: kernel (someone changed it) fails here, loudly, rather than composing a release with
  * a kernel that will not boot.
  */
-async function resolvePart(key: string, tenantId: string, kind: Part['kind'], ctx: IServiceContext): Promise<Part> {
+async function resolvePart(id: string, tenantId: string, kind: Part['kind'], ctx: IServiceContext): Promise<Part> {
     const meta = { tenant_id: tenantId };
-    const part = await ctx.broker.call('serve.part.find_one', { query: { key, tenantId } }, { meta });
+    const part = await ctx.broker.call('serve.part.resolve', { id }, { meta });
     if (part === undefined) {
-        throw new MeshError({ message: `No part "${key}".`, code: 'NOT_FOUND', status: 404 });
+        throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
     }
     if (part.kind !== kind) {
-        throw new MeshError({ message: `Part "${key}" is kind "${part.kind}", not "${kind}".`, code: 'BAD_REQUEST', status: 400 });
+        throw new MeshError({ message: `Part "${id}" is kind "${part.kind}", not "${kind}".`, code: 'BAD_REQUEST', status: 400 });
     }
     return part;
 }
@@ -71,47 +70,35 @@ export async function compose(
     const { tenantId } = composition;
     const meta = { tenant_id: tenantId };
 
-    /**
-     * MongoDB serializes an explicit `undefined` object property to BSON `null` when that object is
-     * an array element (unlike a top-level document field, where mesh's `ignoreUndefined` connection
-     * setting drops the key outright) -- so `{ imports: possiblyUndefined }` inside `releaseParts`
-     * round-trips as `{ imports: null }`, which `releasePartSchema`'s plain `z.string().optional()`
-     * then refuses on the next read. Omitting the key outright when there's nothing to put there
-     * sidesteps it instead of loosening the schema to accept a null that means the same thing.
-     */
-    const importsField = (imports: string | undefined): { imports: string } | Record<string, never> =>
-        imports === undefined ? {} : { imports };
-
     const kernelPart = await resolvePart(composition.kernelPartKey, tenantId, 'kernel', ctx);
     const kernelArtifact = await latestArtifact(kernelPart, tenantId, composition.drivers, ctx);
 
-    const releaseParts: ComposeOutput['parts'] = [
-        { partKey: kernelPart.key, kind: 'kernel', artifactHash: kernelArtifact.hash as string, ...importsField(kernelPart.imports) },
-    ];
+    const artifacts: ComposeOutput['artifacts'] = [kernelArtifact];
 
     if (composition.theme !== undefined) {
         const themePart = await resolvePart(composition.theme, tenantId, 'theme', ctx);
-        const themeArtifact = await latestArtifact(themePart, tenantId, undefined, ctx);
-        releaseParts.push({ partKey: themePart.key, kind: 'theme', artifactHash: themeArtifact.hash as string, ...importsField(themePart.imports) });
+        artifacts.push(await latestArtifact(themePart, tenantId, undefined, ctx));
     }
 
-    for (const key of composition.parts) {
-        const part = await ctx.broker.call('serve.part.find_one', { query: { key, tenantId } }, { meta });
+    // Drivers are baked directly into the kernel's own bundle (buildKernel), not composed as a
+    // separate artifact -- nothing to resolve here for them beyond the drivers-match check above.
+    // Services aren't part of a release at all: they're started independently via serve.part.start,
+    // never shipped to a browser, so composition.services is never touched here either.
+
+    for (const id of [...composition.extensions, ...composition.applications]) {
+        const part = await ctx.broker.call('serve.part.resolve', { id }, { meta });
         if (part === undefined) {
-            throw new MeshError({ message: `No part "${key}".`, code: 'NOT_FOUND', status: 404 });
+            throw new MeshError({ message: `No part "${id}".`, code: 'NOT_FOUND', status: 404 });
         }
         if (part.kind !== 'application' && part.kind !== 'extension') {
-            throw new MeshError({ message: `Part "${key}" is kind "${part.kind}", not application or extension.`, code: 'BAD_REQUEST', status: 400 });
+            throw new MeshError({ message: `Part "${id}" is kind "${part.kind}", not application or extension.`, code: 'BAD_REQUEST', status: 400 });
         }
-        const artifact = await latestArtifact(part, tenantId, undefined, ctx);
-        releaseParts.push({ partKey: part.key, kind: part.kind, artifactHash: artifact.hash as string, ...importsField(part.imports) });
+        artifacts.push(await latestArtifact(part, tenantId, undefined, ctx));
     }
 
-    releaseParts.sort((a, b) => a.partKey.localeCompare(b.partKey));
+    artifacts.sort((a, b) => a.id.localeCompare(b.id));
 
-    const hash = crypto.createHash('sha256')
-        .update(JSON.stringify({ compositionId: composition.id, parts: releaseParts }))
-        .digest('hex');
+    const hash = computeReleaseHash(composition.id, artifacts);
 
     const existing = await ctx.broker.call('serve.release.find_one', { query: { hash } }, { meta });
     if (existing !== undefined) {
@@ -122,6 +109,6 @@ export async function compose(
         tenantId,
         compositionId: composition.id,
         hash,
-        parts: releaseParts,
+        artifacts,
     }, { meta });
 }

@@ -61,7 +61,7 @@ export type ResolveByIdOutput = z.infer<typeof siteResolveByIdContract.outputSch
 
 export const deployInputSchema = z.object({
     siteId: z.string().min(1).describe('The serve.site to deploy to'),
-    releaseHash: z.string().min(1).describe('The serve.release to serve'),
+    releaseId: z.string().min(1).describe('The serve.release to serve'),
 }).describe('Point a site at a release it is not currently serving');
 
 export const deployOutputSchema = z.object({

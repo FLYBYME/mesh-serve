@@ -1,6 +1,6 @@
 import { defineContract, defineCrud, z } from '@flybyme/mesh';
 
-import { releaseSchema } from '../schema/release.js';
+import { releaseArtifactSchema, releaseSchema } from '../schema/release.js';
 
 export const releaseCrud = defineCrud('serve.release', releaseSchema, {
     pluralPath: 'releases',
@@ -13,6 +13,7 @@ export const releaseCrud = defineCrud('serve.release', releaseSchema, {
 });
 
 export type Release = z.infer<typeof releaseCrud.outputSchema>;
+export type ReleaseArtifact = z.infer<typeof releaseArtifactSchema>;
 
 export const getReleaseInputSchema = z.object({
     hash: z.string().min(1).describe('The release hash a site points at'),
