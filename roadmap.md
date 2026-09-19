@@ -710,3 +710,24 @@ only because console.localhost was checked right after, and fixed by re-running 
 src/console.site.json` to restore it. `DEFAULT_OUT_PATH` should fall back to the site spec's own
 `generatedClientOut` the same way `syncSpec`'s own default parameter already does, rather than a
 second, contradicting default living in `parseArgs`.
+
+**Every `kind: 'service'` part failed to start, the first time anything actually exercised that path
+for real.** `sync.ts`'s `syncServices` calls `serve.part.start` for each service part so its
+contracts are registered before `syncExposed` tries to publish them -- previously untested end to
+end, since composing/deploying browser-facing parts never touched this. `startService.ts` dynamically
+`import()`s the built artifact, which does a bare `import '@flybyme/mesh'`; that consistently threw
+`ERR_PACKAGE_PATH_NOT_EXPORTED: No "exports" main defined in .../node_modules/@flybyme/mesh/package.json`
+under `npx tsx src/cli/index.ts start` (mesh-serve's own dev `start` command), even though the exact
+same `import()` of the exact same file succeeds under plain `node`. Root cause: `tsx`'s own
+path-resolution hook probes every bare specifier through Node's CJS-flavored `packageExportsResolve`
+before falling back to the real ESM loader; `@flybyme/mesh`'s `exports` map declared only an
+`"import"` condition, so that probe hard-failed instead of falling through to the working path.
+Fixed in `mesh` (not mesh-serve) v3.1.5 by adding a `"default"` condition -- the exports spec's
+condition-agnostic fallback -- alongside `"import"` on every export entry, pointing at the same file.
+Reproduced directly with `npx tsx --input-type=module -e "import('file://.../index.js')"` against a
+real built service artifact before and after the fix to confirm root cause, not just symptom.
+Verified live: restarted a real node on v3.1.5, reran `sync-all.ts`, all 5 sites (`console`,
+`company`, `dns`, `git`, `mail`.localhost) synced clean and served real `200`s. Anything that starts
+a `kind: 'service'` part under `tsx` again should not hit this -- but a compiled/production `node
+dist/...` start path was never actually broken by this in the first place, only `tsx`-hosted dev runs
+were.
