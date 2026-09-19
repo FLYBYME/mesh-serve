@@ -28,16 +28,14 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { IServiceBroker, IMeshApp, IServiceRegistry, z } from '@flybyme/mesh';
+import type { IServiceBroker, IMeshApp, IServiceRegistry } from '@flybyme/mesh';
 import type { RegisterInput, User } from './identity/contracts/user.contract.js';
-import type { roleCrud } from './identity/contracts/role.contract.js';
+import { ensureBuiltinRoles } from './identity/builtinRoles.js';
 import type { Organization } from './identity/contracts/organization.contract.js';
 import type { Api } from './api/contracts/api.contract.js';
 import type { Repo } from './catalog/contracts/repo.contract.js';
 import type { Part } from './catalog/contracts/part.contract.js';
 import { loadSite, DEFAULT_SITE_PATH, type RepoSpec, type PartSpec, type SiteSpec } from './console.site.js';
-
-type RoleType = z.infer<typeof roleCrud.baseSchema>;
 
 /** Set once, at the top of main(), before any sync* function below (all of which read it) runs. */
 let site: SiteSpec;
@@ -80,13 +78,6 @@ const AdminUser: RegisterInput = {
     displayName: 'Platform Admin',
 };
 
-const Roles: RoleType[] = [
-    { key: 'operator', name: 'Operator', scope: 'global', builtin: true, inherits: [], permissions: ['**'] },
-    { key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: [], permissions: [] },
-    { key: 'admin', name: 'Admin', scope: 'organization', builtin: true, inherits: [], permissions: [] },
-    { key: 'member', name: 'Member', scope: 'organization', builtin: true, inherits: [], permissions: [] },
-];
-
 async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegistry; mesh: IMeshApp }> {
     const logger = new Logger(LogLevel.WARN);
     const serializer = new JSONSerializer();
@@ -108,15 +99,6 @@ async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegi
     await registry.waitForNodes(2);
 
     return { broker, registry, mesh: node };
-}
-
-async function syncRoles(broker: IServiceBroker): Promise<void> {
-    for (const role of Roles) {
-        const found = await broker.call('identity.role.find_one', { query: { key: role.key, scope: role.scope } });
-        if (found) continue;
-        const created = await broker.call('identity.role.create', role);
-        console.log('Created role', created.key);
-    }
 }
 
 async function syncAdmin(broker: IServiceBroker): Promise<{ org: Organization; user: User }> {
@@ -457,7 +439,7 @@ export async function syncSpec(sitePath: string, outPath?: string, force = false
     const { broker, mesh } = await setup();
 
     try {
-        await syncRoles(broker);
+        await ensureBuiltinRoles(broker);
         const { org } = await syncAdmin(broker);
 
         const consoleApi = await syncApi(broker, org);

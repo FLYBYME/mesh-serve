@@ -1,6 +1,5 @@
 import { MeshError, ServiceModule } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
-import { randomBytes } from 'node:crypto';
 
 import { userCrud, userRegisterContract, userSetPasswordContract, userGrantRoleContract } from './contracts/user.contract.js';
 import { organizationCrud } from './contracts/organization.contract.js';
@@ -32,7 +31,7 @@ import { permits } from './tools/permits.js';
 import { hasRole } from './tools/hasRole.js';
 import { resolveTicket } from './tools/resolveTicket.js';
 
-import { hashPassword } from './methods/hash.js';
+import { ensureBuiltinRoles } from './builtinRoles.js';
 
 export class IdentityService extends ServiceModule {
     public readonly domain = 'identity';
@@ -86,79 +85,18 @@ export class IdentityService extends ServiceModule {
 
     }
 
+    /**
+     * Roles only -- no account, no "platform" organization, nothing a person could call an
+     * identity. Those used to be auto-created here too, with a randomly generated password printed
+     * once to the log and never recoverable if missed: a placeholder nobody actually chose. That
+     * whole sequence (account, operator role grant, "platform" org, owner membership, the bootstrap
+     * api, its exposed contracts) now happens exactly once, deliberately, via `src/bootstrap.ts` --
+     * a real person typing their own name/email/password, not the system inventing one for them.
+     * Roles stay here because they're safe to seed unconditionally at every boot: a role is a
+     * permission template, not an identity, and nothing downstream (bootstrap.ts included) can
+     * proceed without `operator`/`owner` already existing.
+     */
     public async onStart(broker: IServiceBroker): Promise<void> {
-        // Checked every boot, independent of whether the role already existed: an install that had
-        // the role from before permissions lived on it would otherwise never get these. identity.permits
-        // has no superuser bypass and no pattern means "everything" (matchesContract only does an
-        // exact key or a "<prefix>.*" wildcard), so operator is powerless without these explicitly.
-        const operatorPermissions = ['identity.*', 'serve.*'];
-        const roles = await broker.call('identity.role.find', { query: {} });
-        const existingOperator = roles.find((r) => r.key === 'operator');
-
-        if (existingOperator === undefined) {
-            broker.logger.info('No operator role found, creating one...');
-            await broker.call('identity.role.create', {
-                key: 'operator', name: 'Operator', scope: 'global', builtin: true, inherits: [],
-                permissions: operatorPermissions,
-            });
-        } else {
-            const missing = operatorPermissions.filter((p) => !existingOperator.permissions.includes(p));
-            if (missing.length > 0) {
-                broker.logger.info(`Granting operator ${missing.join(', ')}...`);
-                await broker.call('identity.role.update', {
-                    id: existingOperator.id,
-                    permissions: [...existingOperator.permissions, ...missing],
-                });
-            }
-        }
-
-        // Same idempotent-seed pattern as operator, but scope: 'organization' -- resolveEffectiveRoleKeys
-        // (methods/roles.ts) only honors a membership's roleKey when a matching role document exists
-        // with scope !== 'global'. Without this, every membership's role silently granted nothing:
-        // nothing anywhere seeded one, for any organization, ever.
-        if (roles.find((r) => r.key === 'owner') === undefined) {
-            broker.logger.info('No owner role found, creating one...');
-            await broker.call('identity.role.create', {
-                key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: [],
-                permissions: [],
-            });
-        }
-
-        const userCount = await broker.call('identity.user.count', { query: {} });
-        if (userCount > 0) {
-            broker.logger.debug('User count > 0, skipping operator creation.');
-            return;
-        }
-
-        const password = randomBytes(24).toString('base64url');
-        const passwordHash = await hashPassword(password);
-        const user = await broker.call('identity.user.create', {
-            email: 'operator@node.invalid',
-            displayName: 'operator',
-            passwordHash,
-            roles: ['operator'],
-            provisional: true,
-        });
-
-        /**
-         * The operator's global `operator` role is what actually grants them power -- this
-         * organization exists so `api.localhost` (and anything else bootstrap-owned) has somewhere
-         * real to live, not to grant anything itself. "platform" is a shared bootstrap convention
-         * with api.service.ts, which looks an organization up by this exact slug to attach its own
-         * default api to -- a literal string on both sides, the same way "operator" already is.
-         */
-        const organization = await broker.call('identity.organization.create', {
-            slug: 'platform', name: 'Platform', ownerId: user.id,
-        });
-        await broker.call('identity.membership.create', {
-            userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
-        }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
-
-        broker.logger.info('\nFIRST BOOT -- no accounts existed, so one was created.\n\n'
-            + '  email     operator@node.invalid\n'
-            + `  password  ${password}\n\n`
-            + 'This is shown once and is not recoverable. It can do nothing except set its own\n'
-            + 'password -- every other call is refused until it does.\n\n',
-        );
+        await ensureBuiltinRoles(broker);
     }
 }

@@ -6,21 +6,49 @@
  * mapping, nothing exercises a booted node answering a real request. This is that coverage.
  *
  * One node, booted once (`beforeAll`), used across every test in order -- a fresh install's own
- * state (the provisional operator's password, its ticket once claimed) is inherently sequential, and
- * re-booting per test would mean re-running the same boot-time seeding a dozen times for no real
- * isolation gained.
+ * state (the operator's ticket, the organizations/apis created along the way) is inherently
+ * sequential, and re-booting per test would mean re-running the same boot-time seeding a dozen
+ * times for no real isolation gained. `beforeAll` claims the node itself, the same sequence
+ * `src/bootstrap.ts` runs interactively against a real one (see `claim()` above) -- onStart no
+ * longer creates an account on its own; that's the one thing this test does differently from a
+ * real boot.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
 } from '@flybyme/mesh';
+import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { IdentityService } from '../src/identity/identity.service.js';
 import { CdnService } from '../src/cdn/cdn.service.js';
 import { CatalogService } from '../src/catalog/catalog.service.js';
 import { ApiService } from '../src/api/api.service.js';
+import { hashPassword } from '../src/identity/methods/hash.js';
+import { ensureBootstrapApi } from '../src/api/ensureBootstrapApi.js';
+
+const BOOTSTRAP_PASSWORD = 'a-real-operator-password-12';
+
+/**
+ * The same sequence src/bootstrap.ts runs interactively against a real node, done here directly
+ * (a known password instead of a typed one) -- what this test exercises is the booted node's real
+ * HTTP behavior once claimed, not bootstrap.ts's own prompt loop.
+ */
+async function claim(broker: IServiceBroker): Promise<{ userId: string }> {
+    const passwordHash = await hashPassword(BOOTSTRAP_PASSWORD);
+    const user = await broker.call('identity.user.create', {
+        email: 'operator@node.invalid', displayName: 'operator', passwordHash, roles: ['operator'], provisional: false,
+    });
+    const organization = await broker.call('identity.organization.create', {
+        slug: 'platform', name: 'Platform', ownerId: user.id,
+    });
+    await broker.call('identity.membership.create', {
+        userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
+    }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
+    await ensureBootstrapApi(broker);
+    return { userId: user.id };
+}
 
 const DB_NAME = 'mesh-serve-bootstrap-integration-test';
 const WS_PORT = 16554;
@@ -51,14 +79,7 @@ describe('a fresh install, booted for real', () => {
         process.env.API_PORT = String(API_PORT);
         process.env.SERVER_PORT = String(CDN_PORT);
 
-        // Same INFO-level, real Logger the CLI already builds one of (BaseCommand.ts) -- just with a
-        // callback that also captures the one-time first-boot message, since that's the only channel
-        // the printed password ever goes out on and this test has to authenticate as that real
-        // account, not a stand-in for it.
-        let bootMessage = '';
-        const logger = new Logger(LogLevel.INFO, {}, (_level, _formatted, originalMsg) => {
-            if (typeof originalMsg === 'string' && originalMsg.includes('FIRST BOOT')) bootMessage = originalMsg;
-        });
+        const logger = new Logger(LogLevel.INFO);
 
         app = new MeshApp({ nodeID: 'bootstrap-integration-test', logger });
         app.use(new RegistryModule({ ttl: 5000 }));
@@ -73,16 +94,13 @@ describe('a fresh install, booted for real', () => {
 
         await app.start();
 
-        const passwordMatch = /password\s+(\S+)/.exec(bootMessage);
-        if (passwordMatch?.[1] === undefined) {
-            throw new Error(`Boot did not print the expected first-boot message: ${bootMessage}`);
-        }
-        const bootstrapPassword = passwordMatch[1];
+        const broker = app.getProvider<IServiceBroker>('broker');
+        await claim(broker);
 
         const issueRes = await fetch(`${API_ORIGIN}/api/identity/ticket`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ email: 'operator@node.invalid', password: bootstrapPassword }),
+            body: JSON.stringify({ email: 'operator@node.invalid', password: BOOTSTRAP_PASSWORD }),
         });
         const ticket = await json(issueRes) as { token: string; userId: string };
         operatorToken = ticket.token;
@@ -194,18 +212,7 @@ describe('a fresh install, booted for real', () => {
         expect(res.status).toBe(403);
     });
 
-    it('lets the real first-boot operator claim their provisional account', async () => {
-        const res = await fetch(`${API_ORIGIN}/api/identity/password`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ password: 'a-real-operator-password-12' }),
-        });
-        expect(res.status).toBe(200);
-        const body = await json(res) as { ok: boolean; claimed: boolean };
-        expect(body).toEqual({ ok: true, claimed: true });
-    });
-
-    it('whoami reports real organization membership once claimed', async () => {
+    it('whoami reports real organization membership', async () => {
         const res = await fetch(`${API_ORIGIN}/api/identity/whoami`, {
             headers: { authorization: `Bearer ${operatorToken}` },
         });

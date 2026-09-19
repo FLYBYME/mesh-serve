@@ -7,6 +7,7 @@ import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from
 import { wantCrud } from './contracts/want.contract.js';
 import { apiCrud, apiResolveByIdContract, apiResolveByHostContract, apiDescribeContract } from './contracts/api.contract.js';
 import { generateClientContract } from './contracts/generateClient.contract.js';
+import { ensureBootstrapApi } from './ensureBootstrapApi.js';
 import { buildDescriptor, API_BASE } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
 import { add } from './tools/add.js';
@@ -40,49 +41,6 @@ interface Target {
     readonly rows: readonly Expose[];
 }
 
-/**
- * The hostname a fresh install's bootstrap api lives on -- not special-cased in routing any more
- * (every host, including this one, resolves through the same `serve.api` lookup), just the one this
- * install creates a real `serve.api` row for automatically, attached to the "platform" organization
- * identity.service.ts creates at first boot. A literal string shared between the two files, the same
- * way the "operator" role key already is.
- */
-const BOOTSTRAP_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
-
-/**
- * Exposed on the bootstrap api the first time it's created -- how a fresh install gets anyone in at
- * all, plus the calls that let an operator start configuring more without anything pre-seeded by
- * hand. Kept minimal on purpose: register, log in, ask who you are, set a real password, and (for the
- * same "configure more" reason as expose.add/remove) resolve an api's own id/tenant from its
- * hostname -- `mesh-serve init`/`publish`/`generate` all need this just to point their first real
- * call at the right api, and until this was added the only way to get it was a raw Mongo query.
- * Public (no role): it's a read of non-sensitive routing data, the same standing `serve.cdn.
- * resolveHost` already has for exactly the same "for a caller who has nothing else yet" reason.
- * Anything else goes through explicit expose rows once something needs it.
- */
-const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
-    { contract: 'identity.user.register' },
-    { contract: 'identity.ticket.issue' },
-    { contract: 'identity.whoami' },
-    { contract: 'identity.user.setPassword' },
-    { contract: 'serve.api.resolveByHost' },
-    // resolveById's counterpart: an operator naming a *different* api by id (--api on init/publish/
-    // generate, for a tenant other than the one they're logged into) needs that api's own hostname
-    // back -- every call self-exposed on it has to be sent there, not to the login host, and until
-    // this existed the CLI silently sent every such call to its own host instead, 404ing on
-    // everything the self-heal step had just exposed elsewhere. Found live creating a second tenant.
-    { contract: 'serve.api.resolveById' },
-    // Public for the same reason as resolveByHost above: `mesh-serve init` needs a tenant's slug
-    // to construct a valid serve.part key ("<slug>/<name>", enforced by catalog.service.ts's own
-    // validatePartKey hook) and an organization's name/slug is routing metadata, not a secret.
-    { contract: 'identity.organization.get' },
-    // `init -c` looks an organization up by the slug the config names, before it has an id to
-    // `.get` with at all -- same public reasoning as `.get` above.
-    { contract: 'identity.organization.find_one' },
-    { contract: 'serve.expose.add', role: 'operator' },
-    { contract: 'serve.expose.remove', role: 'operator' },
-];
-
 export class ApiService extends ServiceModule {
     public readonly domain = 'serve.api';
 
@@ -103,45 +61,16 @@ export class ApiService extends ServiceModule {
         this.mountTool(generateClientContract, generateClient);
     }
 
+    /**
+     * A node claimed via `src/bootstrap.ts` already has its bootstrap api by the time this runs
+     * again on a later boot -- `ensureBootstrapApi` no-ops once it finds one. An unclaimed node has
+     * no "platform" organization yet either, so this also no-ops rather than failing; bootstrap.ts
+     * is what actually creates both, in the one moment nothing else will retry later.
+     */
     public async onStart(broker: IServiceBroker): Promise<void> {
         this.broker = broker;
-        await this.ensureBootstrapApi();
+        await ensureBootstrapApi(broker);
         await this.createServer();
-    }
-
-    /**
-     * Checked every boot, idempotently. Relies on identity.service.ts's own onStart having already
-     * created the "platform" organization this attaches to -- module registration order in start.ts
-     * puts IdentityService first, so its onStart has already run by the time this does. If no such
-     * organization exists yet (an install whose identity module hasn't bootstrapped, or never will),
-     * this is a no-op rather than a failure: there's nothing to attach a bootstrap api to.
-     */
-    private async ensureBootstrapApi(): Promise<void> {
-        const organization = await this.broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
-        if (organization === undefined) {
-            return;
-        }
-
-        const meta = { tenant_id: organization.id };
-        const existing = await this.broker.call('serve.api.find_one', { query: { apiHost: BOOTSTRAP_API_HOST } }, { meta });
-        if (existing !== undefined) {
-            return;
-        }
-
-        this.broker.logger.info(`Creating bootstrap api "${BOOTSTRAP_API_HOST}"...`);
-        const api = await this.broker.call('serve.api.create', {
-            tenantId: organization.id, apiHost: BOOTSTRAP_API_HOST,
-        }, { meta });
-
-        for (const { contract, role } of BOOTSTRAP_EXPOSED_CONTRACTS) {
-            this.broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on ${BOOTSTRAP_API_HOST}...`);
-            await this.broker.call('serve.expose.create', {
-                tenantId: organization.id,
-                apiId: api.id,
-                contract,
-                ...(role !== undefined ? { role } : {}),
-            }, { meta });
-        }
     }
 
     private async createServer(): Promise<void> {
