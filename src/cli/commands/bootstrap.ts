@@ -48,7 +48,12 @@ export class BootstrapCommand extends BaseCommand {
         const serializer = new JSONSerializer();
 
         const node = new MeshApp({ nodeID: 'bootstrap-1', logger });
-        node.use(new RegistryModule({ ttl: 5000 }));
+        // Long TTL, deliberately -- unlike sync.ts (fully unattended) or start.ts's own server (always
+        // heartbeating itself), this side of the connection goes quiet for as long as a real person
+        // takes to type five prompts. 5000ms let the target node's registry entry go stale mid-wizard,
+        // failing the very next call ("no node advertises domain identity") with everything already
+        // typed in -- found live, on a real terminal, filling the form out at normal human speed.
+        node.use(new RegistryModule({ ttl: 300000 }));
         node.use(new NetworkModule({
             bootstrapNodes: [args.bootstrapNode],
             transports: [new WSTransport(serializer, 0, undefined, { authKey: args.sharedKey })],

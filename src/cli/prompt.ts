@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { execSync } from 'node:child_process';
 
 const ENTER_CHARS = new Set(['\n', '\r']);
 const CTRL_C = String.fromCharCode(3);
@@ -60,6 +61,14 @@ export function question(rl: readline.Interface, query: string): Promise<string>
  * TTY (piped input, e.g. scripts or tests): there's no terminal to mask, and an earlier attempt at
  * this via a private readline method (_writeToOutput) silently broke line-reading entirely in that
  * case rather than just skipping the masking.
+ *
+ * `setRawMode(true)` alone does not reliably disable the terminal's own local echo -- it controls
+ * whether input arrives character-by-character, not whether the tty driver echoes it back. Found
+ * live on a real terminal: typed password characters and this function's own injected "*" both
+ * showed up, interleaved ("p*a*s*s*..."), the tty echoing every real keystroke right alongside the
+ * masking. An explicit `stty -echo`/`stty echo` around the raw-mode window is the standard, reliable
+ * fix on POSIX -- best-effort (wrapped in try/catch) since a non-POSIX shell or a `stty`-less
+ * environment shouldn't turn a masking cosmetic issue into a hard failure.
  */
 export function questionHidden(rl: readline.Interface, query: string): Promise<string> {
     if (!process.stdin.isTTY) {
@@ -72,12 +81,14 @@ export function questionHidden(rl: readline.Interface, query: string): Promise<s
 
         const stdin = process.stdin;
         stdin.setRawMode(true);
+        try { execSync('stty -echo', { stdio: 'ignore' }); } catch { /* best-effort */ }
         stdin.resume();
         stdin.setEncoding('utf-8');
 
         let value = '';
         const cleanup = () => {
             stdin.setRawMode(false);
+            try { execSync('stty echo', { stdio: 'ignore' }); } catch { /* best-effort */ }
             stdin.removeListener('data', onData);
             rl.resume();
         };
