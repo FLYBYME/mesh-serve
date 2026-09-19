@@ -34,6 +34,7 @@ const startInputSchema = z.object({
     logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
     publicScheme: z.enum(['http', 'https']).optional().describe('Scheme used in every public-facing URL a site\'s HTML embeds (preconnect, CSP connect-src, the boot module\'s api field) -- defaults to https, the correct value whenever a reverse proxy fronts this node. Pass http only for an unproxied local node'),
     publicApiPort: z.coerce.number().optional().describe('Port appended to those same public-facing api URLs -- unset in production, where the public port is always the standard one for publicScheme. Needed only when apiPort is reached directly, unproxied (e.g. matching --apiPort for local dev)'),
+    sharedKey: z.string().optional().describe('Shared secret required to join this node\'s mesh network (WSTransport\'s own authKey) -- also read from MESH_KEY if unset. Anything that can open a connection to --wsPort can otherwise call internal contracts directly, bypassing every api-level role/exposure check; required if --wsPort binds to a non-loopback host'),
 });
 
 export class StartCommand extends BaseCommand {
@@ -66,7 +67,7 @@ export class StartCommand extends BaseCommand {
         if (args.publicScheme !== undefined) process.env.PUBLIC_SCHEME = args.publicScheme;
         if (args.publicApiPort !== undefined) process.env.PUBLIC_API_PORT = String(args.publicApiPort);
 
-        const transport = new WSTransport(serializer, args.wsPort);
+        const transport = new WSTransport(serializer, args.wsPort, '127.0.0.1', { authKey: args.sharedKey });
         node.use(new RegistryModule({ ttl: 5000 })); // Short TTL for faster repro
         node.use(new NetworkModule({ transports: [transport] }));
 
