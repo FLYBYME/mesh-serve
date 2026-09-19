@@ -20,6 +20,12 @@ interface EventDiscovery {
     filePath: string;
 }
 
+interface CrudDiscovery {
+    exportName: string; // the defineCrud export itself, e.g. 'userCrud' -- not dotted with an action
+    domain: string;
+    filePath: string;
+}
+
 /**
  * Turn the *source text* of a string literal back into the value it denotes.
  *
@@ -94,10 +100,11 @@ export class GenerateCommand extends BaseCommand {
             fs.mkdirSync(artifactRoot, { recursive: true });
         }
 
-        const { discovery, events, files } = this.discoverContractsAndEvents([scanDir]);
+        const { discovery, events, cruds, files } = this.discoverContractsAndEvents([scanDir]);
 
         await this.generateToolRegistry(discovery, files, options.include || [], artifactRoot);
         await this.generateEvents(events, discovery, files, options.include || [], artifactRoot);
+        await this.generateCollectionRegistry(cruds, files, options.include || [], artifactRoot);
 
         this.logger.info('--- Generation Complete ---');
         const end = Date.now();
@@ -236,10 +243,60 @@ export class GenerateCommand extends BaseCommand {
         fs.writeFileSync(filePath, code);
     }
 
+    /**
+     * Generates `IServiceCollectionRegistry`: one entry per `defineCrud`'d domain, typed off that
+     * export's own `outputSchema` -- the *full* record shape (`hidden` fields included), not any of
+     * the ten generated actions' own `returns` (every one of those types off `publicOutputSchema`,
+     * the stripped view a generic caller gets). `Database.collection(domain)` (mesh core) is the
+     * consumer: it validates every read/write against `globalCrudRegistry.get(domain).outputSchema`
+     * at runtime -- the literal same schema this reads `z.infer<>` off here, so the declared type and
+     * the runtime validator can never drift apart the way two independently-asserted types could.
+     */
+    private async generateCollectionRegistry(cruds: CrudDiscovery[], files: Record<string, string[]>, includes: string[], artifactRoot: string = this.artifactRoot): Promise<void> {
+        this.logger.info('Generating IServiceCollectionRegistry augmentation...');
+        const filePath = path.join(artifactRoot, 'collections.ts');
+        const aliasMap = this.getAliasMap(files, artifactRoot);
 
-    private discoverContractsAndEvents(dirsToScan: string[]): { discovery: ContractDiscovery[], events: EventDiscovery[], files: Record<string, string[]> } {
+        let code = `// GENERATED FILE - DO NOT EDIT\n`;
+        code += `import { z } from 'zod';\n`;
+
+        if (includes.length > 0) {
+            code += `\n// External Type Includes\n`;
+            for (const includePath of includes) {
+                if (!includePath.startsWith('.') && !includePath.startsWith('/') && !includePath.includes('\\')) {
+                    code += `import '${includePath}';\n`;
+                } else {
+                    const absoluteInclude = path.resolve(includePath);
+                    let rel = path.relative(artifactRoot, absoluteInclude).replace(/\\/g, '/');
+                    if (!rel.startsWith('.')) rel = './' + rel;
+                    code += `import '${rel}';\n`;
+                }
+            }
+        }
+
+        Object.values(aliasMap).forEach(m => {
+            code += `import * as ${m.alias} from '${m.path}';\n`;
+        });
+
+        code += `\ndeclare global {\n`;
+        code += `    interface IServiceCollectionRegistry {\n`;
+
+        for (const c of cruds) {
+            const alias = aliasMap[c.filePath]?.alias;
+            if (!alias) continue;
+
+            code += `        '${c.domain}': z.infer<typeof ${alias}.${c.exportName}['outputSchema']>;\n`;
+        }
+
+        code += `    }\n}\n`;
+        code += `\nexport type { IServiceCollectionRegistry };\n`;
+        fs.writeFileSync(filePath, code);
+    }
+
+    private discoverContractsAndEvents(dirsToScan: string[]): { discovery: ContractDiscovery[], events: EventDiscovery[], cruds: CrudDiscovery[], files: Record<string, string[]> } {
         const allContracts: ContractDiscovery[] = [];
         const allEvents: EventDiscovery[] = [];
+        const allCruds: CrudDiscovery[] = [];
         const domainFiles: Record<string, string[]> = {};
 
         const scanFiles: string[] = [];
@@ -318,6 +375,8 @@ export class GenerateCommand extends BaseCommand {
                 if (!domainFiles[domain]) domainFiles[domain] = [];
                 if (!domainFiles[domain].includes(file)) domainFiles[domain].push(file);
 
+                allCruds.push({ exportName, domain, filePath: file });
+
                 Object.entries(actions).forEach(([key, action]) => {
                     allContracts.push({
                         exportName: `${exportName}.${key}`,
@@ -376,7 +435,7 @@ export class GenerateCommand extends BaseCommand {
                 });
             }
         }
-        return { discovery: allContracts, events: allEvents, files: domainFiles };
+        return { discovery: allContracts, events: allEvents, cruds: allCruds, files: domainFiles };
     }
 
     private walkDir(dir: string): string[] {
