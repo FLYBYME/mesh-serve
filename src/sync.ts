@@ -64,8 +64,18 @@ function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string
     return { sitePath, outPath, force };
 }
 
+/**
+ * Same email identity.service.ts's own first-boot onStart bootstraps ('operator@node.invalid'),
+ * deliberately -- syncAdmin below has to recognize *that* account, not mint a second, different
+ * one. It used to be a separate 'admin@example.com', which meant on any real node (onStart always
+ * runs before this script ever connects) syncAdmin's find_one never matched, fell through to its
+ * own register+create path, and collided on the "platform" org's unique slug -- the org bootstrap
+ * had already created -- while still leaving behind a real, orphaned second account. Found live:
+ * exactly that, a stray 'admin@example.com' with no organization, after a rerun against a fresh
+ * database. The password here only matters for the (now rare) case nothing has bootstrapped yet.
+ */
 const AdminUser: RegisterInput = {
-    email: 'admin@example.com',
+    email: 'operator@node.invalid',
     password: 'password1234567',
     displayName: 'Platform Admin',
 };
