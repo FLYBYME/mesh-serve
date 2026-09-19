@@ -39,6 +39,18 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
     const callOnLeaderFn = async (_domain: string, action: string, params: any, callOptions?: any) =>
         callFn(action, params, callOptions);
 
+    // `ctx.db(domain).find(p)` is supposed to be behaviorally identical to `ctx.call(`${domain}.find`,
+    // p)` -- so the mock routes it through the exact same `handlers` map, keyed the same way, rather
+    // than a separate stub that could silently diverge from what `callFn` above already does.
+    const dbFn = (domain: string) => {
+        const via = (action: string) => (params: any) => callFn(`${domain}.${action}`, params);
+        return {
+            find: via('find'), findOne: via('find_one'), get: via('get'), resolve: via('resolve'),
+            create: via('create'), update: via('update'), replace: via('replace'),
+            delete: via('delete'), count: via('count'),
+        };
+    };
+
     const broker = {
         call: callFn,
         callOnLeader: callOnLeaderFn,
@@ -66,6 +78,7 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
         release: (key: string, token: string) => lockBroker.release(key, token),
         withLock: (key: string, fn: () => Promise<any>, lockOptions?: any) => lockBroker.withLock(key, fn, lockOptions),
         emit: emitFn,
+        db: dbFn as unknown as IServiceContext['db'],
         logger: {
             debug: () => {},
             info: () => {},
