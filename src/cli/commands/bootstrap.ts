@@ -9,9 +9,9 @@ import { WSTransport } from '@flybyme/mesh/node';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
-import { question, questionHidden, warm } from '../prompt.js';
+import { question, questionHidden } from '../prompt.js';
 import { hashPassword } from '../../identity/methods/hash.js';
-import { ensureBootstrapApi } from '../../api/ensureBootstrapApi.js';
+import { ensureBootstrapApi, BOOTSTRAP_API_HOST } from '../../api/ensureBootstrapApi.js';
 
 const bootstrapInputSchema = z.object({
     bootstrapNode: z.string().default('ws://127.0.0.1:6005').describe('ws:// URL of the running node to claim'),
@@ -50,7 +50,7 @@ export class BootstrapCommand extends BaseCommand {
         const node = new MeshApp({ nodeID: 'bootstrap-1', logger });
         // Long TTL, deliberately -- unlike sync.ts (fully unattended) or start.ts's own server (always
         // heartbeating itself), this side of the connection goes quiet for as long as a real person
-        // takes to type five prompts. 5000ms let the target node's registry entry go stale mid-wizard,
+        // takes to fill out this wizard. 5000ms let the target node's registry entry go stale mid-way,
         // failing the very next call ("no node advertises domain identity") with everything already
         // typed in -- found live, on a real terminal, filling the form out at normal human speed.
         node.use(new RegistryModule({ ttl: 300000 }));
@@ -106,7 +106,6 @@ export class BootstrapCommand extends BaseCommand {
             console.log('No operator yet. This creates the one real admin account for this node -- there is no undo.\n');
 
             const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-            warm(rl);
             try {
                 const displayName = await question(rl, 'Name: ');
                 const email = await question(rl, 'Email: ');
@@ -130,6 +129,9 @@ export class BootstrapCommand extends BaseCommand {
                 const orgNameRaw = await question(rl, 'Organization name [Platform]: ');
                 const orgName = orgNameRaw.trim().length > 0 ? orgNameRaw.trim() : 'Platform';
 
+                const apiHostRaw = await question(rl, `Bootstrap api hostname [${BOOTSTRAP_API_HOST}]: `);
+                const apiHost = apiHostRaw.trim().length > 0 ? apiHostRaw.trim() : BOOTSTRAP_API_HOST;
+
                 const passwordHash = await hashPassword(password);
                 const user = await broker.call('identity.user.create', {
                     email, displayName, passwordHash, roles: ['operator'], provisional: false,
@@ -145,9 +147,9 @@ export class BootstrapCommand extends BaseCommand {
                     userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
                 }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
 
-                await ensureBootstrapApi(broker);
+                await ensureBootstrapApi(broker, apiHost);
 
-                console.log(`\nClaimed. ${email} is the operator, owner of "${organization.name}".\n`);
+                console.log(`\nClaimed. ${email} is the operator, owner of "${organization.name}" -- api on "${apiHost}".\n`);
 
                 await this.addCustomRoles(rl, broker);
 

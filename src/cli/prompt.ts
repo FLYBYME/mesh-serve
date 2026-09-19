@@ -1,120 +1,55 @@
 import readline from 'node:readline';
-import { execSync } from 'node:child_process';
-
-const ENTER_CHARS = new Set(['\n', '\r']);
-const CTRL_C = String.fromCharCode(3);
-const CTRL_D = String.fromCharCode(4);
-const BACKSPACE_CHARS = new Set(['\b', String.fromCharCode(127)]);
 
 /**
- * One shared async iterator per `rl`, reused across every `question()` call against it.
- *
- * `rl.question()` attaches a one-shot `'line'` listener per call -- fine interactively, where each
- * line only exists once the user presses Enter, but wrong for piped input (scripts, tests): readline
- * drains a buffered chunk and emits every `'line'` event it contains synchronously, before an `await`
- * between two sequential questions gets a chance to attach the second listener. The second line's
- * event fires into nothing, stdin then hits EOF, and the second `question()` never resolves -- caught
- * live running "login" with piped credentials, where the process exited after only reading email.
- * The async iterator queues internally instead of racing a listener against emission, so a line that
- * arrives before anyone asked for it is not lost.
+ * Plain readline, used the normal way -- one shared `rl` for the whole session, every prompt going
+ * through the same `rl.question()`. A previous version of this file hand-rolled raw-mode byte
+ * reading as a *second*, separate consumer of stdin for masked prompts, switching between it and
+ * readline's own line-mode reads with `rl.pause()`/`resume()` per call. That was a real, not just
+ * cosmetic, bug: on a real terminal at normal typing speed, values landed in the wrong field
+ * entirely (an organization name ending up as the literal password just typed). Masking below works
+ * by intercepting readline's own output instead of fighting it for the input -- there is exactly one
+ * thing ever reading stdin: readline itself.
  */
-const iterators = new WeakMap<readline.Interface, AsyncIterator<string>>();
 
-function getIterator(rl: readline.Interface): AsyncIterator<string> {
-    let it = iterators.get(rl);
-    if (it === undefined) {
-        it = rl[Symbol.asyncIterator]();
-        iterators.set(rl, it);
-    }
-    return it;
-}
-
-/**
- * Attach the shared async iterator immediately, before any `await` with no `question()` in it runs.
- *
- * Lazy attachment (on first `question()` call) is fine when nothing happens before that first call --
- * `login`'s two questions are back to back. It breaks the moment a command does awaited work first
- * (a self-heal `expose.add` loop, a lookup) with piped, non-TTY stdin: readline's own input stream can
- * reach EOF and close while nobody is listening yet, and requesting the async iterator *after* that
- * close resolves every `.next()` against a dead source -- `question()` prints its prompt and then
- * hangs forever, with no error. Reproduced directly (`await`s before the first `question()` vs. calling
- * `warm()` first) before writing this. Call this right after `readline.createInterface(...)` in any
- * command that does async work before its first prompt.
- */
-export function warm(rl: readline.Interface): void {
-    getIterator(rl);
-}
-
-function nextLine(rl: readline.Interface): Promise<string> {
-    return getIterator(rl).next().then((result) => result.value ?? '');
-}
+type MutableInterface = readline.Interface & {
+    _writeToOutput?: (str: string) => void;
+    stdoutMuted?: boolean;
+};
 
 export function question(rl: readline.Interface, query: string): Promise<string> {
-    process.stdout.write(query);
-    return nextLine(rl);
+    return new Promise((resolve) => rl.question(query, resolve));
 }
 
 /**
- * A masked prompt (echoes "*" per keystroke). Node's readline has no built-in hidden-input mode, so
- * this reads raw keypresses directly off stdin -- pausing the shared `rl` interface first so the two
- * don't both try to consume the same stream. Falls back to a plain question when stdin isn't a real
- * TTY (piped input, e.g. scripts or tests): there's no terminal to mask, and an earlier attempt at
- * this via a private readline method (_writeToOutput) silently broke line-reading entirely in that
- * case rather than just skipping the masking.
- *
- * `setRawMode(true)` alone does not reliably disable the terminal's own local echo -- it controls
- * whether input arrives character-by-character, not whether the tty driver echoes it back. Found
- * live on a real terminal: typed password characters and this function's own injected "*" both
- * showed up, interleaved ("p*a*s*s*..."), the tty echoing every real keystroke right alongside the
- * masking. An explicit `stty -echo`/`stty echo` around the raw-mode window is the standard, reliable
- * fix on POSIX -- best-effort (wrapped in try/catch) since a non-POSIX shell or a `stty`-less
- * environment shouldn't turn a masking cosmetic issue into a hard failure.
+ * The standard Node recipe for a masked prompt with no extra dependency: override the interface's
+ * own (private, but long-stable) `_writeToOutput` so every keystroke's echo becomes "*" instead of
+ * the real character, while the newline on Enter still passes through untouched. Falls back to a
+ * plain, visible question if `_writeToOutput` isn't present (older/newer Node internals, or a
+ * non-terminal `rl` where it may never even be called) rather than failing outright -- masking is a
+ * nicety, capturing the right value is the part that has to work unconditionally.
  */
 export function questionHidden(rl: readline.Interface, query: string): Promise<string> {
-    if (!process.stdin.isTTY) {
+    const mutable = rl as MutableInterface;
+    const original = mutable._writeToOutput;
+
+    if (original === undefined) {
         return question(rl, query);
     }
 
     return new Promise((resolve) => {
-        process.stdout.write(query);
-        rl.pause();
-
-        const stdin = process.stdin;
-        stdin.setRawMode(true);
-        try { execSync('stty -echo', { stdio: 'ignore' }); } catch { /* best-effort */ }
-        stdin.resume();
-        stdin.setEncoding('utf-8');
-
-        let value = '';
-        const cleanup = () => {
-            stdin.setRawMode(false);
-            try { execSync('stty echo', { stdio: 'ignore' }); } catch { /* best-effort */ }
-            stdin.removeListener('data', onData);
-            rl.resume();
-        };
-        const onData = (char: string) => {
-            if (ENTER_CHARS.has(char)) {
-                cleanup();
-                process.stdout.write('\n');
-                resolve(value);
-            } else if (char === CTRL_D) {
-                cleanup();
-                process.stdout.write('\n');
-                resolve(value);
-            } else if (char === CTRL_C) {
-                cleanup();
-                process.exit(130);
-            } else if (BACKSPACE_CHARS.has(char)) {
-                if (value.length > 0) {
-                    value = value.slice(0, -1);
-                    process.stdout.write('\b \b');
-                }
+        mutable._writeToOutput = (str: string) => {
+            if (mutable.stdoutMuted && str !== '\r\n' && str !== '\n') {
+                original.call(rl, '*');
             } else {
-                value += char;
-                process.stdout.write('*');
+                original.call(rl, str);
             }
         };
 
-        stdin.on('data', onData);
+        rl.question(query, (answer) => {
+            mutable._writeToOutput = original;
+            mutable.stdoutMuted = false;
+            resolve(answer);
+        });
+        mutable.stdoutMuted = true;
     });
 }

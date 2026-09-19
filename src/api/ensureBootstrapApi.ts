@@ -41,31 +41,38 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
 
 /**
  * Idempotent, and callable from two different places: `ApiService.onStart` (every ordinary boot,
- * once the "platform" organization already exists) and `src/bootstrap.ts` (the one first-claim run,
- * which creates "platform" itself and needs this to happen in the very same call, since onStart has
- * already run once and won't run again to notice the org showing up later). No-ops rather than
+ * once the "platform" organization already exists) and `mesh-serve bootstrap` (the one first-claim
+ * run, which creates "platform" itself and needs this to happen in the very same call, since onStart
+ * has already run once and won't run again to notice the org showing up later). No-ops rather than
  * failing if "platform" doesn't exist yet -- a node that hasn't been claimed has nothing to attach a
  * bootstrap api to.
+ *
+ * Looks for an *existing* api by tenant, not by hostname: `apiHost` is only ever consulted here for
+ * the one-time create -- an operator can (via `bootstrap`'s own prompt) choose a hostname other than
+ * the default, and every later boot's argument-less `ensureBootstrapApi(broker)` call still has to
+ * find that same row again. Looking it up by `apiHost` would silently try to create a second,
+ * default-hostname bootstrap api on every boot after a custom one was chosen; there is only ever
+ * meant to be one per tenant, so tenant is the real identity here, not the host.
  */
-export async function ensureBootstrapApi(broker: IServiceBroker): Promise<void> {
+export async function ensureBootstrapApi(broker: IServiceBroker, apiHost: string = BOOTSTRAP_API_HOST): Promise<void> {
     const organization = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
     if (organization === undefined) {
         return;
     }
 
     const meta = { tenant_id: organization.id };
-    const existing = await broker.call('serve.api.find_one', { query: { apiHost: BOOTSTRAP_API_HOST } }, { meta });
+    const existing = await broker.call('serve.api.find_one', { query: { tenantId: organization.id } }, { meta });
     if (existing !== undefined) {
         return;
     }
 
-    broker.logger.info(`Creating bootstrap api "${BOOTSTRAP_API_HOST}"...`);
+    broker.logger.info(`Creating bootstrap api "${apiHost}"...`);
     const api = await broker.call('serve.api.create', {
-        tenantId: organization.id, apiHost: BOOTSTRAP_API_HOST,
+        tenantId: organization.id, apiHost,
     }, { meta });
 
     for (const { contract, role } of BOOTSTRAP_EXPOSED_CONTRACTS) {
-        broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on ${BOOTSTRAP_API_HOST}...`);
+        broker.logger.info(`Exposing "${contract}"${role ? ` (role: ${role})` : ''} on ${apiHost}...`);
         await broker.call('serve.expose.create', {
             tenantId: organization.id,
             apiId: api.id,
