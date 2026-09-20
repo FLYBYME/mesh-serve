@@ -121,7 +121,8 @@ export const artifactRequestBuildContract = defineContract({
     rest: { method: 'POST', path: '/artifacts/requestBuild' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/catalog/tools/requestBuild.ts', concurrency: 'on-demand', permissions: [],
+    // A build clones a repo and runs its toolchain, so this is arbitrary code execution by proxy.
+    filePath: 'src/catalog/tools/requestBuild.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.id} (${o.status})`,
 });
 
@@ -156,7 +157,7 @@ export const artifactBuildContract = defineContract({
     // that overrides this, but a direct ctx.call (tests, a future non-queue caller) still wants a
     // sane bound rather than whatever the framework's own default is.
     timeout: 5 * 60_000,
-    filePath: 'src/catalog/tools/build.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/catalog/tools/build.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => (o.success ? 'built' : 'build failed'),
 });
 
@@ -187,7 +188,7 @@ export const artifactWatchReleaseContract = defineContract({
     filePath: 'src/catalog/tools/watchRelease.ts',
     concurrency: 'interval',
     intervalMs: 60_000,
-    permissions: [],
+    permissions: ['operator'],
     print: (o) => `enqueued ${o.enqueued}`,
 });
 

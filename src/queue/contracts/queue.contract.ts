@@ -45,7 +45,7 @@ export const queueClaimContract = defineContract({
     destructive: true,
     leaderScoped: true,
     dependencies: ['serve.queue'],
-    filePath: 'src/queue/tools/claim.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/queue/tools/claim.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => (o === undefined ? 'nothing to claim' : `claimed ${o.id} (${o.contract})`),
 });
 
@@ -81,7 +81,7 @@ export const queueTickContract = defineContract({
     filePath: 'src/queue/tools/tick.ts',
     concurrency: 'interval',
     intervalMs: Number(process.env.QUEUE_TICK_MS ?? 500),
-    permissions: [],
+    permissions: ['operator'],
     print: (o) => `started ${o.started}, ${o.inFlight} in flight`,
 });
 

@@ -29,7 +29,8 @@ export const roleUpsertContract = defineContract({
     rest: { method: 'POST', path: '/identity/roles/define' },
     dependencies: ['identity.role'],
     visibility: 'public',
-    filePath: 'src/identity/tools/upsertRole.ts', concurrency: 'on-demand', permissions: [],
+    // Defines what a role may do. Whoever can call this can grant themselves anything.
+    filePath: 'src/identity/tools/upsertRole.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.key} ${o.created ? 'defined' : 'updated'}`,
 });
 
@@ -62,7 +63,7 @@ export const roleEnsureBuiltinsContract = defineContract({
     destructive: true,
     filePath: 'src/identity/tools/ensureBuiltins.ts',
     concurrency: 'on-demand',
-    permissions: [],
+    permissions: ['operator'],
     print: (o) => (o.created.length === 0 ? 'all builtin roles present' : `created ${o.created.join(', ')}`),
 });
 

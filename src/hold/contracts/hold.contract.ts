@@ -57,7 +57,8 @@ export const holdDecideContract = defineContract({
     // pass the "still held" check before either writes -- leaderScoped + withLock (in decide.ts)
     // close that the same way infer.provider.acquire/release do.
     leaderScoped: true,
-    filePath: 'src/hold/tools/decide.ts', concurrency: 'on-demand', permissions: [],
+    // Approves or denies a held call, which then runs under the original requester's identity.
+    filePath: 'src/hold/tools/decide.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.holdId}: ${o.status}`,
 });
 

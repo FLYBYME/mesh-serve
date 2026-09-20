@@ -250,8 +250,20 @@ export class ApiGateway {
      * Neither role nor permission set on the row means public. No caller at all is only a problem
      * once the row actually demands one.
      */
-    private async checkGate(row: Expose, caller: Caller | undefined, tenantId: string): Promise<void> {
-        if (row.role === undefined && row.permission === undefined) {
+    private async checkGate(
+        row: Expose,
+        contract: ToolContract,
+        caller: Caller | undefined,
+        tenantId: string,
+    ): Promise<void> {
+        // The contract's own floor, applied before the row's. This is the half that fails *safe*:
+        // an expose row with no role is anonymous, so before this a destructive contract published
+        // without one was reachable by anybody, and nothing anywhere said that was a mistake.
+        // Declaring the requirement on the contract means a wrong expose row can now only
+        // over-restrict. The row stays extrinsic and may still demand more -- both apply.
+        const required = contract.permissions;
+
+        if (required.length === 0 && row.role === undefined && row.permission === undefined) {
             return;
         }
 
@@ -264,6 +276,24 @@ export class ApiGateway {
         // ctx.call, which inherits whatever meta this entry call carries, so organizationId has to
         // be set here too, aliasing the same value tenant_id already carries.
         const meta = { user: { id: caller.userId, tenant_id: tenantId, organizationId: tenantId } };
+
+        // Every declared key, not any -- a contract asking for two roles means both. Sequential
+        // rather than parallel so the message names the first one actually missing, which is the
+        // one an operator has to grant.
+        for (const roleKey of required) {
+            const result = await this.broker.call('identity.hasRole', {
+                userId: caller.userId,
+                role: roleKey,
+                organizationId: tenantId,
+            }, { meta });
+            if (!result.granted) {
+                throw new MeshError({
+                    message: `"${row.contract}" requires role "${roleKey}".`,
+                    code: 'FORBIDDEN',
+                    status: 403,
+                });
+            }
+        }
 
         if (row.role !== undefined) {
             const result = await this.broker.call('identity.hasRole', {
@@ -412,7 +442,7 @@ export class ApiGateway {
         }
 
         const caller = await this.resolveCaller(req);
-        await this.checkGate(route.row, caller, target.tenantId);
+        await this.checkGate(route.row, route.contract, caller, target.tenantId);
 
         const input = await this.parseInput(req, route.params);
 

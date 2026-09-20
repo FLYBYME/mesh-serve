@@ -101,7 +101,10 @@ export const userGrantRoleContract = defineContract({
     dependencies: ['identity.role'],
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/tools/grantRole.ts', concurrency: 'on-demand', permissions: [],
+    // Grants any role to any account, with no check of its own -- the direct escalation path.
+    // Until now the only thing standing between it and an anonymous caller was that nobody had
+    // written a serve.expose row for it without a role.
+    filePath: 'src/identity/tools/grantRole.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
 });
 

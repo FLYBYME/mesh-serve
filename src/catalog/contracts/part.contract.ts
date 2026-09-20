@@ -73,7 +73,8 @@ export const partStartContract = defineContract({
     rest: { method: 'POST', path: '/parts/:id/start' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/catalog/tools/startService.ts', concurrency: 'on-demand', permissions: [],
+    // Runs code on a node. There is no larger blast radius in the system.
+    filePath: 'src/catalog/tools/startService.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.domain} started on ${o.nodeID}`,
 });
 
@@ -97,7 +98,7 @@ export const partStopContract = defineContract({
     rest: { method: 'POST', path: '/parts/:id/stop' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/catalog/tools/stopService.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/catalog/tools/stopService.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: () => 'stopped',
 });
 

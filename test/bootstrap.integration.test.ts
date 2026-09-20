@@ -285,9 +285,13 @@ describe('a fresh install, booted for real', () => {
         });
         expect(exposeRes.status).toBe(200);
 
+        // Authenticated now: the expose row above names no role, but serve.api.generateClient
+        // declares permissions: ['operator'] on the contract itself, and that floor applies
+        // regardless of how the row exposes it. Before the floor existed this call was anonymous --
+        // a contract that hands out the api's full exposure, reachable by anyone.
         const res = await fetch(`${API_ORIGIN}/api/generate-client`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
             body: JSON.stringify({ apiId }),
         });
         expect(res.status).toBe(200);

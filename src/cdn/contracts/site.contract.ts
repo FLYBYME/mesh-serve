@@ -95,7 +95,8 @@ export const siteDeployContract = defineContract({
     rest: { method: 'POST', path: '/sites/:siteId/deploy' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/cdn/tools/deploy.ts', concurrency: 'on-demand', permissions: [],
+    // Changes what a live site serves to everyone who visits it.
+    filePath: 'src/cdn/tools/deploy.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.site.host} -> ${o.site.releaseHash}`,
 });
 
@@ -130,7 +131,7 @@ export const siteListenContract = defineContract({
     destructive: true,
     filePath: 'src/cdn/tools/listen.ts',
     concurrency: 'long-running',
-    permissions: [],
+    permissions: ['operator'],
     print: (o) => `serving on ${o.boundTo} (${o.nodeID})`,
 });
 

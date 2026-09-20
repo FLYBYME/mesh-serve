@@ -20,7 +20,7 @@ export const generateClientContract = defineContract({
     // a body carries it as real JSON instead of forcing an array through a query string.
     rest: { method: 'POST', path: '/generate-client' },
     visibility: 'public',
-    filePath: 'src/api/tools/generateClient.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/generateClient.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.source.length} bytes`,
 });
 

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import { globalContractRegistry, isPublicContract } from '@flybyme/mesh';
+import type { ToolContract } from '@flybyme/mesh';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import type { Expose } from '../contracts/expose.contract.js';
@@ -30,10 +31,18 @@ export interface ExposureDescriptor {
     readonly calls: readonly DescribedCall[];
 }
 
-function gateOf(row: Expose): string {
-    if (row.permission !== undefined) return `permission:${row.permission}`;
-    if (row.role !== undefined) return row.role;
-    return 'public';
+/**
+ * What a caller has to be to reach this call -- the contract's own floor and the row's extrinsic
+ * gate together, because both are applied and both must pass (see gateway.ts checkGate).
+ *
+ * `public` now means genuinely ungated. Before the contract floor existed it meant only "this row
+ * names no role", which was the same string for a contract nobody should reach anonymously.
+ */
+function gateOf(row: Expose, contract: ToolContract): string {
+    const parts: string[] = [...contract.permissions];
+    if (row.role !== undefined && !parts.includes(row.role)) parts.push(row.role);
+    if (row.permission !== undefined) parts.push(`permission:${row.permission}`);
+    return parts.length === 0 ? 'public' : parts.join('+');
 }
 
 /**
@@ -58,7 +67,7 @@ export function buildDescriptor(host: string, rows: readonly Expose[]): Exposure
             description: contract.description,
             method: contract.rest.method,
             path: contract.rest.path,
-            gate: gateOf(row),
+            gate: gateOf(row, contract),
             input: zodToJsonSchema(contract.inputSchema),
             output: zodToJsonSchema(contract.outputSchema),
             destructive: contract.destructive,

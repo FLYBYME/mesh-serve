@@ -36,7 +36,9 @@ export const exposeAddContract = defineContract({
     rest: { method: 'POST', path: '/expose' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/api/tools/add.ts', concurrency: 'on-demand', permissions: [],
+    // Decides what is reachable over an api at all. Reaching this anonymously would mean being
+    // able to publish anything, including this.
+    filePath: 'src/api/tools/add.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.contract} on ${o.apiId}`,
 });
 
@@ -61,7 +63,7 @@ export const exposeRemoveContract = defineContract({
     rest: { method: 'DELETE', path: '/expose/:apiId/:contract' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/api/tools/remove.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/remove.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: () => 'removed',
 });
 

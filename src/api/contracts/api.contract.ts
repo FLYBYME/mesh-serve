@@ -137,7 +137,7 @@ export const apiListenContract = defineContract({
     destructive: true,
     filePath: 'src/api/tools/listen.ts',
     concurrency: 'long-running',
-    permissions: [],
+    permissions: ['operator'],
     print: (o) => `serving on ${o.boundTo} (${o.nodeID})`,
 });
 
