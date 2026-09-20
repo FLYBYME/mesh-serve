@@ -731,3 +731,46 @@ Verified live: restarted a real node on v3.1.5, reran `sync-all.ts`, all 5 sites
 a `kind: 'service'` part under `tsx` again should not hit this -- but a compiled/production `node
 dist/...` start path was never actually broken by this in the first place, only `tsx`-hosted dev runs
 were.
+
+---
+
+## Open — a `register()`-shaped `kind: 'service'` part cannot be cleanly restarted
+
+Found live, composing `dns.site.yaml` end to end for the first time against real third-party repos
+(`surfdns-registry`, `surfdns-domains`, `surfdns-nameserver`) rather than mesh-serve's own six core
+parts. Every one of those repos' `kind: 'service'` parts uses `register(broker)` -- the shape
+`loadModule.ts` already documents as the one that "mounts whatever it likes without telling anyone",
+so unloading one "can run its `stop` and evict its module but cannot unmount its contracts". That
+sentence was written correctly and abstractly; this is the first time anything actually hit the
+concrete consequence.
+
+Sequence: `serve.part.start` mounts `domain.create` etc and marks the part running. `desired`
+defaults `'stopped'` on every `serve.part` row (correctly, per its own schema doc -- nothing should
+run unless declared to), and `dns.site.yaml` did not set `desired: running` on either service part
+(a straightforward authoring mistake, now fixed in that file). `serve.part.reconcile`'s next 30s
+tick therefore calls `serve.part.stop`, which -- because `register()` recorded no contract list --
+evicts the `require.cache` entry (so a fresh `require()` would load new code) but leaves
+`domain.create` and every other contract the module registered still live on the broker, and clears
+the in-memory "is this running" tracking regardless. The next `serve.part.start` (the very next
+`sync` rerun) sees "not running", proceeds to `loadAndRegisterModule` a fresh copy, and
+`registerContract`'s own duplicate-key guard throws `"domain.create" is already mounted on this
+node` -- a 500, not the clean 400 "already running" a stale-tracking case would produce.
+
+**Immediate, sufficient fix for now**: declare `desired: running` on every `kind: 'service'` part
+meant to stay up, so the reconciler never calls `stop` on it at all. Done for `dns.site.yaml`.
+
+**The real gap, unresolved**: any `register()`-shaped service *will* hit this the moment something
+legitimately toggles `desired` to `'stopped'` and back (an operator pausing a service, a supervisor
+decision, anything short-lived) -- stop silently does not do what its own 200 response claims. Two
+directions, not decided:
+- Make `register(broker)` itself trackable: wrap the `broker` handed to it so every
+  `registerContract`/`registerCrud` call is recorded, the same way the manifest shape's `loadDomain`
+  already knows exactly what it mounted. This closes the gap for every `register()`-shaped part at
+  once, with no change needed in any of them.
+- Or: stop pretending `register()` is stoppable at all -- have `serve.part.stop` refuse outright for
+  a part with no recorded contract list, with a message naming the manifest shape as the fix, rather
+  than reporting `{ stopped: true }` for something it did not actually do.
+
+Whichever direction, `serve.part.stop`'s current `{ stopped: true }` for a `register()`-shaped part
+is a real lie today, and every one of `surfdns-registry`/`surfdns-domains`/`surfdns-nameserver`'s new
+`register.ts` entries (added this session, replacing the manifest shape's absence) is exposed to it.

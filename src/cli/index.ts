@@ -7,6 +7,7 @@ import { GenerateCommand } from './commands/generate.js';
 import { SyncCommand } from './commands/sync.js';
 import { LoginCommand } from './commands/login.js';
 import { SwitchCommand } from './commands/switch.js';
+import { ApisCommand } from './commands/apis.js';
 import { registerDiscoveredCommands } from './core/dynamicCommands.js';
 import { readSession } from './core/session.js';
 
@@ -19,15 +20,17 @@ import { readSession } from './core/session.js';
  * They exist regardless of what the CLI is pointed at. **Discovered** commands come from whichever
  * api `switch` selected, read from its own `_describe`.
  *
- * `bootstrap`, `generate` and `sync` are the only things here that touch the mesh network directly
- * -- `bootstrap` because its job is to create the gate everything else goes through, `generate` and
- * `sync` because each is many api-shaped operations in one connected session rather than a login
- * plus a round trip per step. None of the three does anything an operator with the right role
- * couldn't also do over the api one call at a time; `sync.ts` is, in effect, the specification for
- * what a fuller api client would automate. Everything else here -- `login`, `switch`, and every
- * discovered command -- is an ordinary api client with no privileged path, subject to the same
- * `serve.expose` rows and permission floors as a browser. That is deliberate: it makes an
- * incomplete api impossible not to notice, because those commands cannot route around it either.
+ * `bootstrap` is the only thing here that touches the mesh network directly, because its whole job
+ * is to create the gate everything else goes through -- there is nothing to authenticate against
+ * yet. Every other built-in, including `generate` and `sync`, is an ordinary api client using the
+ * currently signed-in operator's own ticket, subject to the same `serve.expose` rows and permission
+ * floors as a browser. `sync` used to connect to the mesh directly on the reasoning that it was
+ * many api-shaped operations in one session rather than a login plus a round trip per step -- that
+ * was the same shortcut `syncAdmin` and a raw `serve.artifact.build` were, before those were found
+ * and removed, just at the level of the whole connection instead of one call. `sync.ts` is, in
+ * effect, the specification for what a fuller api client automates; it is not a reason to skip
+ * being one. That is deliberate: it makes an incomplete api impossible not to notice, because these
+ * commands cannot route around it either.
  */
 async function main(): Promise<void> {
     const program = new Command();
@@ -42,6 +45,7 @@ async function main(): Promise<void> {
     new SyncCommand().register(program);
     new LoginCommand().register(program);
     new SwitchCommand().register(program);
+    new ApisCommand().register(program);
 
     // Last, and from cache: a discovered command must never shadow a built-in, and `--help` has to
     // render without a cluster to ask.
