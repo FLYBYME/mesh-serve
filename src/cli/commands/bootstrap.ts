@@ -133,6 +133,14 @@ export class BootstrapCommand extends BaseCommand {
             // domain identity".
             await this.loadCoreParts(broker);
 
+            // The builtin roles, seeded once, deliberately -- not by every node that happens to
+            // load the identity part. It writes shared cluster state, and loading is per node, so
+            // five nodes booting would mean five racing seed loops. Idempotent regardless, and
+            // needed before anything below: nothing can be granted `operator`/`owner` until those
+            // roles exist.
+            const roles = await broker.call('identity.role.ensureBuiltins', {});
+            if (roles.created.length > 0) console.log(`Seeded builtin roles: ${roles.created.join(', ')}.`);
+
             const existing = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
             if (existing !== undefined) {
                 this.logger.error('Already claimed -- a "platform" organization already exists. This node has an operator; log in against its api instead.');

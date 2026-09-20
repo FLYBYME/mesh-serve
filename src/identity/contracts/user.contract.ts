@@ -46,7 +46,7 @@ export const userRegisterContract = defineContract({
     rest: { method: 'POST', path: '/identity/register' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/register.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `registered ${o.userId}`,
 });
 
@@ -71,7 +71,7 @@ export const userSetPasswordContract = defineContract({
     rest: { method: 'POST', path: '/identity/password' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/setPassword.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.claimed ? 'password set, account claimed' : 'password set'),
 });
 
@@ -101,7 +101,7 @@ export const userGrantRoleContract = defineContract({
     dependencies: ['identity.role'],
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/contracts/user.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/grantRole.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
 });
 

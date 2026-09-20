@@ -1,4 +1,5 @@
-import { defineCrud, z } from '@flybyme/mesh';
+import { defineCrud, MeshError, z } from '@flybyme/mesh';
+import type { IServiceContext } from '@flybyme/mesh';
 
 import { membershipSchema } from '../schema/membership.js';
 
@@ -21,6 +22,20 @@ export const membershipCrud = defineCrud('identity.membership', membershipSchema
     visibility: {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
         create: 'public', update: 'public', delete: 'public',
+    },
+    hooks: {
+        create: {
+            // A membership cannot name an organization that doesn't exist. Declared here so it
+            // holds wherever this collection is mounted, not wherever it happens to be registered.
+            before: async (input: never, ctx: never) => {
+                const record = input as unknown as { organizationId: string };
+                const org = await (ctx as IServiceContext).db('identity.organization').resolve({ id: record.organizationId });
+                if (org === undefined) {
+                    throw new MeshError({ message: `No organization "${record.organizationId}".`, code: 'NOT_FOUND', status: 404 });
+                }
+                return record;
+            },
+        },
     },
     dependencies: ['identity.organization', 'identity.user'],
     filePath: 'src/identity/contracts/membership.contract.ts',

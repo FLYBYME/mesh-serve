@@ -21,17 +21,11 @@ export const BuiltinRoles: readonly RoleType[] = [
 ];
 
 /**
- * Create-if-missing, not upsert: an existing row is left exactly as it is, including any
- * customization an operator already made to it (identity.role.upsert is the explicit, deliberate
- * way to change a builtin role's permissions after the fact -- this only ever fills a genuine gap,
- * the same "explicit, not automatic" rule the rest of this session's cleanup already applied to
- * HOLD_EXPOSED_CONTRACTS).
+ * The seeding itself is `identity.role.ensureBuiltins` (`tools/ensureBuiltins.ts`) -- a real
+ * contract, because it writes shared cluster state and so belongs to bootstrap's one deliberate
+ * pass rather than to every node that happens to load the identity part. This wrapper is for
+ * callers that hold a broker rather than a handler's ctx.
  */
 export async function ensureBuiltinRoles(broker: IServiceBroker): Promise<void> {
-    for (const role of BuiltinRoles) {
-        const found = await broker.call('identity.role.find_one', { query: { key: role.key, scope: role.scope } });
-        if (found) continue;
-        await broker.call('identity.role.create', role);
-        broker.logger.info(`No "${role.key}" role found, created one.`);
-    }
+    await broker.call('identity.role.ensureBuiltins', {});
 }

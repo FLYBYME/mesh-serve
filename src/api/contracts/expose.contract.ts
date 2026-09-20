@@ -36,7 +36,7 @@ export const exposeAddContract = defineContract({
     rest: { method: 'POST', path: '/expose' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/api/contracts/expose.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/add.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.contract} on ${o.apiId}`,
 });
 
@@ -61,7 +61,7 @@ export const exposeRemoveContract = defineContract({
     rest: { method: 'DELETE', path: '/expose/:apiId/:contract' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/api/contracts/expose.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/remove.ts', concurrency: 'on-demand', permissions: [],
     print: () => 'removed',
 });
 

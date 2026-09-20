@@ -23,7 +23,7 @@ export const whoamiContract = defineContract({
     rest: { method: 'GET', path: '/identity/whoami' },
     dependencies: ['identity.user', 'identity.membership', 'identity.organization'],
     visibility: 'public',
-    filePath: 'src/identity/contracts/identity.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/whoami.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.displayName} <${o.email}>`,
 });
 
@@ -48,7 +48,7 @@ export const permitsContract = defineContract({
     outputSchema: permitsOutputSchema,
     rest: { method: 'POST', path: '/identity/permits' },
     dependencies: ['identity.role', 'identity.membership', 'identity.user'],
-    filePath: 'src/identity/contracts/identity.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/permits.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.permitted ? 'permitted' : 'denied'),
 });
 
@@ -73,7 +73,7 @@ export const hasRoleContract = defineContract({
     outputSchema: hasRoleOutputSchema,
     rest: { method: 'POST', path: '/identity/hasRole' },
     dependencies: ['identity.role', 'identity.membership', 'identity.user'],
-    filePath: 'src/identity/contracts/identity.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/hasRole.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.granted ? 'granted' : 'denied'),
 });
 

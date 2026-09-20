@@ -68,6 +68,14 @@ export async function stopLoadedPart(domain: string): Promise<void> {
     await stop();
 }
 
+/**
+ * The minimal set of domains that covers all of them, given that loading a domain also loads its
+ * sub-domains. `['identity', 'identity.user', 'identity.role']` -> `['identity']`.
+ */
+export function rootDomains(domains: readonly string[]): string[] {
+    return domains.filter((domain) => !domains.some((other) => other !== domain && domain.startsWith(`${other}.`)));
+}
+
 export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: string): Promise<{ domain: string; nodeID: string }> {
     const isCjs = absolutePath.endsWith('.cjs');
     // pathToFileURL, not the bare path: Node's dynamic import() accepts an absolute path on POSIX
@@ -89,10 +97,14 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
                 status: 400,
             });
         }
-        for (const domain of imported.domains) {
+        // Roots only. `loadDomain(d)` takes `d` *and its sub-domains*, so a part listing
+        // `identity` alongside `identity.role` would mount identity.role twice -- which
+        // registerContract correctly refuses. The list stays complete (it describes the part);
+        // deciding which of those calls is redundant belongs here, where that rule lives.
+        for (const domain of rootDomains(imported.domains)) {
             // `resolve` as well as the map: a bundle's map covers everything it bundled, but a part
-            // loaded from real files on disk has no map at all (see loadPartDomains below), and the
-            // two share this one path rather than diverging.
+            // loaded from real files on disk has no map at all, and the two share this one path
+            // rather than diverging.
             await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
         }
         return { domain: primary, nodeID: ctx.nodeID };

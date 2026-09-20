@@ -42,7 +42,7 @@ export const apiTokenIssueContract = defineContract({
     // theoretical: nothing could ever authenticate as `viaApiToken` in the first place.
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/contracts/apiToken.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/issueApiToken.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `issued api token "${o.name}" for ${o.userId}`,
 });
 
@@ -67,7 +67,7 @@ export const apiTokenValidateContract = defineContract({
     inputSchema: validateInputSchema,
     outputSchema: validateOutputSchema,
     rest: { method: 'POST', path: '/identity/apiToken/validate' },
-    filePath: 'src/identity/contracts/apiToken.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/validateApiToken.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o.valid ? `valid: ${o.userId ?? 'unknown'}` : 'invalid'),
 });
 

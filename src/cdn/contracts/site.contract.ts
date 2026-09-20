@@ -47,7 +47,7 @@ export const siteResolveHostContract = defineContract({
     outputSchema: resolveHostOutputSchema,
     rest: { method: 'GET', path: '/sites/:host' },
     visibility: 'public',
-    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/cdn/tools/resolveHost.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.host} (${o.tenantId})`,
 });
 
@@ -68,7 +68,7 @@ export const siteResolveByIdContract = defineContract({
     outputSchema: resolveByIdOutputSchema,
     rest: { method: 'GET', path: '/sites/id/:id' },
     visibility: 'public',
-    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/cdn/tools/resolveById.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.host} (${o.tenantId})`,
 });
 
@@ -95,7 +95,7 @@ export const siteDeployContract = defineContract({
     rest: { method: 'POST', path: '/sites/:siteId/deploy' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/cdn/contracts/site.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/cdn/tools/deploy.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.site.host} -> ${o.site.releaseHash}`,
 });
 

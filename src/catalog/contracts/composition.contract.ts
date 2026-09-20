@@ -36,7 +36,7 @@ export const compositionComposeContract = defineContract({
     rest: { method: 'POST', path: '/compositions/:id/compose' },
     visibility: 'public',
     destructive: true,
-    filePath: 'src/catalog/contracts/composition.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/catalog/tools/compose.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.hash} (${o.artifacts.length} artifacts)`,
 });
 

@@ -34,7 +34,7 @@ export const corePartLoadContract = defineContract({
     outputSchema: corePartLoadOutputSchema,
     rest: { method: 'POST', path: '/core-parts/load' },
     destructive: true,
-    filePath: 'src/catalog/contracts/corePart.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/catalog/tools/loadCorePart.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.domain} loaded on ${o.nodeID}`,
 });
 

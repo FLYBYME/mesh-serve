@@ -19,8 +19,15 @@ import {
 import { WSTransport } from '@flybyme/mesh/node';
 import type { IServiceBroker } from '@flybyme/mesh';
 
-import { register as registerIdentity } from '../identity/identity.service.js';
-import { register as registerCdn } from '../cdn/cdn.service.js';
+import { resolveHandler } from '../catalog/methods/resolveHandler.js';
+import '../identity/contracts/user.contract.js';
+import '../identity/contracts/organization.contract.js';
+import '../identity/contracts/membership.contract.js';
+import '../identity/contracts/role.contract.js';
+import '../identity/contracts/ticket.contract.js';
+import '../identity/contracts/apiToken.contract.js';
+import '../identity/contracts/identity.contract.js';
+import '../cdn/contracts/site.contract.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { ApiService } from '../api/api.service.js';
 
@@ -99,8 +106,9 @@ async function main(): Promise<void> {
     // After start, not before: serve.cdn's register binds its listener through
     // serve.cdn.listen, which is a real call and wants a running broker underneath it.
     const broker = app.getProvider<IServiceBroker>('broker');
-    await registerIdentity(broker);
-    await registerCdn(broker);
+    await broker.loadDomain('identity', {}, { resolve: resolveHandler });
+    await broker.call('identity.role.ensureBuiltins', {});
+    await broker.loadDomain('serve.cdn', {}, { resolve: resolveHandler });
 
     const org = await app.call('identity.organization.find_one', { query: { slug: 'platform' } });
     if (org === undefined) throw new Error('No "platform" organization -- first boot did not run?');

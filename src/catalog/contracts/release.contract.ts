@@ -31,7 +31,7 @@ export const releaseGetReleaseContract = defineContract({
     outputSchema: getReleaseOutputSchema,
     rest: { method: 'GET', path: '/releases/:hash' },
     visibility: 'public',
-    filePath: 'src/catalog/contracts/release.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/catalog/tools/getRelease.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.hash} (${o.compositionId})`,
 });
 

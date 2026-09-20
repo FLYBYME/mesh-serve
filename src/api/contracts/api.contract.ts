@@ -30,7 +30,7 @@ export const apiResolveByIdContract = defineContract({
     outputSchema: resolveApiByIdOutputSchema,
     rest: { method: 'GET', path: '/apis/id/:id' },
     visibility: 'public',
-    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/resolveApiById.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.apiHost} (${o.tenantId})`,
 });
 
@@ -51,7 +51,7 @@ export const apiResolveByHostContract = defineContract({
     outputSchema: resolveApiByHostOutputSchema,
     rest: { method: 'GET', path: '/apis/host/:apiHost' },
     visibility: 'public',
-    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/resolveApiByHost.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.apiHost} (${o.tenantId})`,
 });
 
@@ -102,7 +102,7 @@ export const apiDescribeContract = defineContract({
     outputSchema: describeOutputSchema,
     rest: { method: 'GET', path: '/apis/host/:host/describe' },
     visibility: 'public',
-    filePath: 'src/api/contracts/api.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/describe.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => `${o.calls.length} calls on ${o.host}`,
 });
 

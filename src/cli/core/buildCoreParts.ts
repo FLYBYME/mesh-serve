@@ -83,8 +83,8 @@ function manifestPlugin(): esbuild.Plugin {
  * `*.service.ts` are the ones still on `ServiceModule`.
  */
 const CORE_PARTS: Record<string, string> = {
-    identity: 'src/identity/identity.service.ts',
-    cdn: 'src/cdn/cdn.service.ts',
+    identity: MANIFEST_PREFIX + 'src/identity',
+    cdn: MANIFEST_PREFIX + 'src/cdn',
     hold: MANIFEST_PREFIX + 'src/hold',
     queue: MANIFEST_PREFIX + 'src/queue',
     api: 'src/api/api.service.ts',

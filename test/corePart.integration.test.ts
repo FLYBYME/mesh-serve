@@ -92,15 +92,30 @@ describe('a bare node, loading its own core parts', () => {
         expect(loaded).toContain('serve.api');
     }, 30000);
 
-    it('is fully functional afterwards -- identity answers, and its own onStart seeding ran', async () => {
+    it('is fully functional afterwards -- identity answers, and loading it wrote nothing', async () => {
+        // Loading a part must not mutate shared cluster state. Seeding the builtin roles used to
+        // happen in IdentityService.onStart, which meant every node that loaded identity ran its
+        // own seed loop against the same collection on every boot. It is a contract now, and
+        // bootstrap calls it once -- so a freshly loaded identity answers, with nothing seeded.
         const roles = await broker.call('identity.role.find', { query: {} });
-        // IdentityService.onStart seeds the four builtin roles; their presence proves the loaded
-        // module's lifecycle hook actually ran, not just that its contracts got mounted.
-        const keys = roles.map((r) => r.key);
+        expect(roles).toEqual([]);
+    });
+
+    it('seeds the builtin roles when asked, and only then', async () => {
+        const first = await broker.call('identity.role.ensureBuiltins', {});
+        expect(first.created).toEqual(['operator', 'owner', 'admin', 'member']);
+
+        const keys = (await broker.call('identity.role.find', { query: {} })).map((r) => r.key);
         expect(keys).toContain('operator');
         expect(keys).toContain('owner');
         expect(keys).toContain('admin');
         expect(keys).toContain('member');
+
+        // Idempotent: create-if-missing, so an operator's own customization of a builtin role
+        // survives a second call.
+        const second = await broker.call('identity.role.ensureBuiltins', {});
+        expect(second.created).toEqual([]);
+        expect(second.existing).toHaveLength(4);
     });
 
     it('a part with no hand-written registration at all is fully functional through the same load path', async () => {

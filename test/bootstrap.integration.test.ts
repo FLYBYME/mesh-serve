@@ -21,8 +21,15 @@ import {
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
-import { register as registerIdentity } from '../src/identity/identity.service.js';
-import { register as registerCdn } from '../src/cdn/cdn.service.js';
+import '../src/identity/contracts/user.contract.js';
+import '../src/identity/contracts/organization.contract.js';
+import '../src/identity/contracts/membership.contract.js';
+import '../src/identity/contracts/role.contract.js';
+import '../src/identity/contracts/ticket.contract.js';
+import '../src/identity/contracts/apiToken.contract.js';
+import '../src/identity/contracts/identity.contract.js';
+import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
+import '../src/cdn/contracts/site.contract.js';
 import { CatalogService } from '../src/catalog/catalog.service.js';
 import { ApiService } from '../src/api/api.service.js';
 import { hashPassword } from '../src/identity/methods/hash.js';
@@ -36,6 +43,10 @@ const BOOTSTRAP_PASSWORD = 'a-real-operator-password-12';
  * HTTP behavior once claimed, not bootstrap.ts's own prompt loop.
  */
 async function claim(broker: IServiceBroker): Promise<{ userId: string }> {
+    // Seeding the builtin roles is bootstrap's job now, not something that happens when a node
+    // loads the identity part -- it writes shared cluster state, and loading is per node.
+    await broker.call('identity.role.ensureBuiltins', {});
+
     const passwordHash = await hashPassword(BOOTSTRAP_PASSWORD);
     const user = await broker.call('identity.user.create', {
         email: 'operator@node.invalid', displayName: 'operator', passwordHash, roles: ['operator'], provisional: false,
@@ -94,8 +105,13 @@ describe('a fresh install, booted for real', () => {
 
         // After start, not before: a standalone part registers against a live broker, and the
         // broker provider doesn't exist until the app has started.
-        await registerIdentity(app.getProvider<IServiceBroker>('broker'));
-        await registerCdn(app.getProvider<IServiceBroker>('broker'));
+        // No registration file: loadDomain reads identity's contracts from the registry (the
+        // imports above are what put them there) and resolves each handler from the filePath its
+        // own contract declares.
+        // One call covers identity.user/.ticket/.role/... too -- loadDomain takes the domain and
+        // its sub-domains, which is exactly the set one part owns.
+        await app.getProvider<IServiceBroker>('broker').loadDomain('identity', {}, { resolve: resolveHandler });
+        await app.getProvider<IServiceBroker>('broker').loadDomain('serve.cdn', {}, { resolve: resolveHandler });
 
         const broker = app.getProvider<IServiceBroker>('broker');
         await claim(broker);
