@@ -172,9 +172,19 @@ export const watchReleaseOutputSchema = z.object({
  * The pending-artifact sweep, as an interval contract: the broker owns the 60s timer, so there is
  * no `watchInterval` field and no `clearInterval` in an `onStop` to remember.
  *
- * Not `leaderScoped`, deliberately -- the sweep flips each artifact to 'running' before enqueuing
- * it, so two nodes sweeping concurrently cannot enqueue the same artifact twice, and the write
- * itself is what serializes them.
+ * `leaderScoped`, so exactly one node sweeps however many are running it.
+ *
+ * It was not, on the theory that flipping each artifact to 'running' before enqueuing made
+ * concurrent sweeps safe -- "the write itself is what serializes them". That is false, and the
+ * two-node cluster is where it stops being theoretical: the sweep does a plain `find` for
+ * `status: 'pending'` and *then* an unconditional update, so two nodes both see the same artifact,
+ * both mark it running, and both enqueue a build for it. The build then runs twice, and since
+ * `maxAttempts: 1` neither looks like a retry.
+ *
+ * Nothing extra is needed to enforce this: `ServiceBroker.startIntervalContract` checks
+ * `leaderFor` before each tick and drops it on a non-leader, so every node still *loads* the
+ * contract and only the leader acts -- and leadership moving is picked up on the next tick rather
+ * than needing anything to watch for it.
  */
 export const artifactWatchReleaseContract = defineContract({
     domain: 'serve.artifact',
@@ -184,6 +194,7 @@ export const artifactWatchReleaseContract = defineContract({
     outputSchema: watchReleaseOutputSchema,
     rest: { method: 'POST', path: '/artifacts/watch' },
     destructive: true,
+    leaderScoped: true,
     dependencies: ['serve.artifact', 'serve.queue'],
     filePath: 'src/catalog/tools/watchRelease.ts',
     concurrency: 'interval',
