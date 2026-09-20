@@ -48,7 +48,7 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
 
     const absolutePath = artifactAssetPath(artifact.hash, jsAsset.url);
     const { domain, nodeID } = await loadAndRegisterModule(ctx, absolutePath);
-    markServiceRunning(ctx.nodeID, part.id, domain);
+    markServiceRunning(ctx.nodeID, part.id, domain, absolutePath);
 
     return { domain, nodeID };
 }

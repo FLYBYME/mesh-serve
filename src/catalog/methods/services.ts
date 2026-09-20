@@ -7,6 +7,8 @@
 
 export interface RunningService {
     readonly mountKey: string;
+    /** The module this was loaded from, so stopping it can evict that module too. */
+    readonly modulePath?: string;
 }
 
 const running = new Map<string, RunningService>();
@@ -23,8 +25,8 @@ function key(nodeID: string, partId: string): string {
     return `${nodeID}\u0000${partId}`;
 }
 
-export function markServiceRunning(nodeID: string, partId: string, mountKey: string): void {
-    running.set(key(nodeID, partId), { mountKey });
+export function markServiceRunning(nodeID: string, partId: string, mountKey: string, modulePath?: string): void {
+    running.set(key(nodeID, partId), modulePath === undefined ? { mountKey } : { mountKey, modulePath });
 }
 
 export function getRunningService(nodeID: string, partId: string): RunningService | undefined {
