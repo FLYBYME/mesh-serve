@@ -5,14 +5,25 @@
  * real network+DB latency. Two real, separately networked MeshApp instances, same pattern as
  * mesh-infer's provider.distributed.test.ts.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
-    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
+    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule,
+    PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
+import type { IServiceBroker } from '@flybyme/mesh';
 
-import { QueueService } from '../src/queue/queue.service.js';
+// maxConcurrency 1 isolates the claim-safety property from the tick's own concurrency, so a
+// failure here can only mean claim() itself double-claimed, nothing else. Both of these are read
+// when queue.contract.ts is evaluated (intervalMs has to be known at defineContract time), so they
+// are set in a hoisted block -- after a plain assignment here the import would already have run.
+vi.hoisted(() => {
+    process.env.QUEUE_MAX_CONCURRENCY = '1';
+    process.env.QUEUE_TICK_MS = '50';
+});
+
+import { register as registerQueue } from '../src/queue/queue.service.js';
 
 const DB_NAME = 'mesh-serve-queue-distributed-test';
 const TENANT_ID = 'test-tenant';
@@ -31,7 +42,11 @@ describe('serve.queue.claim across two real nodes', () => {
         const serializer = new JSONSerializer();
 
         appA = new MeshApp({ nodeID: 'queue-dist-node-a', logger });
-        appA.use(new RegistryModule());
+        // PlacementRegistry, not the default: serve.queue is registered as standalone contracts
+        // now, and only this registry advertises a single contract to peers. Without it node B
+        // could not route its leaderScoped claim to node A at all, which is the entire property
+        // under test here.
+        appA.use(new RegistryModule({ implementation: PlacementRegistry }));
         appA.use(new NetworkModule({
             port: 6541,
             transports: [new WSTransport(serializer, 6541, '127.0.0.1')],
@@ -39,12 +54,10 @@ describe('serve.queue.claim across two real nodes', () => {
         appA.use(new DatabaseModule({ dbName: DB_NAME }));
         appA.use(new BrokerModule());
         await appA.start();
-        // maxConcurrency: 1 -- isolates the claim-safety property from run()'s own concurrency, so
-        // a test failure here can only mean claim() itself double-claimed, nothing else.
-        await appA.registerModule(new QueueService(1, 50));
+        registerQueue(appA.getProvider<IServiceBroker>('broker'));
 
         appB = new MeshApp({ nodeID: 'queue-dist-node-b', logger });
-        appB.use(new RegistryModule());
+        appB.use(new RegistryModule({ implementation: PlacementRegistry }));
         appB.use(new NetworkModule({
             port: 6542,
             transports: [new WSTransport(serializer, 6542, '127.0.0.1')],
@@ -53,7 +66,7 @@ describe('serve.queue.claim across two real nodes', () => {
         appB.use(new DatabaseModule({ dbName: DB_NAME }));
         appB.use(new BrokerModule());
         await appB.start();
-        await appB.registerModule(new QueueService(1, 50));
+        registerQueue(appB.getProvider<IServiceBroker>('broker'));
 
         await new Promise((r) => setTimeout(r, 800));
     });
@@ -89,8 +102,9 @@ describe('serve.queue.claim across two real nodes', () => {
             }, { meta });
         }
 
-        // Both nodes' tick loops are already running (registered in beforeAll) -- just wait for
-        // every job to leave 'pending'/'processing'.
+        // Both nodes' tick loops are already running -- the broker started them the moment
+        // serve.queue.tick registered, because that is what `concurrency: 'interval'` means. Just
+        // wait for every job to leave 'pending'/'processing'.
         const deadline = Date.now() + 15_000;
         let allDone = false;
         while (Date.now() < deadline && !allDone) {

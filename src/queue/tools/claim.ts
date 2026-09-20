@@ -2,7 +2,6 @@ import { Database } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { queueCrud, type QueueClaimInput, type QueueClaimOutput } from '../contracts/queue.contract.js';
-import type { QueueService } from '../queue.service.js';
 
 /** How far past a job's own timeoutMs its lease extends -- long enough that a legitimately
  *  slow-but-still-running call is never reclaimed out from under itself. No "generous default,
@@ -22,12 +21,12 @@ const LEASE_SLACK_MS = 5_000;
  * Because of that, this is a plain find then a plain write -- no MongoDB-specific conditional
  * update operator anywhere. The atomicity isn't "the database promises this row-level compare-and-
  * swap is safe," it's "only one process is ever inside this block at once." That's also why this
- * needed to be its own leaderScoped contract rather than staying a private method QueueService
+ * needed to be its own leaderScoped contract rather than staying a private method the service
  * called on itself: without the routing, every node would still be doing this find-then-write
  * independently, and withLock only serializes callers that actually reach the same process.
  *
  * This is deliberately the *only* leader-pinned step. Once a job is claimed, running it
- * (queue.service.ts's run()) is not locked or leader-scoped at all -- every node keeps running its
+ * (tools/tick.ts's run()) is not locked or leader-scoped at all -- every node keeps running its
  * own claimed jobs fully in parallel. Claiming is cheap; only the "who gets to decide" moment needs
  * to be single-threaded, not the work itself.
  */
@@ -37,7 +36,6 @@ const LEASE_SLACK_MS = 5_000;
 const GROUP_SCAN_LIMIT = 50;
 
 export async function claim(
-    this: QueueService,
     _input: QueueClaimInput,
     ctx: IServiceContext,
 ): Promise<QueueClaimOutput> {

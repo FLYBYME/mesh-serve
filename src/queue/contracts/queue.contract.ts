@@ -51,3 +51,38 @@ export const queueClaimContract = defineContract({
 
 export type QueueClaimInput = z.infer<typeof queueClaimContract.inputSchema>;
 export type QueueClaimOutput = z.infer<typeof queueClaimContract.outputSchema>;
+
+/** How many jobs one node runs at a time. Per node, not per cluster -- see the tick handler. */
+export const QUEUE_MAX_CONCURRENCY = Number(process.env.QUEUE_MAX_CONCURRENCY ?? 5);
+
+/**
+ * The tick loop, as a contract rather than a `setInterval` inside a class.
+ *
+ * Deliberately *not* `leaderScoped`, unlike `claim` above: every node ticks, and every node runs
+ * the jobs it claims. Only claiming is a singleton, and `claim` already enforces that itself. If
+ * this were leaderScoped the whole queue would collapse onto one node -- which is the thing the
+ * split between these two contracts exists to prevent.
+ */
+export const queueTickContract = defineContract({
+    domain: 'serve.queue',
+    action: 'tick',
+    description: 'Top this node up to its concurrency limit by claiming and running eligible jobs.',
+    inputSchema: z.object({}),
+    outputSchema: z.object({
+        started: z.number().describe('Jobs claimed and started on this node by this tick'),
+        inFlight: z.number().describe('Jobs running on this node after this tick'),
+    }),
+    // Internal by default, like every contract that doesn't say otherwise -- but it is a perfectly
+    // ordinary contract, so a manual "tick now" call is available to an operator without the timer
+    // having to be involved at all.
+    rest: { method: 'POST', path: '/queue/tick' },
+    destructive: true,
+    dependencies: ['serve.queue'],
+    filePath: 'src/queue/tools/tick.ts',
+    concurrency: 'interval',
+    intervalMs: Number(process.env.QUEUE_TICK_MS ?? 500),
+    permissions: [],
+    print: (o) => `started ${o.started}, ${o.inFlight} in flight`,
+});
+
+export type QueueTickOutput = z.infer<typeof queueTickContract.outputSchema>;

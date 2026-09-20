@@ -4,6 +4,8 @@ import { Logger, LogLevel, ServiceBroker } from '@flybyme/mesh';
 export interface MockContextOptions {
     meta?: Record<string, any>;
     handlers?: Record<string, (params: any, options?: any) => any | Promise<any>>;
+    /** Override ctx.signal -- pass an already-aborted or controller-backed signal to test cancellation. */
+    signal?: AbortSignal;
 }
 
 export interface MockContextResult {
@@ -70,6 +72,10 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
     const ctx: IServiceContext = {
         broker,
         nodeID: 'mock-node',
+        // Live and never aborted -- a unit-tested handler that forwards ctx.signal into a fetch or
+        // registers teardown on it gets a real AbortSignal, not undefined. Tests that want to
+        // exercise cancellation should abort their own controller and pass its signal.
+        signal: options.signal ?? new AbortController().signal,
         correlationId: 'mock-correlation-id',
         meta: options.meta ?? {},
         call: callFn,

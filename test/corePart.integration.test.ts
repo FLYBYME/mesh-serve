@@ -144,6 +144,32 @@ describe('a bare node, loading its own core parts', () => {
         expect(found?.id).toBe(user.id);
     });
 
+    it('a loaded interval contract is already ticking -- nobody schedules it, the broker does', async () => {
+        // The whole chain in one assertion: the precompiled queue bundle exported `register`, which
+        // registered serve.queue.tick, whose declared `concurrency: 'interval'` made the broker
+        // start a timer on the spot. Nothing in this test calls tick, and no class anywhere owns a
+        // setInterval -- so if this job runs, the declaration alone is what scheduled it.
+        const meta = { meta: { tenant_id: 'corepart-tenant' } };
+
+        const job = await broker.call('serve.queue.create', {
+            tenantId: 'corepart-tenant',
+            contract: 'serve.queue.find_one',
+            payload: { query: { id: 'never-matches' } },
+            requestedBy: { userId: 'corepart-test' },
+            maxAttempts: 1,
+            timeoutMs: 5000,
+        }, meta);
+
+        const deadline = Date.now() + 10_000;
+        let status = job.status;
+        while (Date.now() < deadline && status !== 'completed' && status !== 'failed') {
+            await new Promise((r) => setTimeout(r, 100));
+            status = (await broker.call('serve.queue.get', { id: job.id }, meta)).status;
+        }
+
+        expect(status).toBe('completed');
+    }, 15000);
+
     it('refuses to load the same core part twice rather than double-registering it', async () => {
         await expect(broker.call('serve.corePart.load', { name: 'identity' })).rejects.toThrow(/already running/i);
     });
