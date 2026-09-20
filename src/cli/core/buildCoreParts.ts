@@ -1,5 +1,9 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
 import * as esbuild from 'esbuild';
+
+import { discoverPartContracts } from './discoverPartContracts.js';
 
 /**
  * Precompiles mesh-serve's own non-kernel services (identity, cdn, hold, queue, api) into
@@ -23,21 +27,73 @@ import * as esbuild from 'esbuild';
  */
 
 /**
- * A part's entry point is its generated manifest (`handlers.generated.ts`) once it has migrated --
- * there is no hand-written registration file left to point at. The two still naming a
+ * Marks a part whose entry point is synthesized rather than read from disk.
+ *
+ * A bundle is a single file, so at runtime there are no modules left inside it for `loadDomain` to
+ * import from the paths its contracts declare. It needs the mapping precomputed -- but that mapping
+ * is derived entirely from those same declarations, so writing it into `src/` would put a
+ * generated artifact in the repo for a purely build-time need. It is built here instead, handed
+ * straight to esbuild, and exists only inside the `.cjs` output.
+ *
+ * Unbundled, none of this applies: the files really are at the declared paths, and
+ * `catalog/methods/resolveHandler.ts` just imports them.
+ */
+const MANIFEST_PREFIX = 'mesh-part:';
+
+/**
+ * Synthesizes each migrated part's entry module: the side-effect imports that register its
+ * contracts, the domains it implements, and tool key -> handler import.
+ */
+function manifestPlugin(): esbuild.Plugin {
+    return {
+        name: 'mesh-part-manifest',
+        setup(build) {
+            build.onResolve({ filter: /^mesh-part:/ }, (args) => ({
+                path: args.path.slice(MANIFEST_PREFIX.length),
+                namespace: 'mesh-part',
+            }));
+
+            build.onLoad({ filter: /.*/, namespace: 'mesh-part' }, (args) => {
+                const partDir = path.resolve(args.path);
+                const { domains, contractModules, handlers } = discoverPartContracts(partDir);
+
+                const importPath = (target: string): string =>
+                    './' + path.relative(partDir, target).replace(/\\/g, '/');
+
+                let contents = '';
+                for (const module of contractModules) {
+                    contents += `import '${importPath(module)}';\n`;
+                }
+                contents += `export const domains = [${domains.map((d) => `'${d}'`).join(', ')}];\n`;
+                contents += 'export const handlers = {\n';
+                for (const h of handlers) {
+                    contents += `    '${h.toolKey}': () => import('${importPath(h.modulePath)}').then((m) => m.${h.exportName}),\n`;
+                }
+                contents += '};\n';
+
+                return { contents, resolveDir: partDir, loader: 'ts' };
+            });
+        },
+    };
+}
+
+/**
+ * A migrated part has no entry file. It is named by the directory its contracts live in, and its
+ * entry is synthesized at build time by `manifestPlugin` below. The two still naming a
  * `*.service.ts` are the ones still on `ServiceModule`.
  */
 const CORE_PARTS: Record<string, string> = {
     identity: 'src/identity/identity.service.ts',
     cdn: 'src/cdn/cdn.service.ts',
-    hold: 'src/hold/handlers.generated.ts',
-    queue: 'src/queue/handlers.generated.ts',
+    hold: MANIFEST_PREFIX + 'src/hold',
+    queue: MANIFEST_PREFIX + 'src/queue',
     api: 'src/api/api.service.ts',
 };
 
 async function main(): Promise<void> {
     await esbuild.build({
         entryPoints: CORE_PARTS,
+        plugins: [manifestPlugin()],
         bundle: true,
         outdir: 'dist/parts',
         entryNames: '[name]',

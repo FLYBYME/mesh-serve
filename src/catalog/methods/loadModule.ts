@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { MeshError } from '@flybyme/mesh';
 import type { ContractHandlerMap, IServiceContext, IServiceModule } from '@flybyme/mesh';
 
+import { resolveHandler } from './resolveHandler.js';
+
 const require = createRequire(import.meta.url);
 
 /**
@@ -88,7 +90,10 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
             });
         }
         for (const domain of imported.domains) {
-            await ctx.broker.loadDomain(domain, handlers);
+            // `resolve` as well as the map: a bundle's map covers everything it bundled, but a part
+            // loaded from real files on disk has no map at all (see loadPartDomains below), and the
+            // two share this one path rather than diverging.
+            await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
         }
         return { domain: primary, nodeID: ctx.nodeID };
     }

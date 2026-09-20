@@ -23,7 +23,11 @@ vi.hoisted(() => {
     process.env.QUEUE_TICK_MS = '50';
 });
 
-import { domains as queueDomains, handlers as queueHandlers } from '../src/queue/handlers.generated.js';
+// Importing the contracts is what registers them; loadDomain reads them from there, and resolves
+// each handler from the filePath its contract declares. There is no registration file to import,
+// and no generated manifest -- running from source, the modules really are where they say.
+import '../src/queue/contracts/queue.contract.js';
+import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
 
 const DB_NAME = 'mesh-serve-queue-distributed-test';
 const TENANT_ID = 'test-tenant';
@@ -54,7 +58,7 @@ describe('serve.queue.claim across two real nodes', () => {
         appA.use(new DatabaseModule({ dbName: DB_NAME }));
         appA.use(new BrokerModule());
         await appA.start();
-        await appA.getProvider<IServiceBroker>('broker').loadDomain(queueDomains[0], queueHandlers);
+        await appA.getProvider<IServiceBroker>('broker').loadDomain('serve.queue', {}, { resolve: resolveHandler });
 
         appB = new MeshApp({ nodeID: 'queue-dist-node-b', logger });
         appB.use(new RegistryModule({ implementation: PlacementRegistry }));
@@ -66,7 +70,7 @@ describe('serve.queue.claim across two real nodes', () => {
         appB.use(new DatabaseModule({ dbName: DB_NAME }));
         appB.use(new BrokerModule());
         await appB.start();
-        await appB.getProvider<IServiceBroker>('broker').loadDomain(queueDomains[0], queueHandlers);
+        await appB.getProvider<IServiceBroker>('broker').loadDomain('serve.queue', {}, { resolve: resolveHandler });
 
         await new Promise((r) => setTimeout(r, 800));
     });

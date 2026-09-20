@@ -171,6 +171,28 @@ describe('a bare node, loading its own core parts', () => {
         expect(status).toBe('completed');
     }, 15000);
 
+    it('applies a CRUD hook the collection itself declares -- nothing registered it', async () => {
+        // siteCrud declares hooks.create.before (defaulting mcpHost from host) in
+        // src/cdn/contracts/site.contract.ts. No registration code passes it anywhere -- the
+        // contract carries it, and registerContract wires it wherever the contract is mounted.
+        const meta = { meta: { tenant_id: 'corepart-tenant' } };
+        const site = await broker.call('serve.cdn.create', {
+            tenantId: 'corepart-tenant',
+            host: 'hooked.localhost',
+            application: 'app',
+            policy: {},
+            open: [],
+            theme: {},
+            title: 'Hooked',
+            description: '',
+            indexable: true,
+            maintenance: false,
+            releaseHash: '',
+        }, meta);
+
+        expect(site.mcpHost).toBe('mcp-hooked.localhost');
+    });
+
     it('refuses to load the same core part twice rather than double-registering it', async () => {
         await expect(broker.call('serve.corePart.load', { name: 'identity' })).rejects.toThrow(/already running/i);
     });

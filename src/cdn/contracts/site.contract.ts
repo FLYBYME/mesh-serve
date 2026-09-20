@@ -14,6 +14,18 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
     visibility: {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
     },
+    hooks: {
+        create: {
+            // mcpHost defaults to the site's own host with an mcp- prefix. Declared here rather
+            // than wired at registration time so it travels with the collection -- there is no
+            // longer any per-service registration code for it to live in.
+            before: (input: never) => {
+                const record = input as unknown as { mcpHost?: string; host: string };
+                if (record.mcpHost !== undefined) return record;
+                return { ...record, mcpHost: `mcp-${record.host}` };
+            },
+        },
+    },
     dependencies: [],
     filePath: 'src/cdn/contracts/site.contract.ts',
     permissions: [],

@@ -28,19 +28,7 @@ import { listen } from './tools/listen.js';
 export const CDN_DOMAIN = 'serve.cdn';
 
 export async function register(broker: IServiceBroker): Promise<string> {
-    broker.registerCrud(siteCrud, {
-        hooks: {
-            create: {
-                before: async (input) => {
-                    const record = input as { mcpHost?: string; host: string };
-                    if (record.mcpHost !== undefined) {
-                        return input;
-                    }
-                    return { ...record, mcpHost: `mcp-${record.host}` };
-                },
-            },
-        },
-    });
+    broker.registerCrud(siteCrud);
     broker.registerContract(siteResolveHostContract, resolveHost);
     broker.registerContract(siteResolveByIdContract, resolveById);
     broker.registerContract(siteDeployContract, deploy);
