@@ -38,7 +38,13 @@ const startInputSchema = z.object({
     apiPort: z.coerce.number().default(5005).describe('ApiService REST+SSE http port'),
     cdnPort: z.coerce.number().default(3123).describe('CdnService frontend http port'),
     db: z.string().optional().describe('Database name, e.g. "test-001" -- not a connection string; use MONGODB_URI for that'),
-    logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('debug'),
+    // 'debug' was the default here, which is the top of the range -- so passing --logLevel debug
+    // explicitly was always a no-op, because there is nothing quieter it could be changing *from*.
+    // Found live: "--logLevel debug does not change the log level" was the correct observation.
+    // Every other place in this codebase defaults quieter (bootstrap.ts hardcodes WARN; Logger's
+    // own class default is INFO) -- 'info' matches that and still shows every real lifecycle event
+    // (a contract mounting, a node connecting), just not the per-tool debug noise.
+    logLevel: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
     publicScheme: z.enum(['http', 'https']).optional().describe('Scheme used in every public-facing URL a site\'s HTML embeds (preconnect, CSP connect-src, the boot module\'s api field) -- defaults to https, the correct value whenever a reverse proxy fronts this node. Pass http only for an unproxied local node'),
     publicApiPort: z.coerce.number().optional().describe('Port appended to those same public-facing api URLs -- unset in production, where the public port is always the standard one for publicScheme. Needed only when apiPort is reached directly, unproxied (e.g. matching --apiPort for local dev)'),
     sharedKey: z.string().optional().describe('Shared secret required to join this node\'s mesh network (WSTransport\'s own authKey) -- also read from MESH_KEY if unset. Anything that can open a connection to --wsPort can otherwise call internal contracts directly, bypassing every api-level role/exposure check; required if --host binds to a non-loopback address'),
