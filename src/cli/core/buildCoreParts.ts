@@ -9,7 +9,7 @@ import { discoverPartContracts } from './discoverPartContracts.js';
  * Precompiles mesh-serve's own non-kernel services (identity, cdn, hold, queue, api) into
  * standalone CommonJS bundles, shipped inside this package at `dist/parts/*.cjs` -- what `start`/
  * `bootstrap` load directly (`catalog/methods/loadModule.ts`) instead of statically importing and
- * `registerModule()`-ing all six services the way `start.ts` used to.
+ * mounting all six services the way `start.ts` used to.
  *
  * `serve.part`/`serve.repo`/`serve.artifact` are deliberately not involved for these five: giving
  * mesh-serve a `serve.repo` row pointing at its own git repo, just so it could build itself through
@@ -78,9 +78,9 @@ function manifestPlugin(): esbuild.Plugin {
 }
 
 /**
- * A migrated part has no entry file. It is named by the directory its contracts live in, and its
- * entry is synthesized at build time by `manifestPlugin` below. The two still naming a
- * `*.service.ts` are the ones still on `ServiceModule`.
+ * A part has no entry file. It is named by the directory its contracts live in, and its entry is
+ * synthesized at build time by `manifestPlugin` below -- which is why the manifest exists only
+ * inside `dist/parts/*.cjs` and never in `src/`.
  */
 const CORE_PARTS: Record<string, string> = {
     identity: MANIFEST_PREFIX + 'src/identity',

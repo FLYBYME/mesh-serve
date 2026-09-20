@@ -315,14 +315,14 @@ export async function ensureArtifactNodeModules(pkg: string): Promise<void> {
 }
 
 /**
- * Builds a `kind: 'service'` part: a mesh `ServiceModule`, `import()`ed by a running node
+ * Builds a `kind: 'service'` part: a set of contracts and their handlers, loaded by a running node
  * (`serve.part.start`) rather than composed into a site. Bundled for `node`, not `browser` --
  * there is no CDN step at all, the output never leaves this machine's artifact store.
  *
- * `@flybyme/mesh` is always external, never bundled: `ServiceBroker.registerModule` duck-types the
- * module it's given (`onInit`/`getContracts`/`execute`), so a bundled, structurally-identical copy
- * would likely still work -- but the loaded module needs to observe and be observed by the *same*
- * broker instance running it, and a bundled copy of the framework is a second, disconnected one.
+ * `@flybyme/mesh` is always external, never bundled. A bundled, structurally-identical copy of the
+ * framework would likely still *run* -- but the loaded part has to register against, and be
+ * dispatched by, the *same* broker instance already running, and a bundled copy is a second,
+ * disconnected one. (The same module-realm hazard `MESH_ERROR_BRAND` exists for.)
  * Node builtins need no such list: esbuild's own `platform: 'node'` already leaves them external.
  */
 export async function buildService(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {

@@ -80,8 +80,7 @@ export class StartCommand extends BaseCommand {
         if (args.publicApiPort !== undefined) process.env.PUBLIC_API_PORT = String(args.publicApiPort);
 
         const transport = new WSTransport(serializer, args.wsPort, args.host, { authKey: args.sharedKey });
-        // PlacementRegistry, not the default Registry: a standalone part (one that registers
-        // contracts directly rather than a whole ServiceModule) is only advertised to peers by a
+        // PlacementRegistry, not the default Registry: a part is only advertised to peers by a
         // registry that knows how to advertise a single contract. Found live -- with the default
         // Registry every core part loaded fine and was callable *on this node*, while another node
         // was told "no node in this mesh advertises domain identity".

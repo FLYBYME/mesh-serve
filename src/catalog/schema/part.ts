@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const partKindSchema = z.enum(['kernel', 'application', 'extension', 'driver', 'theme', 'service']).describe('Which of mesh-web\'s contribution kinds this part is (kernel is the boot bundle itself), or "service": a mesh ServiceModule bundled for node instead of the browser, loaded into a running node by serve.part.start rather than composed into a site');
+export const partKindSchema = z.enum(['kernel', 'application', 'extension', 'driver', 'theme', 'service']).describe('Which of mesh-web\'s contribution kinds this part is (kernel is the boot bundle itself), or "service": mesh contracts and their handlers bundled for node instead of the browser, loaded into a running node by serve.part.start rather than composed into a site');
 
 export const partSchema = z.object({
   tenantId: z.string().describe('The organization that owns this part'),

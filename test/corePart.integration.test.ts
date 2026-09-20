@@ -148,7 +148,8 @@ describe('a bare node, loading its own core parts', () => {
         expect(found.map((h) => h.id)).toContain(created.id);
 
         // ...and its custom contract is mounted too, not just the CRUD.
-        expect(broker.getModule('serve.hold')).toBeUndefined();
+        const decided = await broker.call('serve.hold.decide', { holdId: created.id, approved: false, reason: 'test' }, meta);
+        expect(decided).toMatchObject({ holdId: created.id, status: 'rejected' });
     });
 
     it('a loaded core part can be called through the mesh like any other contract', async () => {

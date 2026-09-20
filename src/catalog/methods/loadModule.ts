@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { MeshError } from '@flybyme/mesh';
-import type { ContractHandlerMap, IServiceContext, IServiceModule } from '@flybyme/mesh';
+import type { ContractHandlerMap, IServiceContext } from '@flybyme/mesh';
 
 import { resolveHandler } from './resolveHandler.js';
 
@@ -25,38 +25,37 @@ const require = createRequire(import.meta.url);
 /**
  * What a loaded bundle may export, in either of the two shapes a part can take:
  *
- * - `register` -- a standalone part: a plain function handed the broker, which registers whatever it
- *   owns (`registerCrud`/`registerContract`/`registerCrudHook`/`registerEventHandler`) and returns
- *   the domain it registered under. No class, no `ServiceModule`. This is the shape parts migrate
- *   *to*.
- * - `default` -- the legacy shape: a constructor producing an `IServiceModule`, constructed and
- *   handed to `broker.registerModule`. This is the shape parts migrate *from*.
+ * - `domains` + `handlers` -- the manifest shape, and the one to write. The part states which
+ *   domains it implements and where each handler lives, and `loadDomain` does the rest. Because
+ *   the load records exactly which contracts it mounted, unloading can reverse precisely that.
+ * - `register` -- a plain function handed the broker, which mounts whatever it owns
+ *   (`registerCrud`/`registerContract`/`registerCrudHook`/`registerEventHandler`) and returns the
+ *   domain it registered under. Still supported for a part that wants full control of its own
+ *   registration, with one real cost: it tells nobody what it mounted, so unloading one can run
+ *   its `stop` and evict its module but cannot unmount its contracts.
  *
- * Supporting both is what makes the migration incremental rather than a flag day: a part can move
- * to `register` on its own schedule, and nothing that loads parts has to know which era a given one
- * belongs to. `register` is checked first so a module that somehow exports both is unambiguous.
+ * `domains` is checked first, so a bundle exporting both is unambiguous.
  */
 /**
  * What `register` may return. A stateless part just names its domain; one that owns something with
- * a lifetime -- an HTTP listener, a timer -- returns a `stop` alongside it, which is the standalone
- * equivalent of `ServiceModule.onStop`. `register` itself is the equivalent of `onStart`: it runs
- * at load, with the broker already live, which is precisely when a listener should bind or a timer
- * should start.
+ * a lifetime -- an HTTP listener, a timer -- returns a `stop` alongside it. `register` runs at
+ * load, with the broker already live, which is precisely when a listener should bind or a timer
+ * should start. A contract that declares its own `concurrency` needs neither half: `ctx.signal`
+ * is the stop, and the broker owns an interval's timer.
  */
 export type PartRegistration = string | { domain: string; stop?: () => void | Promise<void> };
 
 interface LoadedPart {
-    /** The generated manifest shape -- see `handlers.generated.ts`. Preferred over everything else. */
+    /** The manifest shape -- built as a virtual esbuild module, never written to `src/`. */
     domains?: readonly string[];
     handlers?: ContractHandlerMap;
     register?: (broker: IServiceContext['broker']) => PartRegistration | Promise<PartRegistration>;
-    default?: new () => IServiceModule;
 }
 
 /**
- * Teardown for standalone parts, by domain. `ServiceModule` parts don't need this --
- * `broker.unregisterModule` already calls their own `onStop` -- so only the standalone ones are
- * tracked here, and `stopLoadedPart` is a no-op for anything that didn't register one.
+ * Teardown for `register`-shaped parts, by domain. `stopLoadedPart` is a no-op for anything that
+ * didn't return one -- which is every manifest-shaped part, since a contract's own `ctx.signal`
+ * is its stop.
  */
 const partTeardown = new Map<string, () => void | Promise<void>>();
 
@@ -206,20 +205,14 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         }
         // No contract list: a `register` part mounts whatever it likes without telling anyone, so
         // unloading one can run its `stop` and evict its module but cannot unmount its contracts.
-        // That asymmetry is a reason the manifest shape is the one parts migrate to.
+        // That asymmetry is the reason the manifest shape is the one to write.
         loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [domain], contracts: [] });
         return { domain, nodeID: ctx.nodeID };
     }
 
-    if (imported.default === undefined) {
-        throw new MeshError({
-            message: `"${absolutePath}" exports neither \`register\` (a standalone part) nor a default export (a ServiceModule constructor).`,
-            code: 'BAD_REQUEST',
-            status: 400,
-        });
-    }
-
-    const instance = new imported.default();
-    await ctx.broker.registerModule(instance);
-    return { domain: instance.domain, nodeID: ctx.nodeID };
+    throw new MeshError({
+        message: `"${absolutePath}" exports neither \`domains\`+\`handlers\` (the manifest shape) nor \`register\` -- a part has to be one of the two.`,
+        code: 'BAD_REQUEST',
+        status: 400,
+    });
 }

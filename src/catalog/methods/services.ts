@@ -6,7 +6,8 @@
  */
 
 export interface RunningService {
-    readonly mountKey: string;
+    /** The primary domain the load registered under. */
+    readonly domain: string;
     /** The module this was loaded from, so stopping it can evict that module too. */
     readonly modulePath?: string;
 }
@@ -25,8 +26,8 @@ function key(nodeID: string, partId: string): string {
     return `${nodeID}\u0000${partId}`;
 }
 
-export function markServiceRunning(nodeID: string, partId: string, mountKey: string, modulePath?: string): void {
-    running.set(key(nodeID, partId), modulePath === undefined ? { mountKey } : { mountKey, modulePath });
+export function markServiceRunning(nodeID: string, partId: string, domain: string, modulePath?: string): void {
+    running.set(key(nodeID, partId), modulePath === undefined ? { domain } : { domain, modulePath });
 }
 
 export function getRunningService(nodeID: string, partId: string): RunningService | undefined {
@@ -44,15 +45,15 @@ export function clearServiceRunning(nodeID: string, partId: string): void {
  * have no desired state for the supervisor to compare against. Only catalog-managed services are
  * its business.
  */
-export function listServicesRunning(nodeID: string): { partId: string; mountKey: string }[] {
+export function listServicesRunning(nodeID: string): { partId: string; domain: string }[] {
     const prefix = `${nodeID}\u0000`;
-    const found: { partId: string; mountKey: string }[] = [];
+    const found: { partId: string; domain: string }[] = [];
 
     for (const [entryKey, service] of running) {
         if (!entryKey.startsWith(prefix)) continue;
         const partId = entryKey.slice(prefix.length);
         if (partId.startsWith('core:')) continue;
-        found.push({ partId, mountKey: service.mountKey });
+        found.push({ partId, domain: service.domain });
     }
 
     return found;

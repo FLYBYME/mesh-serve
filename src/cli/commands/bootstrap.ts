@@ -78,7 +78,7 @@ export class BootstrapCommand extends BaseCommand {
      * directly rather than through the api gates, precisely because the gates don't exist yet.
      *
      * Each call executes *in-process on whichever node actually runs serve.catalog* -- loading a
-     * module is inherently local (`broker.registerModule`), so this can't be done by the bootstrap
+     * module is inherently local (`require()` + `broker.loadDomain`), so this can't be done by the bootstrap
      * process itself reaching in; it has to be a contract the target node executes on its own
      * behalf. `serve.corePart.load` is exactly that.
      *

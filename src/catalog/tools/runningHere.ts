@@ -12,6 +12,6 @@ import { listServicesRunning } from '../methods/services.js';
 export async function runningHere(_params: Record<string, never>, ctx: IServiceContext): Promise<PartRunningHereOutput> {
     return {
         nodeID: ctx.nodeID,
-        services: listServicesRunning(ctx.nodeID).map(({ partId, mountKey }) => ({ partId, domain: mountKey })),
+        services: listServicesRunning(ctx.nodeID),
     };
 }

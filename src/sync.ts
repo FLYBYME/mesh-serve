@@ -392,8 +392,8 @@ async function syncExposed(broker: IServiceBroker, org: Organization, consoleApi
 /**
  * Starts every `kind: 'service'` part that isn't already running, so its contracts actually exist
  * in the live broker's registry before syncExposed tries to publish them -- building the artifact
- * (syncArtifacts, above) never runs the module, only serve.part.start's own import() +
- * registerModule does that (startService.ts). Idempotent: "already running on this node" is the
+ * (syncArtifacts, above) never runs the module, only serve.part.start's own require() +
+ * loadDomain does that (startService.ts). Idempotent: "already running on this node" is the
  * expected outcome on a rerun, not a failure; anything else still throws.
  */
 async function syncServices(broker: IServiceBroker, org: Organization, parts: Part[]): Promise<void> {
