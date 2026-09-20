@@ -1,7 +1,6 @@
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { GenerateClientInput, GenerateClientOutput } from '../contracts/generateClient.contract.js';
-import type { ApiService } from '../api.service.js';
 import { generateClient as render } from '../methods/generateClient.js';
 
 /**
@@ -12,7 +11,6 @@ import { generateClient as render } from '../methods/generateClient.js';
  * here, against mesh-serve's own zod, and the caller gets back finished text.
  */
 export async function generateClient(
-    this: ApiService,
     input: GenerateClientInput,
     ctx: IServiceContext,
 ): Promise<GenerateClientOutput> {

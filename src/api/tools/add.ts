@@ -2,10 +2,8 @@ import { globalContractRegistry, isPublicContract, MeshError } from '@flybyme/me
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { AddInput, AddOutput } from '../contracts/expose.contract.js';
-import type { ApiService } from '../api.service.js';
 
 export async function add(
-    this: ApiService,
     input: AddInput,
     ctx: IServiceContext
 ): Promise<AddOutput> {

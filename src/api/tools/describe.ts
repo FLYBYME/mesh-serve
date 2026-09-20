@@ -3,14 +3,12 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { buildDescriptor } from '../methods/descriptor.js';
 import type { DescribeInput, DescribeOutput } from '../contracts/api.contract.js';
-import type { ApiService } from '../api.service.js';
 
 /**
  * Same shape as handleDescribe's HTTP path (resolveApi -> resolveExposeRows -> buildDescriptor),
  * reachable by ctx.call instead of an HTTP GET, for a peer that isn't itself an HTTP client.
  */
 export async function describe(
-    this: ApiService,
     input: DescribeInput,
     ctx: IServiceContext,
 ): Promise<DescribeOutput> {

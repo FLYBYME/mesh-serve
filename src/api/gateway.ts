@@ -1,21 +1,11 @@
 import http from 'node:http';
 
-import { globalContractRegistry, isPublicContract, MeshError, ServiceModule } from '@flybyme/mesh';
+import { globalContractRegistry, isPublicContract, MeshError } from '@flybyme/mesh';
 import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
-import { exposeCrud, exposeAddContract, exposeRemoveContract, type Expose } from './contracts/expose.contract.js';
-import { wantCrud } from './contracts/want.contract.js';
-import { apiCrud, apiResolveByIdContract, apiResolveByHostContract, apiDescribeContract } from './contracts/api.contract.js';
-import { generateClientContract } from './contracts/generateClient.contract.js';
-import { ensureBootstrapApi } from './ensureBootstrapApi.js';
+import { type Expose } from './contracts/expose.contract.js';
 import { buildDescriptor, API_BASE } from './methods/descriptor.js';
 import { matchPath } from './methods/route.js';
-import { add } from './tools/add.js';
-import { remove } from './tools/remove.js';
-import { resolveApiById } from './tools/resolveApiById.js';
-import { resolveApiByHost } from './tools/resolveApiByHost.js';
-import { generateClient } from './tools/generateClient.js';
-import { describe } from './tools/describe.js';
 import type { Api } from './contracts/api.contract.js';
 
 interface Caller {
@@ -41,51 +31,27 @@ interface Target {
     readonly rows: readonly Expose[];
 }
 
-export class ApiService extends ServiceModule {
-    public readonly domain = 'serve.api';
-
+/**
+ * The REST/SSE gateway: one cohesive thing that owns an `http.Server`, which is why it stays a
+ * class -- the same reasoning as `cdn/gateway.ts`. Dropping `ServiceModule` was about removing the
+ * *tool-grouping* class, the bag that made unrelated contracts share a lifecycle. This holds no
+ * contracts at all; `serve.api.listen` constructs it, and that contract's `ctx.signal` stops it.
+ *
+ * It deliberately does not seed the bootstrap api. That used to happen in `onStart` and was a
+ * hidden ordering dependency -- it calls `identity.organization.find_one`, so starting this before
+ * identity was mounted threw outright, which is exactly the coupling independently-placed parts
+ * exist to remove. `bootstrap` calls `ensureBootstrapApi` once, at the moment that genuinely owns
+ * creating it.
+ */
+export class ApiGateway {
     private server?: http.Server;
-    private broker!: IServiceBroker;
 
-    constructor() {
-        super();
+    constructor(private readonly broker: IServiceBroker) {}
 
-        this.mountCrud(apiCrud);
-        this.mountCrud(exposeCrud);
-        this.mountCrud(wantCrud);
-        this.mountTool(apiResolveByIdContract, resolveApiById);
-        this.mountTool(apiResolveByHostContract, resolveApiByHost);
-        this.mountTool(apiDescribeContract, describe);
-        this.mountTool(exposeAddContract, add);
-        this.mountTool(exposeRemoveContract, remove);
-        this.mountTool(generateClientContract, generateClient);
-    }
-
-    /**
-     * A node claimed via `src/bootstrap.ts` already has its bootstrap api by the time this runs
-     * again on a later boot -- `ensureBootstrapApi` no-ops once it finds one. An unclaimed node has
-     * no "platform" organization yet either, so this also no-ops rather than failing; bootstrap.ts
-     * is what actually creates both, in the one moment nothing else will retry later.
-     */
-    /**
-     * No longer seeds the bootstrap api here. That was a hidden ordering dependency -- it calls
-     * `identity.organization.find_one`, so starting this service before identity was mounted threw
-     * outright, which is exactly the kind of coupling the move to independently-placed parts exists
-     * to remove (a node has no guarantee about what else happens to be loaded on it, or when).
-     *
-     * `bootstrap` already calls `ensureBootstrapApi` itself, explicitly, once, at the one moment
-     * that genuinely owns creating it -- so this was also a duplicate path to the same idempotent
-     * write, just one that ran on every boot of every node and could fail for reasons unrelated to
-     * anything this service does.
-     */
-    public async onStart(broker: IServiceBroker): Promise<void> {
-        this.broker = broker;
-        await this.createServer();
-    }
-
-    private async createServer(): Promise<void> {
-        const SERVER_PORT = parseInt(process.env.API_PORT || '5005', 10);
-        const SERVER_HOST = process.env.SERVER_HOST || '::';
+    /** Binds and resolves once listening -- the returned address is what the contract reports. */
+    public async start(port?: number, host?: string): Promise<string> {
+        const SERVER_PORT = port ?? parseInt(process.env.API_PORT || '5005', 10);
+        const SERVER_HOST = host ?? (process.env.SERVER_HOST || '::');
 
         this.server = http.createServer(async (req, res) => {
             /**
@@ -154,11 +120,16 @@ export class ApiService extends ServiceModule {
             });
             this.server?.once('error', reject);
         });
+
+        return `${SERVER_HOST}:${SERVER_PORT}`;
     }
 
-    public async onStop(): Promise<void> {
+    /** Called from `serve.api.listen`'s abort handler -- nothing else stops this. */
+    public async stop(): Promise<void> {
         if (this.server) {
+            this.server.closeIdleConnections?.();
             await new Promise((resolve) => this.server?.close(resolve));
+            this.server = undefined;
         }
     }
 
@@ -499,11 +470,7 @@ export class ApiService extends ServiceModule {
             requestedBy: { userId: caller.userId, agent: caller.agentName, roles: [...caller.roles] },
             requestedAt: new Date(now),
             status: 'held',
-            expiresAt: new Date(now + ApiService.HOLD_TTL_MS),
+            expiresAt: new Date(now + ApiGateway.HOLD_TTL_MS),
         }, { meta: { tenant_id: tenantId } });
     }
 }
-
-// See identity.service.ts's own comment on this -- required to be loadable as a dynamically-
-// loaded part.
-export default ApiService;

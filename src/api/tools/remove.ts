@@ -2,10 +2,8 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RemoveInput, RemoveOutput } from '../contracts/expose.contract.js';
-import type { ApiService } from '../api.service.js';
 
 export async function remove(
-    this: ApiService,
     input: RemoveInput,
     ctx: IServiceContext
 ): Promise<RemoveOutput> {

@@ -87,7 +87,7 @@ const CORE_PARTS: Record<string, string> = {
     cdn: MANIFEST_PREFIX + 'src/cdn',
     hold: MANIFEST_PREFIX + 'src/hold',
     queue: MANIFEST_PREFIX + 'src/queue',
-    api: 'src/api/api.service.ts',
+    api: MANIFEST_PREFIX + 'src/api',
 };
 
 async function main(): Promise<void> {

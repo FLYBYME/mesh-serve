@@ -29,7 +29,10 @@ import '../identity/contracts/apiToken.contract.js';
 import '../identity/contracts/identity.contract.js';
 import '../cdn/contracts/site.contract.js';
 import { CatalogService } from '../catalog/catalog.service.js';
-import { ApiService } from '../api/api.service.js';
+import '../api/contracts/api.contract.js';
+import '../api/contracts/expose.contract.js';
+import '../api/contracts/want.contract.js';
+import '../api/contracts/generateClient.contract.js';
 
 const DB_NAME = 'mesh-console-demo';
 const WS_PORT = 17654;
@@ -99,7 +102,6 @@ async function main(): Promise<void> {
     app.use(new BrokerModule());
 
     await app.registerModule(new CatalogService());
-    await app.registerModule(new ApiService());
 
     await app.start();
 
@@ -109,6 +111,8 @@ async function main(): Promise<void> {
     await broker.loadDomain('identity', {}, { resolve: resolveHandler });
     await broker.call('identity.role.ensureBuiltins', {});
     await broker.loadDomain('serve.cdn', {}, { resolve: resolveHandler });
+    await broker.loadDomain('serve.api', {}, { resolve: resolveHandler });
+    await broker.loadDomain('serve.expose', {}, { resolve: resolveHandler });
 
     const org = await app.call('identity.organization.find_one', { query: { slug: 'platform' } });
     if (org === undefined) throw new Error('No "platform" organization -- first boot did not run?');

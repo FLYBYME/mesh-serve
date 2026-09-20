@@ -108,3 +108,38 @@ export const apiDescribeContract = defineContract({
 
 export type DescribeInput = z.infer<typeof apiDescribeContract.inputSchema>;
 export type DescribeOutput = z.infer<typeof apiDescribeContract.outputSchema>;
+
+/**
+ * The REST/SSE listener, as a contract -- the same `long-running` shape `serve.cdn.listen` uses.
+ *
+ * The handler binds a port and returns immediately; the gateway stays up until `ctx.signal`
+ * aborts, which happens when the contract is unregistered or the node stops. Nothing holds the
+ * `http.Server` but the closure that registered its `close()`, and there is no `onStart`/`onStop`
+ * pair anywhere.
+ *
+ * Being a contract is what makes it placeable: deciding which node answers api traffic becomes
+ * deciding where to call this. Until the placement layer exists, `loadDomain` calls it on whatever
+ * node loads the part -- which is exactly what `onStart` did.
+ */
+export const apiListenContract = defineContract({
+    domain: 'serve.api',
+    action: 'listen',
+    description: 'Bind the REST/SSE api listener on this node and serve requests until stopped.',
+    inputSchema: z.object({
+        port: z.number().optional().describe('Defaults to API_PORT, then 5005'),
+        host: z.string().optional().describe('Defaults to SERVER_HOST, then ::'),
+    }),
+    outputSchema: z.object({
+        boundTo: z.string().describe('host:port actually bound'),
+        nodeID: z.string(),
+    }),
+    rest: { method: 'POST', path: '/api/listen' },
+    destructive: true,
+    filePath: 'src/api/tools/listen.ts',
+    concurrency: 'long-running',
+    permissions: [],
+    print: (o) => `serving on ${o.boundTo} (${o.nodeID})`,
+});
+
+export type ApiListenInput = z.infer<typeof apiListenContract.inputSchema>;
+export type ApiListenOutput = z.infer<typeof apiListenContract.outputSchema>;

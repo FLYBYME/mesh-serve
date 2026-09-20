@@ -2,10 +2,8 @@ import { Database, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { apiCrud, type ResolveApiByHostInput, type ResolveApiByHostOutput } from '../contracts/api.contract.js';
-import type { ApiService } from '../api.service.js';
 
 export async function resolveApiByHost(
-    this: ApiService,
     input: ResolveApiByHostInput,
     ctx: IServiceContext
 ): Promise<ResolveApiByHostOutput> {

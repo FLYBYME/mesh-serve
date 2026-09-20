@@ -31,7 +31,10 @@ import '../src/identity/contracts/identity.contract.js';
 import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
 import '../src/cdn/contracts/site.contract.js';
 import { CatalogService } from '../src/catalog/catalog.service.js';
-import { ApiService } from '../src/api/api.service.js';
+import '../src/api/contracts/api.contract.js';
+import '../src/api/contracts/expose.contract.js';
+import '../src/api/contracts/want.contract.js';
+import '../src/api/contracts/generateClient.contract.js';
 import { hashPassword } from '../src/identity/methods/hash.js';
 import { ensureBootstrapApi } from '../src/api/ensureBootstrapApi.js';
 
@@ -99,7 +102,6 @@ describe('a fresh install, booted for real', () => {
         app.use(new BrokerModule());
 
         await app.registerModule(new CatalogService());
-        await app.registerModule(new ApiService());
 
         await app.start();
 
@@ -112,6 +114,8 @@ describe('a fresh install, booted for real', () => {
         // its sub-domains, which is exactly the set one part owns.
         await app.getProvider<IServiceBroker>('broker').loadDomain('identity', {}, { resolve: resolveHandler });
         await app.getProvider<IServiceBroker>('broker').loadDomain('serve.cdn', {}, { resolve: resolveHandler });
+        await app.getProvider<IServiceBroker>('broker').loadDomain('serve.api', {}, { resolve: resolveHandler });
+        await app.getProvider<IServiceBroker>('broker').loadDomain('serve.expose', {}, { resolve: resolveHandler });
 
         const broker = app.getProvider<IServiceBroker>('broker');
         await claim(broker);
