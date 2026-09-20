@@ -1,6 +1,6 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.3.3",
+    "version": "0.4.0",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
     "private": true,
@@ -34,7 +34,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "github:FLYBYME/mesh#contract-driven-placement",
+        "@flybyme/mesh": "github:FLYBYME/mesh#v4.0.0",
         "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.17.1",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
