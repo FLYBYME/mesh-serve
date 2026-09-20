@@ -28,13 +28,16 @@ export const corePartLoadOutputSchema = z.object({
  * expose.
  */
 export const corePartLoadContract = defineContract({
-    domain: 'serve.corePart', action: 'load',
+    domain: 'serve.corePart',
+    action: 'load',
     description: 'Load one of mesh-serve\'s own precompiled core services onto this node.',
     inputSchema: corePartLoadInputSchema,
     outputSchema: corePartLoadOutputSchema,
     rest: { method: 'POST', path: '/core-parts/load' },
     destructive: true,
-    filePath: 'src/catalog/tools/loadCorePart.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/catalog/tools/loadCorePart.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
     print: (o) => `${o.domain} loaded on ${o.nodeID}`,
 });
 
@@ -64,13 +67,16 @@ export const corePartUnloadOutputSchema = z.object({
  * Internal only, like `load`.
  */
 export const corePartUnloadContract = defineContract({
-    domain: 'serve.corePart', action: 'unload',
+    domain: 'serve.corePart',
+    action: 'unload',
     description: 'Unmount one of mesh-serve\'s own core services from this node and drop its module.',
     inputSchema: corePartUnloadInputSchema,
     outputSchema: corePartUnloadOutputSchema,
     rest: { method: 'POST', path: '/core-parts/unload' },
     destructive: true,
-    filePath: 'src/catalog/tools/unloadCorePart.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/catalog/tools/unloadCorePart.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
     print: (o) => `${o.domains.join(', ')} unloaded from ${o.nodeID}${o.evicted ? ' (module evicted)' : ''}`,
 });
 
