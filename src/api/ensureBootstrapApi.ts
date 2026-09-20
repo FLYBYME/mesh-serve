@@ -41,6 +41,11 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     // Looks an organization up by slug before having an id to `.get` with at all -- same public
     // reasoning as `.get` above.
     { contract: 'identity.organization.find_one' },
+    // A second tenant is otherwise unreachable through the api at all -- found live, needing one
+    // to prove real cross-tenant isolation for a site rather than just asserting it from the
+    // schema. Operator-gated: onboarding a new organization is a platform decision, not something
+    // any signed-in account does to itself.
+    { contract: 'identity.organization.create', role: 'operator' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 

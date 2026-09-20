@@ -314,17 +314,14 @@ describe('a fresh install, booted for real', () => {
 
     it('an operator naming an explicit tenantId creates the row in that tenant, not the api\'s own', async () => {
         await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.api.create', 'operator');
-
-        const exposeOrgCreateRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'identity.organization.create' }),
-        });
-        expect(exposeOrgCreateRes.status).toBe(200);
+        // Bootstrap itself now exposes this with role: 'operator' (an operator action, not
+        // self-service) -- ensureExposed leaves an already-exposed row's gate alone, so the call
+        // below carries the operator's own token to match.
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'identity.organization.create', 'operator');
 
         const createOrgRes = await fetch(`${API_ORIGIN}/api/organizations`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
             body: JSON.stringify({ name: 'Flow', slug: 'flow', ownerId: operatorUserId }),
         });
         expect(createOrgRes.status).toBe(200);
