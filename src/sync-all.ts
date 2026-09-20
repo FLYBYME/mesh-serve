@@ -1,13 +1,14 @@
 /**
- * Discovers every site spec (`*.site.json`) under a known set of directories and syncs each one in
- * turn (`syncSpec`, sync.ts) -- lists what it found before touching anything, so a missing site is
- * obvious up front rather than a silent gap.
+ * Discovers every site spec (`*.site.yaml`, `*.site.json`) under a known set of directories and
+ * syncs each one in turn (`syncSpec`, sync.ts) -- lists what it found before touching anything, so
+ * a missing site is obvious up front rather than a silent gap.
  *
  * Not a hardcoded {site path -> out path} registry, deliberately: that's the same shape of bug this
  * session already found once (console.site.json's `exposed` list silently missing
- * identity.ticket.signOut, hand-maintained and drifted). A site spec now declares its own
- * `generatedClientOut` (console.site.schema.ts), so discovering *files* is sufficient -- no second
- * list to keep in sync with the first.
+ * identity.ticket.signOut, hand-maintained and drifted). This never asks for a client at all --
+ * `outPath` is always `undefined` below -- so discovering *files* is sufficient, with no second list
+ * of paths to keep in sync with the first. A generated client is `generate`'s job (or `sync --out`
+ * for one site at a time), not this one's.
  *
  * Usage: npx tsx src/sync-all.ts [--force]
  * `--force` is passed through to every site's own syncArtifacts (rebuilds even a cached artifact).
@@ -20,9 +21,9 @@ import { syncSpec } from './sync.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** Where a site spec is allowed to live. Both are real today: console.site.json ships inside this
- *  package, git.site.json (and any future company site) lives alongside the company repos it
- *  composes, outside this repo entirely. */
+/** Where a site spec is allowed to live. Both are real today: console.site.yaml ships inside this
+ *  package, a company site (git.site.yaml, say) lives alongside the company repos it composes,
+ *  outside this repo entirely. */
 const SEARCH_DIRS = [
     here,
     '/home/ubuntu/code/company/sites',
@@ -38,7 +39,9 @@ async function findSiteFiles(): Promise<readonly string[]> {
             continue; // A search directory that doesn't exist (yet) contributes no sites, not an error.
         }
         for (const entry of entries) {
-            if (entry.endsWith('.site.json')) found.push(path.join(dir, entry));
+            if (entry.endsWith('.site.yaml') || entry.endsWith('.site.yml') || entry.endsWith('.site.json')) {
+                found.push(path.join(dir, entry));
+            }
         }
     }
     return found;
@@ -53,7 +56,7 @@ async function main(): Promise<void> {
     const files = await findSiteFiles();
 
     if (files.length === 0) {
-        console.log('No *.site.json found under', SEARCH_DIRS.join(', '));
+        console.log('No *.site.yaml/*.site.json found under', SEARCH_DIRS.join(', '));
         return;
     }
 

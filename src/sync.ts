@@ -1,10 +1,11 @@
 /**
- * Applies a site spec (console.site.json by default; pass --site for a different one) to a
- * running cluster: reconciles roles, the admin account and its organization, the site's api and
- * its exposed contracts, every repo/part, the composition, and the site itself -- adding what's
- * missing, updating what drifted, and removing exposed contracts no longer in the spec. Safe to
- * run repeatedly; nothing here throws on "already exists" the way details.ts (this file's
- * non-idempotent predecessor) does.
+ * Applies a site spec (console.site.yaml by default; pass --site for a different one) against a
+ * cluster that is already claimed: reconciles the site's api and its exposed contracts (each with
+ * the gate the spec declares), every repo/part, the composition, and the site itself -- adding
+ * what's missing, updating what drifted, and removing exposed contracts no longer in the spec.
+ * Safe to run repeatedly; nothing here throws on "already exists" the way this file's
+ * non-idempotent predecessor (details.ts, deleted -- long superseded, never actually removed until
+ * now) did.
  *
  * Each part builds from a pinned commit sha, not a moving branch: `part.ref` if the spec sets one,
  * otherwise resolved from the owning repo's branch via `git ls-remote` right before use. Building
@@ -12,8 +13,15 @@
  * ("linked") instead of queuing a new build, so a rerun with nothing changed does no build work at
  * all.
  *
- * Usage: npx tsx src/sync.ts [--site <path/to/site.json>] [--out <path/to/generated/api.ts>]
- * Both flags are optional; omitting either keeps this script's original console-site behavior.
+ * Usage: npx tsx src/sync.ts [--site <path/to/site.yaml>] [--out <path/to/generated/api.ts>]
+ * Both flags are optional. `--site` defaults to the operator console's own spec; pass `--out` when
+ * you want a client written -- there is no spec-declared fallback path any more. There used to be
+ * one (`generatedClientOut`), added after a real incident (`sync --site company.site.json` with no
+ * `--out` silently overwrote the console's own client; `roadmap.md` has it) where the fallback had
+ * been a single hardcoded path instead. A spec-declared path was strictly better than that, but it
+ * was still an absolute path on one developer's disk living inside a file that otherwise describes
+ * cluster state -- the one field here that was about a workstation, not the cluster. Dropped rather
+ * than kept "just in case": the site itself needs no such path to exist and be correct.
  */
 import {
     BrokerModule,
@@ -33,7 +41,8 @@ import type { Organization } from './identity/contracts/organization.contract.js
 import type { Api } from './api/contracts/api.contract.js';
 import type { Repo } from './catalog/contracts/repo.contract.js';
 import type { Part } from './catalog/contracts/part.contract.js';
-import { loadSite, DEFAULT_SITE_PATH, type RepoSpec, type PartSpec, type SiteSpec } from './console.site.js';
+import { loadSite, DEFAULT_SITE_PATH, type RepoSpec, type PartSpec, type ExposeSpec, type SiteSpec } from './console.site.js';
+import { BOOTSTRAP_EXPOSED_CONTRACTS } from './api/ensureBootstrapApi.js';
 
 /** Set once, at the top of main(), before any sync* function below (all of which read it) runs. */
 let site: SiteSpec;
@@ -43,11 +52,9 @@ let force: boolean = false;
  * `outPath` defaults to `undefined`, not some hardcoded path -- it used to default to the operator
  * console's own generated client (`mesh-operator/src/console/generated/api.ts`), which meant running
  * this CLI against *any other* site with no `--out` silently overwrote the console's client with one
- * generated from that other site's `exposed` list. `syncSpec` already falls back to the site spec's
- * own `generatedClientOut` when `outPath` is `undefined` (console.site.json declares its own, which
- * is that same path) -- this only needs to stop shadowing that fallback with a second, contradicting
- * default. Found live: `sync.ts --site company.site.json --force` overwrote the console's client;
- * `roadmap.md` has the rest.
+ * generated from that other site's exposure. No fallback of any kind now, spec-declared or
+ * hardcoded: `syncSpec` skips client generation outright when `outPath` is absent. See the file
+ * header for the full history (`roadmap.md` has the original incident).
  */
 function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string | undefined; force: boolean } {
     let sitePath = DEFAULT_SITE_PATH;
@@ -111,12 +118,12 @@ async function requireClaimedCluster(broker: IServiceBroker): Promise<Organizati
 
 async function syncApi(broker: IServiceBroker, org: Organization): Promise<Api> {
     const meta = { tenant_id: org.id };
-    const found = await broker.call('serve.api.find_one', { query: { apiHost: site.api } }, { meta });
+    const found = await broker.call('serve.api.find_one', { query: { apiHost: site.api.host } }, { meta });
 
     if (!found) {
         const created = await broker.call('serve.api.create', {
             tenantId: org.id,
-            apiHost: site.api,
+            apiHost: site.api.host,
             description: 'Console api',
         }, { meta });
         console.log('Created api', created.id);
@@ -158,13 +165,20 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
     const parts: Part[] = [];
 
     for (const part of site.parts) {
-        const repo = repos.find((r) => r.name === part.repoName);
+        const repo = repos.find((r) => r.name === part.repo);
         if (!repo) {
-            throw new Error(`No repo named "${part.repoName}" for part "${part.key}".`);
+            throw new Error(`No repo named "${part.repo}" for part "${part.key}".`);
         }
 
         const found = await broker.call('serve.part.find_one', { query: { tenantId: org.id, key: part.key } }, { meta });
 
+        // No `wants` here in either branch: the spec no longer carries it. It used to
+        // (partSpecSchema had its own `wants: []`, always empty, always overwritten), but the row's
+        // real value is set by build.ts from the part's own mesh.wants.json -- a hand-written copy
+        // of that in the spec could only ever be stale or redundant, never authoritative. Omitting
+        // the field leaves the schema's own default (`[]`) on create and leaves the existing value
+        // alone on update, so a build's own write is never clobbered by a reconcile that runs after
+        // it.
         if (!found) {
             const created = await broker.call('serve.part.create', {
                 tenantId: org.id,
@@ -172,11 +186,11 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
                 key: part.key,
                 kind: part.kind,
                 path: part.path,
-                entryPoint: part.entryPoint,
+                entryPoint: part.entry,
                 ...(part.imports !== undefined ? { imports: part.imports } : {}),
-                wants: part.wants,
-                description: part.description,
+                ...(part.description !== undefined ? { description: part.description } : {}),
                 ...(part.options !== undefined ? { options: part.options } : {}),
+                ...(part.desired !== undefined ? { desired: part.desired } : {}),
             }, { meta });
             console.log('Created part', created.id, part.key);
             parts.push(created);
@@ -188,11 +202,11 @@ async function syncParts(broker: IServiceBroker, org: Organization, repos: Repo[
             repoId: repo.id,
             kind: part.kind,
             path: part.path,
-            entryPoint: part.entryPoint,
+            entryPoint: part.entry,
             ...(part.imports !== undefined ? { imports: part.imports } : {}),
-            wants: part.wants,
-            description: part.description,
+            ...(part.description !== undefined ? { description: part.description } : {}),
             ...(part.options !== undefined ? { options: part.options } : {}),
+            ...(part.desired !== undefined ? { desired: part.desired } : {}),
         }, { meta });
         console.log('Part reconciled', updated.id, part.key);
         parts.push(updated);
@@ -228,7 +242,7 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
 
     for (const part of parts) {
         const partSpec = site.parts.find((p) => p.key === part.key);
-        const repoSpec = site.repos.find((r) => r.name === partSpec?.repoName);
+        const repoSpec = site.repos.find((r) => r.name === partSpec?.repo);
         if (!partSpec || !repoSpec) {
             throw new Error(`No spec for built part "${part.key}".`);
         }
@@ -255,17 +269,29 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
         }, { meta });
         console.log(`Building ${part.key}@${shortRef}`, build.id);
 
-        // Matches serve.queue's own dispatcher, which gives serve.artifact.build 5 minutes.
-        const run = await broker.call('serve.artifact.build', { id: build.id }, { meta, timeout: 5 * 60_000 });
-        if (!run.success) {
-            throw new Error(`Build failed for ${part.key}@${shortRef}`);
+        // Not a direct call to serve.artifact.build either, for the same reason: it is
+        // deliberately internal (no `visibility: 'public'`), reached only through serve.queue's own
+        // dispatcher, never by name. requestBuild only queues the row as 'pending' -- watchRelease
+        // is what sweeps pending artifacts and hands each to the queue, and it already runs on its
+        // own 60s interval with no action needed; calling it here just avoids waiting up to a full
+        // interval for a build sync itself just queued. Same pattern composeOnCluster.ts already
+        // uses. What follows is a plain poll of `get`, the same shape an operator watching this
+        // build's progress through the api would see -- there is no privileged shortcut here that a
+        // real caller couldn't also take.
+        await broker.call('serve.artifact.watchRelease', {}, { meta });
+
+        const deadline = Date.now() + 5 * 60_000;
+        let artifact = await broker.call('serve.artifact.get', { id: build.id }, { meta });
+        while (artifact !== undefined && (artifact.status === 'pending' || artifact.status === 'running')) {
+            if (Date.now() > deadline) {
+                throw new Error(`Timed out waiting for ${part.key}@${shortRef} to build (still "${artifact.status}").`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            artifact = await broker.call('serve.artifact.get', { id: build.id }, { meta });
         }
 
-        // `get`, not `resolve`: resolve is not public on this collection, so it is unreachable over
-        // the api -- and nothing here needs more than the row by its own id.
-        const artifact = await broker.call('serve.artifact.get', { id: build.id }, { meta, timeout: 5 * 60_000 });
-        if (!artifact || artifact.hash === undefined) {
-            throw new Error(`No successful artifact for build ${build.id} (${part.key}@${shortRef}).`);
+        if (artifact === undefined || artifact.status !== 'success' || artifact.hash === undefined) {
+            throw new Error(`Build failed for ${part.key}@${shortRef}: ${artifact?.error ?? 'no successful artifact'}`);
         }
         console.log(`Built ${part.key}@${shortRef}`, artifact.hash);
     }
@@ -323,7 +349,7 @@ async function syncSite(
     const meta = { tenant_id: org.id };
     const open = applications.map((p) => ({ application: p.key }));
 
-    const found = await broker.call('serve.cdn.find_one', { query: { tenantId: org.id, host: site.cdn } }, { meta });
+    const found = await broker.call('serve.cdn.find_one', { query: { tenantId: org.id, host: site.site } }, { meta });
     // `?? {}` matches the create branch's own default below -- a site spec declaring no `policy`
     // means "nothing frozen," the same as every site before this field existed, not "leave whatever
     // was there" (which is what leaving `policy` out of the update call entirely used to silently do).
@@ -335,7 +361,7 @@ async function syncSite(
             title: 'Console', description: '',
         }, { meta })
         : await broker.call('serve.cdn.create', {
-            tenantId: org.id, host: site.cdn, apiId: consoleApi.id, application: 'console',
+            tenantId: org.id, host: site.site, apiId: consoleApi.id, application: 'console',
             policy, theme: {}, open,
             title: 'Console', description: '',
             indexable: false, maintenance: false,
@@ -347,24 +373,77 @@ async function syncSite(
     console.log('Deployed', deploy.site.host, '->', deploy.site.releaseHash?.slice(0, 12));
 }
 
+/** A row's gate, in the same shape `ExposeSpec.gate` declares it, so the two can be compared. */
+function gateOfRow(row: { role?: string; permission?: string }): ExposeSpec['gate'] {
+    if (row.role !== undefined) return { role: row.role };
+    if (row.permission !== undefined) return { permission: row.permission };
+    return 'public';
+}
+
+function sameGate(a: ExposeSpec['gate'], b: ExposeSpec['gate']): boolean {
+    if (a === 'public' || b === 'public') return a === b;
+    if ('role' in a && 'role' in b) return a.role === b.role;
+    if ('permission' in a && 'permission' in b) return a.permission === b.permission;
+    return false;
+}
+
+/**
+ * A contract bootstrap itself gates (`BOOTSTRAP_EXPOSED_CONTRACTS`) is never removed by a site sync,
+ * whatever the spec says or leaves unsaid. sync's `remove` pass below is "anything current but not
+ * desired" -- correct for an api this file owns end to end, and dangerous for one it does not:
+ * pointing a site spec's `api.host` at the bootstrap api (as an operator debugging `--parts api,cdn`
+ * once did) would otherwise silently strip every management row this session added, including
+ * `serve.expose.add` -- the one call that could put them back.
+ */
+const BOOTSTRAP_OWNED = new Set(BOOTSTRAP_EXPOSED_CONTRACTS.map((c) => c.contract));
+
 async function syncExposed(broker: IServiceBroker, org: Organization, consoleApi: Api): Promise<void> {
     const meta = { tenant_id: org.id };
 
     const current = await broker.call('serve.expose.find', { query: { apiId: consoleApi.id } }, { meta });
-    const currentContracts = new Set(current.map((e) => e.contract));
-    const desiredContracts = new Set(site.exposed);
+    const currentByContract = new Map(current.map((row) => [row.contract, row]));
+    const desired = new Map(site.api.expose.map((spec) => [spec.contract, spec]));
 
-    for (const contract of desiredContracts) {
-        if (currentContracts.has(contract)) continue;
-        await broker.call('serve.expose.add', { apiId: consoleApi.id, contract }, { meta });
-        console.log('Exposed', contract);
+    for (const [contract, spec] of desired) {
+        const existing = currentByContract.get(contract);
+
+        if (existing === undefined) {
+            await broker.call('serve.expose.add', {
+                apiId: consoleApi.id, contract,
+                ...(spec.gate !== 'public' ? spec.gate : {}),
+            }, { meta });
+            console.log('Exposed', contract, gateLabel(spec.gate));
+            continue;
+        }
+
+        if (!sameGate(gateOfRow(existing), spec.gate)) {
+            // No update on this collection (`add`'s own 409 is what enforces "one row per
+            // contract"), so changing a gate is remove-then-add, same as a person would do it by
+            // hand through expose.remove/expose.add.
+            await broker.call('serve.expose.remove', { apiId: consoleApi.id, contract }, { meta });
+            await broker.call('serve.expose.add', {
+                apiId: consoleApi.id, contract,
+                ...(spec.gate !== 'public' ? spec.gate : {}),
+            }, { meta });
+            console.log('Regated', contract, gateLabel(spec.gate));
+        }
     }
 
     for (const row of current) {
-        if (desiredContracts.has(row.contract)) continue;
+        if (desired.has(row.contract)) continue;
+        if (BOOTSTRAP_OWNED.has(row.contract)) {
+            console.log('Leaving', row.contract, '-- bootstrap-owned, not this spec\'s to remove');
+            continue;
+        }
         await broker.call('serve.expose.remove', { apiId: consoleApi.id, contract: row.contract }, { meta });
         console.log('Unexposed', row.contract);
     }
+}
+
+function gateLabel(gate: ExposeSpec['gate']): string {
+    if (gate === 'public') return '(public)';
+    if ('role' in gate) return `(role: ${gate.role})`;
+    return `(permission: ${gate.permission})`;
 }
 
 /**
@@ -406,9 +485,8 @@ async function syncGeneratedClient(broker: IServiceBroker, org: Organization, co
  * orchestration a second time; sync.ts's own CLI (main(), below) is just the single-site case of
  * this with argv-parsed arguments.
  *
- * `outPath` is optional here, and undefined by default from main()'s own parseArgs too now -- when
- * absent, the site spec's own `generatedClientOut` is used, and if that's absent too, client
- * generation is skipped rather than guessing a path that belongs to some other site's app.
+ * `outPath` is optional: absent, client generation is skipped rather than guessing a path. See the
+ * file header for why there is no longer a spec-declared fallback to guess from.
  */
 export async function syncSpec(sitePath: string, outPath?: string, force = false): Promise<void> {
     site = loadSite(sitePath);
@@ -437,11 +515,10 @@ export async function syncSpec(sitePath: string, outPath?: string, force = false
 
         await syncExposed(broker, org, consoleApi);
 
-        const effectiveOut = outPath ?? site.generatedClientOut;
-        if (effectiveOut !== undefined) {
-            await syncGeneratedClient(broker, org, consoleApi, effectiveOut);
+        if (outPath !== undefined) {
+            await syncGeneratedClient(broker, org, consoleApi, outPath);
         } else {
-            console.log('No generated-client output path (--out or the site spec\'s own generatedClientOut); skipping.');
+            console.log('No --out given; skipping client generation.');
         }
     } finally {
         await mesh.stop();

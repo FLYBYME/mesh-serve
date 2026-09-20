@@ -34,3 +34,4 @@ agent-runs/results/*-verify.log
 # `dist/`, and `prepare` runs `build` on `npm install`, so a fresh clone generates them
 # before anything needs them.
 src/generated/
+data/

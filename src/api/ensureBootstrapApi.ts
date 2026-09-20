@@ -73,14 +73,24 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'serve.part.start', role: 'operator' },
     { contract: 'serve.part.stop', role: 'operator' },
 
-    // Reads only. `create`/`update`/`delete` are deliberately internal on this collection, behind
-    // `requestBuild` -- which resolves the part, checks driver kinds and defaults status. Writing
-    // the row directly skips all of that, which is exactly what sync.ts was doing.
+    // Reads, plus the one real write: `requestBuild` -- which resolves the part, checks driver
+    // kinds, defaults status, and queues the row as 'pending'. `create`/`update`/`delete` on this
+    // collection stay internal (writing the row directly skips all of `requestBuild`'s validation,
+    // which is exactly what sync.ts used to do -- fixed alongside this).
+    //
+    // `build` is not exposed, on purpose, though it once was here -- a real mistake, caught by
+    // actually walking this path end to end rather than trusting the contract's own `permissions`
+    // floor as sufficient. It has no `visibility: 'public'` (defaults `internal`), which is not an
+    // oversight: `requestBuild` only *queues* a row; `serve.artifact.watchRelease` (a leaderScoped
+    // interval already running every 60s, no operator action needed) sweeps pending artifacts and
+    // hands each to `serve.queue`, whose own dispatcher is the only caller `build` is meant to
+    // have. An operator watching a build's progress polls `find_one`/`get` for its `status`, the
+    // same shape any submit-then-poll build api has -- there was never a "run this specific
+    // already-queued job yourself" endpoint to expose.
     { contract: 'serve.artifact.find', role: 'operator' },
     { contract: 'serve.artifact.find_one', role: 'operator' },
     { contract: 'serve.artifact.get', role: 'operator' },
     { contract: 'serve.artifact.requestBuild', role: 'operator' },
-    { contract: 'serve.artifact.build', role: 'operator' },
 
     { contract: 'serve.composition.find', role: 'operator' },
     { contract: 'serve.composition.find_one', role: 'operator' },

@@ -1,0 +1,166 @@
+# The operator console: organization, apis & exposure, catalog, sites, services.
+#
+# Applied with `mesh-serve sync` (or `sync --site <this file>` from elsewhere) against an
+# already-claimed cluster -- run `mesh-serve bootstrap` first if this is a fresh one.
+#
+# Hand-written only. A dump of what is actually running goes to JSON (no YAML serializer keeps
+# comments, and comments are the reason this file is YAML at all) -- never overwrite this one from
+# a dump.
+
+site: console.localhost
+org: platform
+
+api:
+  host: console-api.localhost
+
+  # Every contract this console calls, and the gate on it. `gate` is required on purpose: leaving
+  # it off used to mean "public", and that is how serve.repo.create/serve.part.create/serve.cdn.create
+  # ended up anonymously writable on this api -- their own contracts declare no floor of their own
+  # (permissions: [] -- reachable by anything already inside the mesh), so the row here is the only
+  # thing standing between them and the internet.
+  expose:
+    # -- signing in, and managing your own account. Necessarily public: nobody has a ticket yet. --
+    - contract: identity.ticket.issue
+      gate: public
+      why: logging in
+    - contract: identity.ticket.signOut
+      gate: public
+      why: ending your own session needs no role -- you already hold the ticket being revoked
+    - contract: identity.whoami
+      gate: public
+      why: "the first call any signed-in caller makes; also how the console checks \"am I signed in\""
+    - contract: identity.user.setPassword
+      gate: public
+      why: claims a provisional account or changes your own password
+    - contract: identity.user.register
+      gate: public
+      why: account creation
+
+    # -- reading your own organization's membership --
+    - contract: identity.organization.find
+      gate: { role: member }
+      why: the org switcher needs to list what you belong to
+    - contract: identity.membership.find
+      gate: { role: member }
+      why: "\"who else is in this org\""
+    - contract: identity.role.find
+      gate: { role: member }
+      why: role names for a picker (grantRole, membership.create)
+
+    # -- administering people --
+    - contract: identity.user.grantRole
+      gate: { role: operator }
+      why: "grants ANY role to ANY account with no check of its own -- see user.contract.ts's own comment on this one"
+    - contract: identity.membership.create
+      gate: { role: operator }
+    - contract: identity.membership.update
+      gate: { role: operator }
+    - contract: identity.membership.delete
+      gate: { role: operator }
+
+    # -- apis and their exposure --
+    - contract: serve.api.find
+      gate: { role: operator }
+    - contract: serve.api.create
+      gate: { role: operator }
+    - contract: serve.expose.find
+      gate: { role: operator }
+    - contract: serve.expose.add
+      gate: { role: operator }
+    - contract: serve.expose.remove
+      gate: { role: operator }
+    - contract: serve.want.find
+      gate: { role: operator }
+      why: the wants-vs-exposed panel
+
+    # -- repos, parts, builds --
+    - contract: serve.repo.find
+      gate: { role: operator }
+    - contract: serve.repo.create
+      gate: { role: operator }
+    - contract: serve.part.find
+      gate: { role: operator }
+    - contract: serve.part.create
+      gate: { role: operator }
+    - contract: serve.part.start
+      gate: { role: operator }
+    - contract: serve.part.stop
+      gate: { role: operator }
+    - contract: serve.artifact.find
+      gate: { role: operator }
+    - contract: serve.artifact.requestBuild
+      gate: { role: operator }
+      why: "clones a repo and runs its toolchain -- arbitrary code execution by proxy"
+
+    # -- compositions and releases --
+    - contract: serve.composition.find
+      gate: { role: operator }
+    - contract: serve.composition.create
+      gate: { role: operator }
+    - contract: serve.composition.compose
+      gate: { role: operator }
+    - contract: serve.release.find
+      gate: { role: operator }
+
+    # -- sites --
+    - contract: serve.cdn.find
+      gate: { role: operator }
+    - contract: serve.cdn.create
+      gate: { role: operator }
+    - contract: serve.cdn.update
+      gate: { role: operator }
+    - contract: serve.cdn.deploy
+      gate: { role: operator }
+
+theme: console-theme
+
+repos:
+  - name: mesh-web
+    url: https://github.com/flybyme/mesh-web.git
+    ref: master
+    kernel: true
+  - name: mesh-core
+    url: https://github.com/flybyme/mesh-core.git
+    ref: master
+  - name: mesh-operator
+    url: https://github.com/FLYBYME/mesh-operator.git
+    ref: master
+
+parts:
+  - repo: mesh-web
+    key: platform/kernel
+    kind: kernel
+    entry: src/index.ts
+    imports: "@flybyme/mesh-web"
+    description: Kernel for mesh-web
+
+  - repo: mesh-core
+    key: platform/auth
+    kind: extension
+    entry: src/auth/index.ts
+    description: Authentication service for mesh-web
+    options:
+      persist: true
+
+  - repo: mesh-core
+    key: platform/ui
+    kind: extension
+    entry: src/ui/index.ts
+    imports: "@flybyme/mesh-core/ui"
+    description: The twelve-component design system extension
+
+  - repo: mesh-core
+    key: platform/chrome
+    kind: extension
+    entry: src/chrome/index.ts
+    description: Window chrome extension (ConsoleChrome)
+
+  - repo: mesh-operator
+    key: platform/operator
+    kind: application
+    entry: src/console/index.ts
+    description: "The operator console: organization, apis & exposure, catalog, sites, services"
+
+# Nothing frozen -- mesh-web's own default (windowed) applies, and a person can change it. A locked
+# single-window site (a blog, say) would set { window-manager/mode: single } here.
+policy: {}
