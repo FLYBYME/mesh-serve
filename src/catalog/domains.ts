@@ -1,3 +1,15 @@
+// Importing a contract module is what registers its contracts, and `loadDomain` reads them from
+// there -- so the list below is only half the answer. Doing it here means every caller that wants
+// the catalog gets both halves from one import, instead of each one hand-listing the same six
+// modules and quietly missing whichever was added last.
+import './contracts/repo.contract.js';
+import './contracts/part.contract.js';
+import './contracts/composition.contract.js';
+import './contracts/artifact.contract.js';
+import './contracts/release.contract.js';
+import './contracts/corePart.contract.js';
+import './contracts/supervisor.contract.js';
+
 /**
  * The domains the catalog part implements.
  *

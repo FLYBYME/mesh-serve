@@ -36,3 +36,24 @@ export function getRunningService(nodeID: string, partId: string): RunningServic
 export function clearServiceRunning(nodeID: string, partId: string): void {
     running.delete(key(nodeID, partId));
 }
+
+/**
+ * Everything one node is running, for `serve.part.runningHere`.
+ *
+ * Core parts are excluded: they are keyed `core:<name>` and are not `serve.part` rows, so they
+ * have no desired state for the supervisor to compare against. Only catalog-managed services are
+ * its business.
+ */
+export function listServicesRunning(nodeID: string): { partId: string; mountKey: string }[] {
+    const prefix = `${nodeID}\u0000`;
+    const found: { partId: string; mountKey: string }[] = [];
+
+    for (const [entryKey, service] of running) {
+        if (!entryKey.startsWith(prefix)) continue;
+        const partId = entryKey.slice(prefix.length);
+        if (partId.startsWith('core:')) continue;
+        found.push({ partId, mountKey: service.mountKey });
+    }
+
+    return found;
+}
