@@ -20,7 +20,7 @@ import { WSTransport } from '@flybyme/mesh/node';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { register as registerIdentity } from '../identity/identity.service.js';
-import { CdnService } from '../cdn/cdn.service.js';
+import { register as registerCdn } from '../cdn/cdn.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { ApiService } from '../api/api.service.js';
 
@@ -91,12 +91,16 @@ async function main(): Promise<void> {
     app.use(new DatabaseModule({ dbName: DB_NAME }));
     app.use(new BrokerModule());
 
-    await registerIdentity(app.getProvider<IServiceBroker>('broker'));
-    await app.registerModule(new CdnService());
     await app.registerModule(new CatalogService());
     await app.registerModule(new ApiService());
 
     await app.start();
+
+    // After start, not before: serve.cdn's register binds its listener through
+    // serve.cdn.listen, which is a real call and wants a running broker underneath it.
+    const broker = app.getProvider<IServiceBroker>('broker');
+    await registerIdentity(broker);
+    await registerCdn(broker);
 
     const org = await app.call('identity.organization.find_one', { query: { slug: 'platform' } });
     if (org === undefined) throw new Error('No "platform" organization -- first boot did not run?');

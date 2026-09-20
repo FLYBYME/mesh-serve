@@ -3,7 +3,6 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { releaseCrud } from '../../catalog/contracts/release.contract.js';
 import type { DeployInput, DeployOutput } from '../contracts/site.contract.js';
-import type { CdnService } from '../cdn.service.js';
 
 /**
  * Points a site at a release, after checking the release actually belongs to it: same tenant, and
@@ -15,7 +14,7 @@ import type { CdnService } from '../cdn.service.js';
  * this site's want rows -- added, removed, or left alone to match exactly what the newly deployed
  * code actually calls, not what some earlier release happened to call.
  */
-export async function deploy(this: CdnService, input: DeployInput, ctx: IServiceContext): Promise<DeployOutput> {
+export async function deploy(input: DeployInput, ctx: IServiceContext): Promise<DeployOutput> {
     const site = await ctx.call('serve.cdn.resolveById', { id: input.siteId });
     const meta = { tenant_id: site.tenantId };
 

@@ -89,3 +89,38 @@ export const siteDeployContract = defineContract({
 
 export type DeployInput = z.infer<typeof siteDeployContract.inputSchema>;
 export type DeployOutput = z.infer<typeof siteDeployContract.outputSchema>;
+
+/**
+ * The frontend HTTP listener, as a contract.
+ *
+ * This is the `long-running` case the concurrency field was added for: the handler binds a port
+ * and returns immediately, and the listener stays up until `ctx.signal` aborts -- which happens
+ * when the contract is unregistered or the node stops. There is no `onStart`/`onStop` pair and
+ * nothing holds the `http.Server` except the closure that registered its `close()`.
+ *
+ * Being a contract rather than a side effect of loading the part is what makes it *placeable*:
+ * once the scheduler exists, deciding which node serves frontend traffic is deciding where to
+ * call this. Until then `register()` calls it locally, which is exactly what `onStart` did.
+ */
+export const siteListenContract = defineContract({
+    domain: 'serve.cdn',
+    action: 'listen',
+    description: 'Bind the frontend HTTP listener on this node and serve sites until stopped.',
+    inputSchema: z.object({
+        port: z.number().optional().describe('Defaults to SERVER_PORT, then 3123'),
+        host: z.string().optional().describe('Defaults to SERVER_HOST, then ::'),
+    }),
+    outputSchema: z.object({
+        boundTo: z.string().describe('host:port actually bound'),
+        nodeID: z.string(),
+    }),
+    rest: { method: 'POST', path: '/cdn/listen' },
+    destructive: true,
+    filePath: 'src/cdn/tools/listen.ts',
+    concurrency: 'long-running',
+    permissions: [],
+    print: (o) => `serving on ${o.boundTo} (${o.nodeID})`,
+});
+
+export type SiteListenInput = z.infer<typeof siteListenContract.inputSchema>;
+export type SiteListenOutput = z.infer<typeof siteListenContract.outputSchema>;

@@ -22,7 +22,7 @@ import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { register as registerIdentity } from '../src/identity/identity.service.js';
-import { CdnService } from '../src/cdn/cdn.service.js';
+import { register as registerCdn } from '../src/cdn/cdn.service.js';
 import { CatalogService } from '../src/catalog/catalog.service.js';
 import { ApiService } from '../src/api/api.service.js';
 import { hashPassword } from '../src/identity/methods/hash.js';
@@ -87,7 +87,6 @@ describe('a fresh install, booted for real', () => {
         app.use(new DatabaseModule({ dbName: DB_NAME }));
         app.use(new BrokerModule());
 
-        await app.registerModule(new CdnService());
         await app.registerModule(new CatalogService());
         await app.registerModule(new ApiService());
 
@@ -96,6 +95,7 @@ describe('a fresh install, booted for real', () => {
         // After start, not before: a standalone part registers against a live broker, and the
         // broker provider doesn't exist until the app has started.
         await registerIdentity(app.getProvider<IServiceBroker>('broker'));
+        await registerCdn(app.getProvider<IServiceBroker>('broker'));
 
         const broker = app.getProvider<IServiceBroker>('broker');
         await claim(broker);

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { escapeHtml, inlineScript, maintenancePage, CdnService } from '../../../src/cdn/cdn.service.js';
+import { escapeHtml, inlineScript, maintenancePage } from '../../../src/cdn/gateway.js';
 
 describe('CDN HTML synthesis', () => {
     describe('escapeHtml', () => {
@@ -184,12 +184,5 @@ describe('CDN HTML synthesis', () => {
             expect(html).not.toContain('<script>alert(1)</script>');
         });
 
-        it('can be called via CdnService instance method', () => {
-            const cdnService = new CdnService();
-            const html = cdnService.maintenancePage(sampleSite);
-
-            expect(html).toContain('<title>Customer Dashboard -- under maintenance</title>');
-            expect(html).toContain('<h1>Customer Dashboard</h1>');
-        });
     });
 });

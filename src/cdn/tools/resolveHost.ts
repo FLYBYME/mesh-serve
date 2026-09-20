@@ -2,10 +2,8 @@ import { Database, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { siteCrud, type ResolveHostInput, type ResolveHostOutput } from '../contracts/site.contract.js';
-import type { CdnService } from '../cdn.service.js';
 
 export async function resolveHost(
-    this: CdnService,
     input: ResolveHostInput,
     ctx: IServiceContext
 ): Promise<ResolveHostOutput> {

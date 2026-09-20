@@ -173,4 +173,19 @@ describe('a bare node, loading its own core parts', () => {
     it('refuses to load the same core part twice rather than double-registering it', async () => {
         await expect(broker.call('serve.corePart.load', { name: 'identity' })).rejects.toThrow(/already running/i);
     });
+
+    // Deliberately last: it takes the listener down for good.
+    it('a long-running contract is stopped by unregistering it -- ctx.signal, nothing else', async () => {
+        // serve.cdn.listen bound this port when the cdn part loaded, through a contract call rather
+        // than an onStart.
+        const before = await fetch(`http://127.0.0.1:${CDN_PORT}/`).catch(() => undefined);
+        expect(before).toBeDefined();
+
+        // No onStop anywhere, no stop handle held by the loader -- unregisterContract aborts the
+        // registration-scoped signal, and the handler's own abort listener closes the server.
+        (broker as unknown as { unregisterContract: (k: string) => void }).unregisterContract('serve.cdn.listen');
+        await new Promise((r) => setTimeout(r, 200));
+
+        await expect(fetch(`http://127.0.0.1:${CDN_PORT}/`)).rejects.toThrow();
+    }, 15000);
 });

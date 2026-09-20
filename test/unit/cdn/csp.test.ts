@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { contentSecurityPolicy, CdnService } from '../../../src/cdn/cdn.service.js';
+import { contentSecurityPolicy } from '../../../src/cdn/gateway.js';
 
 describe('Content Security Policy (CSP) generation', () => {
     const originalEnv = { ...process.env };
@@ -39,8 +39,7 @@ describe('Content Security Policy (CSP) generation', () => {
             expect(directives[5]).toBe("font-src 'self'");
         });
 
-        it('can be generated via CdnService instance method', () => {
-            const cdnService = new CdnService();
+        it('accepts a full site record, not only the Pick its signature asks for', () => {
             const fullSite = {
                 host: 'mesh.example.com',
                 mcpHost: 'mcp.mesh.example.com',
@@ -53,7 +52,7 @@ describe('Content Security Policy (CSP) generation', () => {
                 indexable: true,
                 maintenance: false,
             };
-            const csp = cdnService.contentSecurityPolicy(fullSite, 'api.mesh.example.com', "'sha256-hash'");
+            const csp = contentSecurityPolicy(fullSite, 'api.mesh.example.com', "'sha256-hash'");
 
             expect(csp).toContain("default-src 'self'");
             expect(csp).toContain("script-src 'self' 'sha256-hash'");
