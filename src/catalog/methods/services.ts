@@ -11,14 +11,26 @@ export interface RunningService {
 
 const running = new Map<string, RunningService>();
 
-export function markServiceRunning(partId: string, mountKey: string): void {
-    running.set(partId, { mountKey });
+/**
+ * Keyed by node as well as part.
+ *
+ * "This node" is one process in production, so a bare partId key was right in practice and wrong
+ * in principle -- and the principle bites the moment a single process hosts two brokers, which is
+ * exactly what a two-node test is. Without the nodeID, the second node is told a part is already
+ * running because the *first* node loaded it.
+ */
+function key(nodeID: string, partId: string): string {
+    return `${nodeID}\u0000${partId}`;
 }
 
-export function getRunningService(partId: string): RunningService | undefined {
-    return running.get(partId);
+export function markServiceRunning(nodeID: string, partId: string, mountKey: string): void {
+    running.set(key(nodeID, partId), { mountKey });
 }
 
-export function clearServiceRunning(partId: string): void {
-    running.delete(partId);
+export function getRunningService(nodeID: string, partId: string): RunningService | undefined {
+    return running.get(key(nodeID, partId));
+}
+
+export function clearServiceRunning(nodeID: string, partId: string): void {
+    running.delete(key(nodeID, partId));
 }

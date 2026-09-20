@@ -10,13 +10,13 @@ export async function stopService(input: PartStopInput, ctx: IServiceContext): P
         throw new MeshError({ message: `No part "${input.id}".`, code: 'NOT_FOUND', status: 404 });
     }
 
-    const running = getRunningService(part.id);
+    const running = getRunningService(ctx.nodeID, part.id);
     if (running === undefined) {
         throw new MeshError({ message: `"${part.key}" is not running on this node.`, code: 'NOT_FOUND', status: 404 });
     }
 
     await ctx.broker.unregisterModule(running.mountKey);
-    clearServiceRunning(part.id);
+    clearServiceRunning(ctx.nodeID, part.id);
 
     return { stopped: true };
 }

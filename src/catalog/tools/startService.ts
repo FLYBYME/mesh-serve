@@ -15,7 +15,7 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
     if (part.kind !== 'service') {
         throw new MeshError({ message: `Part "${part.key}" is kind "${part.kind}", not "service".`, code: 'BAD_REQUEST', status: 400 });
     }
-    if (getRunningService(part.id) !== undefined) {
+    if (getRunningService(ctx.nodeID, part.id) !== undefined) {
         throw new MeshError({ message: `"${part.key}" is already running on this node.`, code: 'BAD_REQUEST', status: 400 });
     }
 
@@ -48,7 +48,7 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
 
     const absolutePath = artifactAssetPath(artifact.hash, jsAsset.url);
     const { domain, nodeID } = await loadAndRegisterModule(ctx, absolutePath);
-    markServiceRunning(part.id, domain);
+    markServiceRunning(ctx.nodeID, part.id, domain);
 
     return { domain, nodeID };
 }

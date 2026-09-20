@@ -14,12 +14,12 @@ function runningKey(name: CorePartLoadInput['name']): string {
 
 export async function loadCorePart(input: CorePartLoadInput, ctx: IServiceContext): Promise<CorePartLoadOutput> {
     const key = runningKey(input.name);
-    if (getRunningService(key) !== undefined) {
+    if (getRunningService(ctx.nodeID, key) !== undefined) {
         throw new MeshError({ message: `"${input.name}" is already running on this node.`, code: 'BAD_REQUEST', status: 400 });
     }
 
     const { domain, nodeID } = await loadAndRegisterModule(ctx, corePartPath(input.name));
-    markServiceRunning(key, domain);
+    markServiceRunning(ctx.nodeID, key, domain);
 
     return { domain, nodeID };
 }
