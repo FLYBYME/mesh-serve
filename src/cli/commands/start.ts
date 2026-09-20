@@ -14,6 +14,7 @@ import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
+import { createCorePartPlacement } from '../../catalog/methods/corePartPlacement.js';
 import { CATALOG_DOMAINS } from '../../catalog/domains.js';
 // Importing a contract module is what registers its contracts, which is where loadDomain reads
 // them from.
@@ -109,6 +110,12 @@ export class StartCommand extends BaseCommand {
         for (const domain of CATALOG_DOMAINS) {
             await broker.loadDomain(domain, {}, { resolve: resolveHandler });
         }
+
+        // With this, a bare node heals itself: the first call for a contract it doesn't have loads
+        // the part implementing it, here, and then answers. A second node joining an existing
+        // cluster therefore needs no bootstrap and no load sequence of its own -- it starts as a
+        // kernel and acquires whatever it is actually asked for.
+        broker.setPlacement(createCorePartPlacement(broker));
 
         this.logger.info(`Node "${args.nodeID}" up (catalog kernel only). Run bootstrap to claim it, or serve.part.start/serve.corePart.load to load more.`);
     }

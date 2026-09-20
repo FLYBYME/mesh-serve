@@ -1,0 +1,97 @@
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+
+import type { IPlacement, IServiceBroker, ToolContract } from '@flybyme/mesh';
+import type { z } from 'zod';
+
+import { CORE_PART_NAMES, type CorePartName } from '../contracts/corePart.contract.js';
+import { corePartPath } from './corePartPath.js';
+
+const require = createRequire(import.meta.url);
+
+/**
+ * Placement for mesh-serve's own core parts: a call for a contract this node doesn't have loads
+ * the part that implements it, here, and then answers.
+ *
+ * This is what lets a node be genuinely bare. `start` brings up the catalog kernel and nothing
+ * else; a second node joining an existing cluster needs no bootstrap and no load sequence of its
+ * own -- the first call for `identity.whoami` loads identity on it. Before this, an unloaded part
+ * meant an error, and something had to have known in advance to run the load.
+ *
+ * Only core parts. A third party's own service lives in the artifact store behind `serve.part.start`
+ * and needs a `serve.part` row to find it; that is a separate provider and is not built yet, so
+ * this declines anything it doesn't recognize and the call fails as it always did.
+ */
+
+/** domain -> the core part implementing it, built once from the bundles themselves. */
+let domainIndex: Map<string, CorePartName> | undefined;
+
+/**
+ * Reads each bundle's own `domains` export rather than restating the mapping here.
+ *
+ * `require` evaluates the bundle, which registers its contracts with `globalContractRegistry` --
+ * schema registration only, nothing mounted, nothing served. That is a side effect worth naming,
+ * and a useful one: a node that has merely indexed a part can describe its contracts even before
+ * it runs any of them. `require.cache` makes the later real load free.
+ */
+function buildDomainIndex(): Map<string, CorePartName> {
+    const index = new Map<string, CorePartName>();
+
+    for (const name of CORE_PART_NAMES) {
+        const path = corePartPath(name);
+        if (!fs.existsSync(path)) continue;
+
+        const bundle = require(path) as { domains?: readonly string[] };
+        for (const domain of bundle.domains ?? []) {
+            // First writer wins: two parts claiming one domain is a build-time mistake, and
+            // silently flipping between them per boot would be worse than being consistent.
+            if (!index.has(domain)) index.set(domain, name);
+        }
+    }
+
+    return index;
+}
+
+/** `identity.user.create` -> `identity.user`, `identity.whoami` -> `identity`. */
+function domainOf(toolName: string): string | undefined {
+    const lastDot = toolName.lastIndexOf('.');
+    return lastDot === -1 ? undefined : toolName.slice(0, lastDot);
+}
+
+export function createCorePartPlacement(broker: IServiceBroker): IPlacement {
+    return {
+        place: async (
+            toolName: string,
+            _contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny> | undefined,
+        ): Promise<string | undefined> => {
+            domainIndex ??= buildDomainIndex();
+
+            const domain = domainOf(toolName);
+            const part = domain === undefined ? undefined : domainIndex.get(domain);
+            if (part === undefined) return undefined;
+
+            try {
+                // Explicitly addressed to this node, which is what IPlacement requires of a
+                // provider: an unaddressed call for a tool that is itself unplaced would re-enter
+                // placement. serve.corePart.load is a catalog contract, so it is always mounted
+                // here -- the kernel is the one thing every node has.
+                const { nodeID } = await broker.call('serve.corePart.load', { name: part }, { nodeID: broker.nodeID });
+                return nodeID;
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (/already running/i.test(message)) {
+                    // The part is loaded and still doesn't serve this tool, so loading it again
+                    // would not help. Declining is the honest answer: the caller gets "nobody
+                    // serves this", which is exactly right.
+                    return undefined;
+                }
+                throw err;
+            }
+        },
+    };
+}
+
+/** Test seam -- the index is built once per process from files that don't change at runtime. */
+export function resetCorePartPlacementIndex(): void {
+    domainIndex = undefined;
+}
