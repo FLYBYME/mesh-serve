@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { globalContractRegistry, isPublicContract, MeshError } from '@flybyme/mesh';
+import { globalContractRegistry, isMeshError, isPublicContract, MeshError } from '@flybyme/mesh';
 import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
 import { type Expose } from './contracts/expose.contract.js';
@@ -85,7 +85,11 @@ export class ApiGateway {
                 this.broker.logger.debug(`${req.method} ${req.url}`);
                 await this.handleRequest(req, res);
             } catch (err) {
-                if (err instanceof MeshError) {
+                // isMeshError, not instanceof: this gateway runs from a precompiled .cjs part,
+                // which under tsx is a different copy of @flybyme/mesh than the broker handing it
+                // the error -- so instanceof answered false for a real MeshError and every
+                // meaningful status became a 500. See MESH_ERROR_BRAND.
+                if (isMeshError(err)) {
                     res.statusCode = err.status;
                     res.setHeader('Content-Type', 'application/json');
                     res.end(JSON.stringify({ error: err.message }));

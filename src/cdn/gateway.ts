@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream';
 import crypto from 'node:crypto';
 
-import { MeshError } from '@flybyme/mesh';
+import { isMeshError, MeshError } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { type Site } from './contracts/site.contract.js';
@@ -163,7 +163,8 @@ export class CdnGateway {
                 this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
                 await this.handleRequest(req, res);
             } catch (err) {
-                if (err instanceof MeshError) {
+                // isMeshError, not instanceof -- see api/gateway.ts and MESH_ERROR_BRAND.
+                if (isMeshError(err)) {
                     res.statusCode = err.status;
                     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                     res.end(err.message);
