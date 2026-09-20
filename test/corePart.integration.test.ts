@@ -55,7 +55,7 @@ describe('a bare node, loading its own core parts', () => {
 
         const logger = new Logger(LogLevel.ERROR);
         app = new MeshApp({ nodeID: 'corepart-node', logger });
-        app.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
+        app.use(new RegistryModule({ implementation: PlacementRegistry }));
         app.use(new NetworkModule({
             transports: [new WSTransport(new JSONSerializer(), WS_PORT, '127.0.0.1')],
         }));

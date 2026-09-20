@@ -221,7 +221,17 @@ export class ApiGateway {
 
         for (const row of rows) {
             const contract = globalContractRegistry.get(row.contract);
-            if (contract === undefined || !isPublicContract(contract)) continue;
+            if (contract === undefined) {
+                // An exposed contract this node has never seen the *declaration* of. It may well be
+                // implemented on a peer and perfectly callable -- routing needs the declaration
+                // (method and path), not the implementation. Skipping silently turns that into a
+                // bare 404 that looks identical to a wrong URL, which is exactly how a two-node
+                // cluster came to have one node answering 200 and the other 404 for the same
+                // request against the same expose rows.
+                this.broker.logger.warn(`serve.api: "${row.contract}" is exposed on ${row.apiId} but its contract is not registered on this node, so nothing can route to it here.`);
+                continue;
+            }
+            if (!isPublicContract(contract)) continue;
             if (contract.rest.method !== method) continue;
 
             const params = matchPath(contract.rest.path, urlPath);

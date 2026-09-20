@@ -23,7 +23,7 @@ import '../../catalog/contracts/part.contract.js';
 import '../../catalog/contracts/composition.contract.js';
 import '../../catalog/contracts/artifact.contract.js';
 import '../../catalog/contracts/release.contract.js';
-import '../../catalog/contracts/corePart.contract.js';
+import { CORE_PART_NAMES, type CorePartName } from '../../catalog/contracts/corePart.contract.js';
 
 const LogLevelMap: Record<string, LogLevel> = {
     error: LogLevel.ERROR,
@@ -44,6 +44,7 @@ const startInputSchema = z.object({
     sharedKey: z.string().optional().describe('Shared secret required to join this node\'s mesh network (WSTransport\'s own authKey) -- also read from MESH_KEY if unset. Anything that can open a connection to --wsPort can otherwise call internal contracts directly, bypassing every api-level role/exposure check; required if --host binds to a non-loopback address'),
     host: z.string().default('127.0.0.1').describe('Interface to bind the mesh transport (--wsPort) to -- 0.0.0.0 (or a real address) for a multi-machine cluster, the default loopback for a single local node. Non-loopback requires --sharedKey'),
     bootstrapNode: z.string().optional().describe('ws:// URL of an existing node to join as a peer, e.g. ws://10.0.0.5:6005 -- omit to start a fresh, standalone cluster of one'),
+    parts: z.string().optional().describe(`Core parts to run on this node, comma-separated (${CORE_PART_NAMES.join(', ')}) -- what this node is *for*. Only needed for parts that nothing will ever call into existence: an http listener (api, cdn) or a timer (queue) is never demand-loaded, because the demand arrives through the thing that isn't running yet. Everything else loads on first call and needs no flag. The usual second-node case is --parts api,cdn`),
 });
 
 export class StartCommand extends BaseCommand {
@@ -84,7 +85,11 @@ export class StartCommand extends BaseCommand {
         // registry that knows how to advertise a single contract. Found live -- with the default
         // Registry every core part loaded fine and was callable *on this node*, while another node
         // was told "no node in this mesh advertises domain identity".
-        node.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
+        // No `ttl` override. It used to pass 5000, which is below the 15s presence interval, so in
+        // any real multi-node cluster each peer was marked offline two thirds of the time, pruned,
+        // rediscovered, and pruned again -- silently, since a single node never notices. Found the
+        // first time two nodes ran together. The default (30000, two presences) is correct.
+        node.use(new RegistryModule({ implementation: PlacementRegistry }));
         node.use(new NetworkModule({
             transports: [transport],
             ...(args.bootstrapNode !== undefined ? { bootstrapNodes: [args.bootstrapNode] } : {}),
@@ -112,11 +117,40 @@ export class StartCommand extends BaseCommand {
         }
 
         // With this, a bare node heals itself: the first call for a contract it doesn't have loads
-        // the part implementing it, here, and then answers. A second node joining an existing
-        // cluster therefore needs no bootstrap and no load sequence of its own -- it starts as a
-        // kernel and acquires whatever it is actually asked for.
+        // the part implementing it, here, and then answers. That covers every `on-demand` contract,
+        // so a node acquires whatever it is actually asked for with no load sequence of its own.
         broker.setPlacement(createCorePartPlacement(broker));
 
-        this.logger.info(`Node "${args.nodeID}" up (catalog kernel only). Run bootstrap to claim it, or serve.part.start/serve.corePart.load to load more.`);
+        // What demand-loading structurally cannot cover: a `long-running` or `interval` contract is
+        // never *called* into existence. An http listener only receives a request once it is
+        // listening, and a timer has no caller at all -- so for those, placement has to be a
+        // decision rather than a reaction, and `--parts` is where an operator makes it. This is the
+        // same decision `bootstrap` makes implicitly when claiming a fresh cluster; a node joining
+        // an existing one has no equivalent moment, which is exactly the gap this fills.
+        const parts = this.parseParts(args.parts);
+        for (const name of parts) {
+            const { domain } = await broker.call('serve.corePart.load', { name }, { nodeID: args.nodeID });
+            this.logger.info(`Running "${domain}" on this node.`);
+        }
+
+        const summary = parts.length === 0
+            ? 'catalog kernel only; everything else loads on demand'
+            : `catalog kernel + ${parts.join(', ')}`;
+        this.logger.info(`Node "${args.nodeID}" up (${summary}).`);
+    }
+
+    /**
+     * Parsed and validated up front rather than per-load, so a typo fails before the node claims
+     * ports and joins a cluster -- not three parts into starting.
+     */
+    private parseParts(raw: string | undefined): CorePartName[] {
+        if (raw === undefined) return [];
+
+        const names = raw.split(',').map((n) => n.trim()).filter((n) => n.length > 0);
+        const unknown = names.filter((n) => !CORE_PART_NAMES.includes(n as CorePartName));
+        if (unknown.length > 0) {
+            throw new Error(`Unknown part(s) in --parts: ${unknown.join(', ')}. Known parts: ${CORE_PART_NAMES.join(', ')}.`);
+        }
+        return Array.from(new Set(names)) as CorePartName[];
     }
 }

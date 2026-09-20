@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     });
 
     const app = new MeshApp({ nodeID: 'console-demo', logger });
-    app.use(new RegistryModule({ ttl: 5000 }));
+    app.use(new RegistryModule());
     app.use(new NetworkModule({ transports: [new WSTransport(new JSONSerializer(), WS_PORT)] }));
     app.use(new DatabaseModule({ dbName: DB_NAME }));
     app.use(new BrokerModule());

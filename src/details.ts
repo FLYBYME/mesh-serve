@@ -70,7 +70,7 @@ async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegi
 
     const node = new MeshApp({ nodeID: 'repl-provider-1', logger });
 
-    node.use(new RegistryModule({ ttl: 5000 }));
+    node.use(new RegistryModule());
     node.use(new NetworkModule({
         bootstrapNodes: ['ws://127.0.0.1:6005'],
         transports: [new WSTransport(serializer, 0)],

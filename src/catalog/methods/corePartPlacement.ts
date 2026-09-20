@@ -30,9 +30,17 @@ let domainIndex: Map<string, CorePartName> | undefined;
  * Reads each bundle's own `domains` export rather than restating the mapping here.
  *
  * `require` evaluates the bundle, which registers its contracts with `globalContractRegistry` --
- * schema registration only, nothing mounted, nothing served. That is a side effect worth naming,
- * and a useful one: a node that has merely indexed a part can describe its contracts even before
- * it runs any of them. `require.cache` makes the later real load free.
+ * schema registration only, nothing mounted, nothing served. That side effect is not incidental,
+ * it is half the point, and it is why this runs eagerly rather than on the first placement:
+ *
+ * **A node needs a contract's declaration to route to it, even when the implementation is
+ * elsewhere.** The api gateway resolves an incoming request by looking up each `serve.expose`
+ * row's contract (`gateway.ts`'s findRoute) to get its method and path. A node running only the
+ * api would find nothing for `identity.ticket.issue`, skip the row, and answer 404 -- while the
+ * node next to it, holding identical expose rows, answered 200. Found exactly that way, on the
+ * first two-node run.
+ *
+ * `require.cache` makes the later real load free.
  */
 function buildDomainIndex(): Map<string, CorePartName> {
     const index = new Map<string, CorePartName>();
@@ -59,15 +67,17 @@ function domainOf(toolName: string): string | undefined {
 }
 
 export function createCorePartPlacement(broker: IServiceBroker): IPlacement {
+    // Eagerly, at install time: every node then knows every core contract's declaration, which is
+    // what routing to a contract implemented on another node requires. See buildDomainIndex.
+    const index = domainIndex ??= buildDomainIndex();
+
     return {
         place: async (
             toolName: string,
             _contract: ToolContract<z.ZodTypeAny, z.ZodTypeAny> | undefined,
         ): Promise<string | undefined> => {
-            domainIndex ??= buildDomainIndex();
-
             const domain = domainOf(toolName);
-            const part = domain === undefined ? undefined : domainIndex.get(domain);
+            const part = domain === undefined ? undefined : index.get(domain);
             if (part === undefined) return undefined;
 
             try {

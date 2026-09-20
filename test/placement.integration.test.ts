@@ -47,7 +47,7 @@ describe('a bare node, healing itself on demand', () => {
         process.env.SERVER_PORT = String(CDN_PORT);
 
         app = new MeshApp({ nodeID: 'placement-node', logger: new Logger(LogLevel.ERROR) });
-        app.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
+        app.use(new RegistryModule({ implementation: PlacementRegistry }));
         app.use(new NetworkModule({
             transports: [new WSTransport(new JSONSerializer(), WS_PORT, '127.0.0.1')],
         }));

@@ -102,7 +102,7 @@ describe('a fresh install, booted for real', () => {
         const logger = new Logger(LogLevel.INFO);
 
         app = new MeshApp({ nodeID: 'bootstrap-integration-test', logger });
-        app.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
+        app.use(new RegistryModule({ implementation: PlacementRegistry }));
         app.use(new NetworkModule({ transports: [new WSTransport(new JSONSerializer(), WS_PORT)] }));
         app.use(new DatabaseModule({ dbName: DB_NAME }));
         app.use(new BrokerModule());
