@@ -46,7 +46,9 @@ export class GenerateCommand extends BaseCommand {
         const logger = new Logger(LogLevel.WARN);
         const serializer = new JSONSerializer();
 
-        const node = new MeshApp({ nodeID: 'generate-1', logger });
+        // Per process -- see bootstrap.ts's note. Two `generate` runs at once (two repos, two
+        // terminals) is ordinary, and a shared id makes the second one fail on node count.
+        const node = new MeshApp({ nodeID: `generate-${String(process.pid)}`, logger });
         node.use(new RegistryModule({ ttl: 30000 }));
         node.use(new NetworkModule({
             bootstrapNodes: [args.bootstrapNode],

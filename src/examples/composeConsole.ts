@@ -101,7 +101,8 @@ async function main(): Promise<void> {
         if (typeof originalMsg === 'string') console.log(originalMsg);
     });
 
-    const app = new MeshApp({ nodeID: 'console-demo', logger });
+    // Per process, like composeOnCluster.ts already is -- see cli/commands/bootstrap.ts's note.
+    const app = new MeshApp({ nodeID: `console-demo-${String(process.pid)}`, logger });
     app.use(new RegistryModule());
     app.use(new NetworkModule({ transports: [new WSTransport(new JSONSerializer(), WS_PORT)] }));
     app.use(new DatabaseModule({ dbName: DB_NAME }));

@@ -17,7 +17,31 @@ import { CORE_PART_NAMES } from '../../catalog/contracts/corePart.contract.js';
 const bootstrapInputSchema = z.object({
     bootstrapNode: z.string().default('ws://127.0.0.1:6005').describe('ws:// URL of the running node to claim'),
     sharedKey: z.string().optional().describe('Shared secret that node\'s mesh network requires (--sharedKey on its own start) -- also read from MESH_KEY if unset'),
+    name: z.string().optional().describe('Operator display name -- pass it (with --email) to claim without the wizard'),
+    email: z.string().optional().describe('Operator email; the password comes from MESH_BOOTSTRAP_PASSWORD, never a flag'),
+    orgName: z.string().optional().describe('Organization display name (default "Platform"); its slug is always "platform"'),
+    apiHost: z.string().optional().describe(`Bootstrap api hostname (default "${BOOTSTRAP_API_HOST}")`),
 });
+
+/**
+ * The claim itself, however it was gathered. Separating this from *asking* is what makes the
+ * non-interactive path a different source for the same four values rather than a second code path
+ * that can drift from the wizard.
+ */
+interface Claim {
+    readonly displayName: string;
+    readonly email: string;
+    readonly password: string;
+    readonly orgName: string;
+    readonly apiHost: string;
+}
+
+/**
+ * The password is taken from the environment, never a flag. A CLI option lands in shell history and
+ * in the process table of every other user on the machine; an env var does neither, and is what CI
+ * and deploy tooling already expect to pass a secret through.
+ */
+const PASSWORD_ENV = 'MESH_BOOTSTRAP_PASSWORD';
 
 /**
  * Claims a fresh node: creates the one real operator account, an organization it owns, and the
@@ -48,7 +72,13 @@ export class BootstrapCommand extends BaseCommand {
         const logger = new Logger(LogLevel.WARN);
         const serializer = new JSONSerializer();
 
-        const node = new MeshApp({ nodeID: 'bootstrap-1', logger });
+        // Unique per process, not the literal 'bootstrap-1' this used to be. A nodeID is an
+        // identity: while one process holds it, a second claiming it is refused by the target node
+        // (WSTransport's DUPLICATE_NODE_ID_CLOSE). This wizard is interactive, so abandoning it
+        // half-filled and running it again is the *normal* thing to do -- and with a fixed id that
+        // second run failed, for as long as the first process lived, as "Timeout: only 1/2 nodes
+        // found". Nothing here needs a stable id: this peer exists for one run and answers no calls.
+        const node = new MeshApp({ nodeID: `bootstrap-${String(process.pid)}`, logger });
         // Long TTL, deliberately -- unlike sync.ts (fully unattended) or start.ts's own server (always
         // heartbeating itself), this side of the connection goes quiet for as long as a real person
         // takes to fill out this wizard. 5000ms let the target node's registry entry go stale mid-way,
@@ -101,6 +131,64 @@ export class BootstrapCommand extends BaseCommand {
         }
     }
 
+    /**
+     * The claim as the flags and environment describe it, or undefined when nothing was supplied
+     * and the wizard should run. Half-supplied is an error, not a partial wizard: a run that
+     * silently prompts for the one thing a deploy script forgot would hang forever in CI.
+     */
+    private claimFromArgs(args: z.infer<typeof bootstrapInputSchema>): Claim | undefined {
+        const password = process.env[PASSWORD_ENV];
+        if (args.email === undefined && args.name === undefined && password === undefined) return undefined;
+
+        const missing: string[] = [];
+        if (args.name === undefined) missing.push('--name');
+        if (args.email === undefined) missing.push('--email');
+        if (password === undefined) missing.push(PASSWORD_ENV);
+        if (missing.length > 0) {
+            throw new Error(`Claiming without the wizard needs all of: --name, --email, ${PASSWORD_ENV}. Missing: ${missing.join(', ')}.`);
+        }
+        // Same floor the wizard enforces. Checked here too, because the wizard's loop is the only
+        // other thing that ever enforced it and this path does not go through it.
+        if (password!.length < 12) {
+            throw new Error(`${PASSWORD_ENV} is too short -- 12 characters minimum.`);
+        }
+
+        return {
+            displayName: args.name!,
+            email: args.email!,
+            password: password!,
+            orgName: args.orgName ?? 'Platform',
+            apiHost: args.apiHost ?? BOOTSTRAP_API_HOST,
+        };
+    }
+
+    /**
+     * The claim itself: the operator, the organization owning everything, their membership, and the
+     * api the rest of the world comes in through. One implementation, whether the values were typed
+     * or passed -- so the two entry points cannot diverge on what claiming means.
+     */
+    private async claim(broker: IServiceBroker, claim: Claim): Promise<void> {
+        const passwordHash = await hashPassword(claim.password);
+        const user = await broker.call('identity.user.create', {
+            email: claim.email, displayName: claim.displayName, passwordHash,
+            roles: ['operator'], provisional: false,
+        });
+
+        // slug stays the literal 'platform' regardless of the display name -- ensureBootstrapApi
+        // (and the api's own every-boot check) look this collection up by that exact slug, not by
+        // name. Only the name is the operator's own.
+        const organization = await broker.call('identity.organization.create', {
+            slug: 'platform', name: claim.orgName, ownerId: user.id,
+        });
+        await broker.call('identity.membership.create', {
+            userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
+        }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
+
+        await ensureBootstrapApi(broker, claim.apiHost);
+
+        console.log(`\nClaimed. ${claim.email} is the operator, owner of "${organization.name}" -- api on "${claim.apiHost}".\n`);
+    }
+
     private async addCustomRoles(rl: readline.Interface, broker: IServiceBroker): Promise<void> {
         for (;;) {
             const add = await question(rl, 'Add a custom role? [y/N]: ');
@@ -150,6 +238,24 @@ export class BootstrapCommand extends BaseCommand {
 
             console.log('No operator yet. This creates the one real admin account for this node -- there is no undo.\n');
 
+            // Non-interactive when told who the operator is. Nothing about claiming a node needs a
+            // human present -- only *deciding* does -- and with no such path, a fresh cluster could
+            // not be brought up by CI, by a deploy script, or by a test, which is also why nothing
+            // ever exercised this command end to end.
+            const supplied = this.claimFromArgs(args);
+            if (supplied !== undefined) {
+                await this.claim(broker, supplied);
+                console.log('\nDone. Log in against the bootstrap api from here on.');
+                return;
+            }
+
+            if (process.stdin.isTTY !== true) {
+                this.logger.error(`Not a terminal, and no --email/--name given. Pass --name, --email and ${PASSWORD_ENV} to claim without the wizard.`);
+                this.logger.error('(Piping answers in does not work: readline delivers a file\'s lines in one burst and the unawaited ones are dropped.)');
+                process.exitCode = 1;
+                return;
+            }
+
             const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
             try {
                 const displayName = await question(rl, 'Name: ');
@@ -177,24 +283,7 @@ export class BootstrapCommand extends BaseCommand {
                 const apiHostRaw = await question(rl, `Bootstrap api hostname [${BOOTSTRAP_API_HOST}]: `);
                 const apiHost = apiHostRaw.trim().length > 0 ? apiHostRaw.trim() : BOOTSTRAP_API_HOST;
 
-                const passwordHash = await hashPassword(password);
-                const user = await broker.call('identity.user.create', {
-                    email, displayName, passwordHash, roles: ['operator'], provisional: false,
-                });
-
-                // slug stays the literal 'platform' regardless of the display name typed above --
-                // ensureBootstrapApi (and ApiService.onStart's later, every-boot check) look this
-                // collection up by that exact slug, not by name. Only the name is the operator's own.
-                const organization = await broker.call('identity.organization.create', {
-                    slug: 'platform', name: orgName, ownerId: user.id,
-                });
-                await broker.call('identity.membership.create', {
-                    userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
-                }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
-
-                await ensureBootstrapApi(broker, apiHost);
-
-                console.log(`\nClaimed. ${email} is the operator, owner of "${organization.name}" -- api on "${apiHost}".\n`);
+                await this.claim(broker, { displayName, email, password, orgName, apiHost });
 
                 await this.addCustomRoles(rl, broker);
 

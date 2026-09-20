@@ -82,7 +82,9 @@ async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegi
     const logger = new Logger(LogLevel.WARN);
     const serializer = new JSONSerializer();
 
-    const node = new MeshApp({ nodeID: 'sync-provider-1', logger });
+    // Per process -- see cli/commands/bootstrap.ts's note. sync-all.ts runs this in a loop, and a
+    // fixed id turned any overlap into a node-count timeout.
+    const node = new MeshApp({ nodeID: `sync-provider-${String(process.pid)}`, logger });
 
     node.use(new RegistryModule());
     node.use(new NetworkModule({
