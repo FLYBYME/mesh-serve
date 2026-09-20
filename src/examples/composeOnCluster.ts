@@ -26,6 +26,7 @@ import { WSTransport } from '@flybyme/mesh/node';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { CATALOG_DOMAINS } from '../catalog/domains.js';
+import { createCorePartPlacement } from '../catalog/methods/corePartPlacement.js';
 import '../identity/contracts/organization.contract.js';
 import '../cdn/contracts/site.contract.js';
 import '../api/contracts/api.contract.js';
@@ -82,11 +83,30 @@ app.use(new BrokerModule());
 await app.start();
 
 const broker = app.getProvider<IServiceBroker>('broker');
+
+// Placement, even though this is a throwaway client: a cluster may legitimately not have identity
+// loaded yet, and the provider places a core part on a node that can host one rather than on
+// whoever asked. Without it, the first identity call here dies with "no node advertises domain
+// identity" while a perfectly good node sits next to it.
+broker.setPlacement(createCorePartPlacement(broker));
+
 await new Promise((r) => { setTimeout(r, 2000); });
 
-const org = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
+const claimHint = `Claim the cluster first:\n  npx tsx src/cli/index.ts bootstrap --bootstrapNode ${NODE_URL}`;
+
+const org = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } })
+    .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        // Distinguish "identity is nowhere and cannot be placed" from a real failure, because the
+        // first one has an obvious fix and the second does not.
+        if (/advertises domain "identity"|Local tool not found/.test(message)) {
+            throw new Error(`No node in this cluster is running identity, and none could be asked to.\n${claimHint}`);
+        }
+        throw err;
+    });
+
 if (org === undefined) {
-    throw new Error(`No "platform" organization in "${DB_NAME}". Claim the cluster first: mesh-serve bootstrap --bootstrapNode ${NODE_URL}`);
+    throw new Error(`No "platform" organization in "${DB_NAME}".\n${claimHint}`);
 }
 const meta = { meta: { tenant_id: org.id } };
 console.log(`Composing ${SITE_HOST} on ${NODE_URL} (org ${org.slug})`);

@@ -80,12 +80,26 @@ export function createCorePartPlacement(broker: IServiceBroker): IPlacement {
             const part = domain === undefined ? undefined : index.get(domain);
             if (part === undefined) return undefined;
 
+            // *A* node that can load core parts, not necessarily this one.
+            //
+            // This used to hardcode `broker.nodeID` -- "load it here" -- which quietly assumed the
+            // caller is itself a node that hosts parts. A CLI or a short-lived client joining the
+            // mesh is not: it would find nothing advertising the domain, have nowhere to place it,
+            // and fail with a bare "no node in this mesh advertises domain identity" even though a
+            // perfectly good node was sitting right there. Found running the compose example
+            // against a cluster that had not loaded identity yet.
+            //
+            // `leaderFor`, not `placementFor`, and the distinction matters here: only a node that
+            // actually advertises `serve.corePart` can load one, and a thin client does not. That
+            // filter is exactly what leaderFor applies, so it excludes clients by construction
+            // rather than by a check someone has to remember.
+            const host = broker.registry.leaderFor('serve.corePart');
+            if (host === undefined) return undefined;
+
             try {
-                // Explicitly addressed to this node, which is what IPlacement requires of a
-                // provider: an unaddressed call for a tool that is itself unplaced would re-enter
-                // placement. serve.corePart.load is a catalog contract, so it is always mounted
-                // here -- the kernel is the one thing every node has.
-                const { nodeID } = await broker.call('serve.corePart.load', { name: part }, { nodeID: broker.nodeID });
+                // Explicitly addressed, which is what IPlacement requires of a provider: an
+                // unaddressed call for a tool that is itself unplaced would re-enter placement.
+                const { nodeID } = await broker.call('serve.corePart.load', { name: part }, { nodeID: host.nodeID });
                 return nodeID;
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
