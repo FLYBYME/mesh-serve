@@ -60,12 +60,11 @@ async function claim(broker: IServiceBroker): Promise<{ userId: string }> {
     const user = await broker.call('identity.user.create', {
         email: 'operator@node.invalid', displayName: 'operator', passwordHash, roles: ['operator'], provisional: false,
     });
+    // No manual membership.create after this: identity.organization.create's own `after` hook
+    // now creates the owner's membership itself (organization.contract.ts).
     const organization = await broker.call('identity.organization.create', {
         slug: 'platform', name: 'Platform', ownerId: user.id,
     });
-    await broker.call('identity.membership.create', {
-        userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
-    }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
     await ensureBootstrapApi(broker);
     return { userId: user.id };
 }

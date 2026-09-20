@@ -108,10 +108,9 @@ describe('two nodes, one serving a domain it does not hold', () => {
             email: 'op@two.invalid', displayName: 'Op', passwordHash: await hashPassword(PASSWORD),
             roles: ['operator'], provisional: false,
         });
+        // No manual membership.create after this: identity.organization.create's own `after`
+        // hook now creates the owner's membership itself.
         const org = await brokerA.call('identity.organization.create', { slug: 'platform', name: 'Platform', ownerId: operator.id });
-        await brokerA.call('identity.membership.create', {
-            userId: operator.id, organizationId: org.id, roleKey: 'owner', joinedAt: new Date(),
-        }, { meta: { user: { id: operator.id, tenant_id: '', organizationId: org.id } } });
         await ensureBootstrapApi(brokerA);
 
         const api = await brokerA.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });

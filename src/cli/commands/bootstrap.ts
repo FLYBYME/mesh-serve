@@ -177,12 +177,16 @@ export class BootstrapCommand extends BaseCommand {
         // slug stays the literal 'platform' regardless of the display name -- ensureBootstrapApi
         // (and the api's own every-boot check) look this collection up by that exact slug, not by
         // name. Only the name is the operator's own.
+        //
+        // No manual membership.create after this: identity.organization.create's own `after`
+        // hook now creates the owner's membership itself (organization.contract.ts) -- the same
+        // gap this file used to paper over by hand is now closed for every caller, not just this
+        // one, which is what let a live operator onboarding a *second* tenant through the api hit
+        // it too (nothing there could construct the meta override this file's own manual call
+        // relied on).
         const organization = await broker.call('identity.organization.create', {
             slug: 'platform', name: claim.orgName, ownerId: user.id,
         });
-        await broker.call('identity.membership.create', {
-            userId: user.id, organizationId: organization.id, roleKey: 'owner', joinedAt: new Date(),
-        }, { meta: { user: { id: user.id, tenant_id: '', organizationId: organization.id } } });
 
         await ensureBootstrapApi(broker, claim.apiHost);
 

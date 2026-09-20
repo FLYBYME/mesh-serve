@@ -87,10 +87,9 @@ describe('a contract permission floor an expose row cannot lower', () => {
             email: 'op@perm.invalid', displayName: 'Op', passwordHash: await hashPassword(PASSWORD),
             roles: ['operator'], provisional: false,
         });
+        // No manual membership.create after this: identity.organization.create's own `after`
+        // hook now creates the owner's membership itself.
         const org = await broker.call('identity.organization.create', { slug: 'platform', name: 'Platform', ownerId: operator.id });
-        await broker.call('identity.membership.create', {
-            userId: operator.id, organizationId: org.id, roleKey: 'owner', joinedAt: new Date(),
-        }, { meta: { user: { id: operator.id, tenant_id: '', organizationId: org.id } } });
         await ensureBootstrapApi(broker);
         const api = await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
         if (api === undefined) throw new Error('bootstrap api was not created');
