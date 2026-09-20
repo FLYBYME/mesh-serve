@@ -81,8 +81,45 @@ async function ensureNpmInstall(dir: string): Promise<void> {
  * what a config-driven, idempotent `init` rerun does routinely. Fixed by preferring `origin/<ref>`
  * when it exists (force the local branch to match it) and falling back to `ref` itself otherwise.
  */
+/**
+ * One build at a time per checkout directory.
+ *
+ * Every part of a repo shares one working copy (`~/.mesh/repos/<repoId>`), so building several
+ * parts of the same repo concurrently means several `git reset --hard` and `npm ci` runs in the
+ * same directory at the same time -- and then esbuild reading it while the next build is still
+ * rewriting it. The symptom is one part of a batch failing with npm's own cleanup error ("Failed
+ * to remove some directories ... path argument must be of type string") while its siblings from
+ * the identical repo succeed, which reads like a flaky npm rather than a race.
+ *
+ * Found composing a console from a clean database: six parts requested at once, four of them from
+ * mesh-core, and exactly one of those four failed. Builds are dispatched by serve.queue, which runs
+ * five at a time by default, so this is the ordinary case rather than an unlucky one.
+ *
+ * The lock covers the *whole* build, not just the checkout, because the source tree has to hold
+ * still while esbuild reads it. Different repos still build in parallel.
+ *
+ * In-process, which covers concurrent builds on one node -- the case that fails here. Two nodes
+ * sharing a machine share `$HOME` and therefore these directories too; that needs a real file
+ * lock, and is worth doing if it ever bites.
+ */
+const checkoutLocks = new Map<string, Promise<void>>();
+
+export async function withCheckoutLock<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    const previous = checkoutLocks.get(dir) ?? Promise.resolve();
+    // Chained off the previous build's settlement either way: one failure must not wedge the
+    // queue behind it.
+    const result = previous.then(run, run);
+    checkoutLocks.set(dir, result.then(() => undefined, () => undefined));
+    return result;
+}
+
+/** Where a repo's single shared working copy lives. */
+function checkoutDir(repo: Repo): string {
+    return path.join(repoWorkdir, repo.id);
+}
+
 async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
-    const dir = path.join(repoWorkdir, repo.id);
+    const dir = checkoutDir(repo);
 
     if (!(await exists(dir))) {
         await fs.mkdir(repoWorkdir, { recursive: true });
@@ -220,17 +257,19 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
  * imported.
  */
 export async function buildPart(part: Part, repo: Repo, ref: string, external: string[]): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
-    const repoDir = await ensureRepoCheckout(repo, ref);
-    const entry = path.join(repoDir, part.path, part.entryPoint);
-    const wants = await readWants(repoDir, part);
+    return withCheckoutLock(checkoutDir(repo), async () => {
+        const repoDir = await ensureRepoCheckout(repo, ref);
+        const entry = path.join(repoDir, part.path, part.entryPoint);
+        const wants = await readWants(repoDir, part);
 
-    const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
-    try {
-        await runEsbuild([entry], buildTmpDir, external);
-        return { ...await hashAndStoreOutput(buildTmpDir), wants };
-    } finally {
-        await fs.rm(buildTmpDir, { recursive: true, force: true });
-    }
+        const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
+        try {
+            await runEsbuild([entry], buildTmpDir, external);
+            return { ...await hashAndStoreOutput(buildTmpDir), wants };
+        } finally {
+            await fs.rm(buildTmpDir, { recursive: true, force: true });
+        }
+    });
 }
 
 /**
@@ -287,19 +326,21 @@ export async function ensureArtifactNodeModules(pkg: string): Promise<void> {
  * Node builtins need no such list: esbuild's own `platform: 'node'` already leaves them external.
  */
 export async function buildService(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
-    const repoDir = await ensureRepoCheckout(repo, ref);
-    const entry = path.join(repoDir, part.path, part.entryPoint);
-    const wants = await readWants(repoDir, part);
+    return withCheckoutLock(checkoutDir(repo), async () => {
+        const repoDir = await ensureRepoCheckout(repo, ref);
+        const entry = path.join(repoDir, part.path, part.entryPoint);
+        const wants = await readWants(repoDir, part);
 
-    await ensureArtifactNodeModules('@flybyme/mesh');
+        await ensureArtifactNodeModules('@flybyme/mesh');
 
-    const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
-    try {
-        await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
-        return { ...await hashAndStoreOutput(buildTmpDir), wants };
-    } finally {
-        await fs.rm(buildTmpDir, { recursive: true, force: true });
-    }
+        const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
+        try {
+            await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
+            return { ...await hashAndStoreOutput(buildTmpDir), wants };
+        } finally {
+            await fs.rm(buildTmpDir, { recursive: true, force: true });
+        }
+    });
 }
 
 /**
@@ -318,6 +359,12 @@ export async function buildKernel(
     ref: string,
     drivers: readonly { part: Part; repo: Repo }[],
 ): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+    // Locked on the kernel's own checkout. A driver's repo is checked out inside this and is *not*
+    // separately locked: taking a second lock here could deadlock against a concurrent build that
+    // wants the same two repos in the opposite order, and drivers are currently unused
+    // (`drivers: []` in every composition). Worth revisiting -- with a deterministic lock order --
+    // the first time a real driver exists.
+    return withCheckoutLock(checkoutDir(kernelRepo), async () => {
     const kernelDir = await ensureRepoCheckout(kernelRepo, ref);
     const kernelEntry = path.join(kernelDir, kernelPart.path, kernelPart.entryPoint);
     const wants = new Set(await readWants(kernelDir, kernelPart));
@@ -361,4 +408,5 @@ export async function buildKernel(
         await fs.rm(synthDir, { recursive: true, force: true });
         await fs.rm(buildTmpDir, { recursive: true, force: true });
     }
+    });
 }

@@ -143,6 +143,7 @@ if (swept.enqueued > 0) console.log(`  enqueued ${String(swept.enqueued)} build(
 
 const deadline = Date.now() + 900_000;
 const settled = new Set<string>();
+const failures: { key: string; error: string }[] = [];
 while (Date.now() < deadline && settled.size < all.length) {
     for (const { p } of all) {
         if (settled.has(p.key)) continue;
@@ -153,10 +154,31 @@ while (Date.now() < deadline && settled.size < all.length) {
             console.log(`  built ${p.key} ${String(latest.hash).slice(0, 12)}`);
         } else if (latest?.status === 'failed') {
             settled.add(p.key);
-            console.error(`  FAILED ${p.key}: ${String(latest.error).slice(0, 400)}`);
+            failures.push({ key: p.key, error: String(latest.error) });
+            console.error(`  FAILED ${p.key}`);
         }
     }
     if (settled.size < all.length) await new Promise((r) => { setTimeout(r, 4000); });
+}
+
+// Stop here rather than letting compose throw. It fails on the *first* part it cannot resolve, so
+// a five-line stack about one part hides the other four and says nothing about why -- when what a
+// reader needs is every failure, and the build output that caused it.
+if (failures.length > 0) {
+    console.error(`\n${String(failures.length)} of ${String(all.length)} parts did not build:\n`);
+    for (const { key, error } of failures) {
+        console.error(`--- ${key} ---\n${error.trim()}\n`);
+    }
+    console.error('Nothing was composed or deployed. Fix the builds and run this again -- parts that');
+    console.error('already succeeded are reused, so only the failed ones are rebuilt.');
+    await app.stop();
+    process.exit(1);
+}
+
+if (settled.size < all.length) {
+    console.error(`\nTimed out waiting for ${String(all.length - settled.size)} build(s). Nothing was composed.`);
+    await app.stop();
+    process.exit(1);
 }
 
 // Reconciled, not reused: `compose` builds the release from the stored record, so a composition
