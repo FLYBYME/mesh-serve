@@ -45,7 +45,7 @@ export const queueClaimContract = defineContract({
     destructive: true,
     leaderScoped: true,
     dependencies: ['serve.queue'],
-    filePath: 'src/queue/contracts/queue.contract.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/queue/tools/claim.ts', concurrency: 'on-demand', permissions: [],
     print: (o) => (o === undefined ? 'nothing to claim' : `claimed ${o.id} (${o.contract})`),
 });
 

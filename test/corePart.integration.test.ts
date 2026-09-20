@@ -103,11 +103,12 @@ describe('a bare node, loading its own core parts', () => {
         expect(keys).toContain('member');
     });
 
-    it('a part migrated off ServiceModule entirely is fully functional through the same load path', async () => {
-        // serve.hold exports `register(broker)` -- no class, no ServiceModule (see
-        // src/hold/hold.service.ts). It loaded through the identical serve.corePart.load call as
-        // the four that are still ServiceModule-shaped, which is the whole point: the loader
-        // doesn't know which era a part belongs to.
+    it('a part with no hand-written registration at all is fully functional through the same load path', async () => {
+        // serve.hold has no service file. Its entry point is src/hold/handlers.generated.ts, which
+        // is derived from its contracts' own declared filePaths -- nothing enumerates what to
+        // mount. It loaded through the identical serve.corePart.load call as the ones still
+        // exporting a class, which is the whole point: the loader doesn't know which era a part
+        // belongs to.
         const meta = { meta: { tenant_id: 'corepart-tenant' } };
 
         const created = await broker.call('serve.hold.create', {

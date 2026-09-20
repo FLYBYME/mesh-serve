@@ -22,11 +22,16 @@ import * as esbuild from 'esbuild';
  * docs/CONTRACT_DRIVEN_PLACEMENT.md for on-demand contracts generally.
  */
 
+/**
+ * A part's entry point is its generated manifest (`handlers.generated.ts`) once it has migrated --
+ * there is no hand-written registration file left to point at. The two still naming a
+ * `*.service.ts` are the ones still on `ServiceModule`.
+ */
 const CORE_PARTS: Record<string, string> = {
     identity: 'src/identity/identity.service.ts',
     cdn: 'src/cdn/cdn.service.ts',
-    hold: 'src/hold/hold.service.ts',
-    queue: 'src/queue/queue.service.ts',
+    hold: 'src/hold/handlers.generated.ts',
+    queue: 'src/queue/handlers.generated.ts',
     api: 'src/api/api.service.ts',
 };
 

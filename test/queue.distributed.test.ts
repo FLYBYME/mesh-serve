@@ -23,7 +23,7 @@ vi.hoisted(() => {
     process.env.QUEUE_TICK_MS = '50';
 });
 
-import { register as registerQueue } from '../src/queue/queue.service.js';
+import { domains as queueDomains, handlers as queueHandlers } from '../src/queue/handlers.generated.js';
 
 const DB_NAME = 'mesh-serve-queue-distributed-test';
 const TENANT_ID = 'test-tenant';
@@ -54,7 +54,7 @@ describe('serve.queue.claim across two real nodes', () => {
         appA.use(new DatabaseModule({ dbName: DB_NAME }));
         appA.use(new BrokerModule());
         await appA.start();
-        registerQueue(appA.getProvider<IServiceBroker>('broker'));
+        await appA.getProvider<IServiceBroker>('broker').loadDomain(queueDomains[0], queueHandlers);
 
         appB = new MeshApp({ nodeID: 'queue-dist-node-b', logger });
         appB.use(new RegistryModule({ implementation: PlacementRegistry }));
@@ -66,7 +66,7 @@ describe('serve.queue.claim across two real nodes', () => {
         appB.use(new DatabaseModule({ dbName: DB_NAME }));
         appB.use(new BrokerModule());
         await appB.start();
-        registerQueue(appB.getProvider<IServiceBroker>('broker'));
+        await appB.getProvider<IServiceBroker>('broker').loadDomain(queueDomains[0], queueHandlers);
 
         await new Promise((r) => setTimeout(r, 800));
     });

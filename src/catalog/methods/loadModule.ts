@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { MeshError } from '@flybyme/mesh';
-import type { IServiceContext, IServiceModule } from '@flybyme/mesh';
+import type { ContractHandlerMap, IServiceContext, IServiceModule } from '@flybyme/mesh';
 
 const require = createRequire(import.meta.url);
 
@@ -44,6 +44,9 @@ const require = createRequire(import.meta.url);
 export type PartRegistration = string | { domain: string; stop?: () => void | Promise<void> };
 
 interface LoadedPart {
+    /** The generated manifest shape -- see `handlers.generated.ts`. Preferred over everything else. */
+    domains?: readonly string[];
+    handlers?: ContractHandlerMap;
     register?: (broker: IServiceContext['broker']) => PartRegistration | Promise<PartRegistration>;
     default?: new () => IServiceModule;
 }
@@ -70,6 +73,25 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
     const imported = isCjs
         ? (require(absolutePath) as LoadedPart)
         : (await import(pathToFileURL(absolutePath).href) as LoadedPart);
+
+    // The generated-manifest shape: the part states its domains and where each handler lives, and
+    // `loadDomain` does the rest. Nothing here enumerates contracts, and there is no per-part code
+    // to write or keep in step. Checked first because it is what parts migrate *to*.
+    if (Array.isArray(imported.domains) && imported.handlers !== undefined) {
+        const handlers = imported.handlers;
+        const [primary] = imported.domains;
+        if (primary === undefined) {
+            throw new MeshError({
+                message: `"${absolutePath}" exports an empty \`domains\` list -- a part has to implement at least one.`,
+                code: 'BAD_REQUEST',
+                status: 400,
+            });
+        }
+        for (const domain of imported.domains) {
+            await ctx.broker.loadDomain(domain, handlers);
+        }
+        return { domain: primary, nodeID: ctx.nodeID };
+    }
 
     if (typeof imported.register === 'function') {
         const registration = await imported.register(ctx.broker);

@@ -11,7 +11,10 @@ interface ContractDiscovery {
     method: string;
     path: string;
     isStream: boolean;
+    /** The `*.contract.ts` this was declared in. */
     filePath: string;
+    /** The contract's own declared `filePath` -- where its *handler* lives. */
+    handlerPath: string;
 }
 
 interface EventDiscovery {
@@ -105,6 +108,7 @@ export class GenerateCommand extends BaseCommand {
         await this.generateToolRegistry(discovery, files, options.include || [], artifactRoot);
         await this.generateEvents(events, discovery, files, options.include || [], artifactRoot);
         await this.generateCollectionRegistry(cruds, files, options.include || [], artifactRoot);
+        await this.generateHandlerManifests(discovery, scanDir);
 
         this.logger.info('--- Generation Complete ---');
         const end = Date.now();
@@ -293,6 +297,119 @@ export class GenerateCommand extends BaseCommand {
         fs.writeFileSync(filePath, code);
     }
 
+    /**
+     * Finds the exported function a contract's `filePath` points at.
+     *
+     * The export name is resolved here, at build time, rather than declared on the contract as a
+     * string. A string export name in hand-written source is unverifiable -- nothing type-checks
+     * it, and getting it wrong fails at load. Resolved here it becomes ordinary generated code
+     * that `tsc` checks like any other import, so a wrong name is a compile error.
+     *
+     * Preference order matters: 11 of the handlers in this codebase are named for the collection
+     * *and* the action (`identity.ticket.issue` -> `issueTicket`) because a flat `tools/` directory
+     * cannot hold two files called `issue.ts`. So an exact `action` match wins, and a module with
+     * exactly one exported function falls back to it. Anything else is ambiguous and says so.
+     */
+    private resolveHandlerExport(handlerPath: string, action: string): string {
+        const absolute = path.resolve(handlerPath);
+        if (!fs.existsSync(absolute)) {
+            throw new Error(`Contract handler not found: "${handlerPath}" (declared as filePath for action "${action}"). A contract's filePath must point at the module implementing it.`);
+        }
+
+        const source = fs.readFileSync(absolute, 'utf-8');
+        const exported: string[] = [];
+        for (const m of source.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g)) exported.push(m[1]!);
+        for (const m of source.matchAll(/export\s+const\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?\(/g)) exported.push(m[1]!);
+
+        if (exported.includes(action)) return action;
+        if (exported.length === 1) return exported[0]!;
+        if (exported.length === 0) {
+            throw new Error(`"${handlerPath}" exports no function, but is declared as the filePath for action "${action}".`);
+        }
+        throw new Error(`"${handlerPath}" exports ${exported.length} functions (${exported.join(', ')}) and none is named "${action}" -- rename the handler to match the action, or point filePath at a module with only it.`);
+    }
+
+    /**
+     * Emits one `handlers.generated.ts` per part -- the handler map `broker.loadDomain` takes.
+     *
+     * This is what replaces a hand-written `register(broker)`. That function listed, by hand, a
+     * contract-to-handler mapping the contracts already declare; this derives the same mapping from
+     * those declarations. Nobody writes or maintains it, and it cannot drift from the contracts
+     * because it is regenerated from them.
+     *
+     * A part is a top-level directory under `src/`, not a domain, because the two are not the same
+     * thing: `catalog/` owns six domains (`serve.repo`, `serve.part`, `serve.release`, ...) whose
+     * only common prefix is `serve`, which every other part shares too. So the manifest states its
+     * domains explicitly rather than having the loader guess one.
+     *
+     * The map's values are thunks -- `() => import('./tools/decide.js').then(m => m.decide)` --
+     * which a bundler inlines and an unbundled runtime resolves from real files, so the same
+     * generated file works precompiled or not.
+     */
+    private async generateHandlerManifests(discovery: ContractDiscovery[], scanDir: string): Promise<void> {
+        this.logger.info('Generating per-part handler manifests...');
+
+        // Grouped over *every* contract, not only those with handlers: a part's domain list and
+        // its contract-module imports have to cover its CRUD collections too, or loadDomain would
+        // find half a domain registered.
+        const byPart = new Map<string, ContractDiscovery[]>();
+        for (const c of discovery) {
+            const partDir = path.relative(scanDir, path.dirname(c.filePath)).split(path.sep)[0];
+            if (partDir === undefined || partDir === '') continue;
+            const list = byPart.get(partDir) ?? [];
+            list.push(c);
+            byPart.set(partDir, list);
+        }
+
+        for (const [partDir, contracts] of byPart) {
+            const outDir = path.join(scanDir, partDir);
+            const outPath = path.join(outDir, 'handlers.generated.ts');
+            const relative = (target: string): string => {
+                let rel = path.relative(outDir, path.resolve(target)).replace(/\\/g, '/');
+                if (!rel.startsWith('.')) rel = './' + rel;
+                return rel.replace(/\.ts$/, '.js');
+            };
+
+            // Shortest first: a part's primary domain is the one the others extend
+            // (`identity` before `identity.user`), and that is what the loader reports.
+            const domains = Array.from(new Set(contracts.map((c) => c.domain)))
+                .sort((a, b) => a.length - b.length || a.localeCompare(b));
+
+            // A custom contract whose filePath still points at its own declaration file has no
+            // handler to find. Skipped rather than failing the build, so parts migrate one at a
+            // time; loadDomain is what complains, and only for a part actually loaded this way.
+            const withHandlers = contracts
+                .filter((c) => c.handlerPath !== '' && !c.handlerPath.endsWith('.contract.ts'))
+                .sort((a, b) => `${a.domain}.${a.action}`.localeCompare(`${b.domain}.${b.action}`));
+
+            const contractModules = Array.from(new Set(contracts.map((c) => c.filePath))).sort();
+
+            let code = '// GENERATED FILE - DO NOT EDIT\n';
+            code += '//\n';
+            code += "// This part's handler map, derived from each contract's own declared filePath.\n";
+            code += '// Hand-written registration -- a register(broker) listing every contract one at a\n';
+            code += '// time -- is what this replaces. See docs/CONTRACT_DRIVEN_PLACEMENT.md.\n';
+            code += "import type { ContractHandlerMap } from '@flybyme/mesh';\n\n";
+            code += '// Side-effect imports: evaluating a contract module is what registers its contracts\n';
+            code += '// with globalContractRegistry, which is where loadDomain reads them from.\n';
+            for (const module of contractModules) {
+                code += `import '${relative(module)}';\n`;
+            }
+            code += '\n/** Every domain whose contracts this part implements, primary first. */\n';
+            code += `export const domains = [${domains.map((d) => `'${d}'`).join(', ')}] as const;\n\n`;
+            code += '/** Tool key -> the handler its contract points at. CRUD actions need none. */\n';
+            code += 'export const handlers: ContractHandlerMap = {\n';
+
+            for (const c of withHandlers) {
+                const exportName = this.resolveHandlerExport(c.handlerPath, c.action);
+                code += `    '${c.domain}.${c.action}': () => import('${relative(c.handlerPath)}').then((m) => m.${exportName}),\n`;
+            }
+
+            code += '};\n';
+            fs.writeFileSync(outPath, code);
+        }
+    }
+
     private discoverContractsAndEvents(dirsToScan: string[]): { discovery: ContractDiscovery[], events: EventDiscovery[], cruds: CrudDiscovery[], files: Record<string, string[]> } {
         const allContracts: ContractDiscovery[] = [];
         const allEvents: EventDiscovery[] = [];
@@ -325,6 +442,7 @@ export class GenerateCommand extends BaseCommand {
                     || /\bdescription\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body)
                     || /\bdescription\s*:\s*`((?:[^`\\]|\\.)*)`/.exec(body);
                 const restMatch = /\brest\s*:\s*\{([\s\S]*?)\}/.exec(body);
+                const handlerPathMatch = /\bfilePath\s*:\s*['"]([^'"]+)['"]/.exec(body);
 
                 let method = 'POST';
                 let pathStr = '/';
@@ -357,7 +475,8 @@ export class GenerateCommand extends BaseCommand {
                         method,
                         path: pathStr,
                         isStream,
-                        filePath: file
+                        filePath: file,
+                        handlerPath: handlerPathMatch ? handlerPathMatch[1]! : ''
                     });
                 }
             }
@@ -386,7 +505,10 @@ export class GenerateCommand extends BaseCommand {
                         method: 'POST',
                         path: `/${domain}/${action}`,
                         isStream: false,
-                        filePath: file
+                        filePath: file,
+                        // A generated CRUD/time-series action has no handler module: DatabaseMiddleware
+                        // intercepts it before dispatch. loadDomain knows this from isCrud.
+                        handlerPath: ''
                     });
                 });
             }
@@ -413,7 +535,10 @@ export class GenerateCommand extends BaseCommand {
                         method: 'POST',
                         path: `/${domain}/${action}`,
                         isStream: false,
-                        filePath: file
+                        filePath: file,
+                        // A generated CRUD/time-series action has no handler module: DatabaseMiddleware
+                        // intercepts it before dispatch. loadDomain knows this from isCrud.
+                        handlerPath: ''
                     });
                 });
             }
