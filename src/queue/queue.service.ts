@@ -112,3 +112,7 @@ export class QueueService extends ServiceModule {
         }
     }
 }
+
+// See identity.service.ts's own comment on this -- required to be loadable as a dynamically-
+// loaded part.
+export default QueueService;

@@ -100,3 +100,10 @@ export class IdentityService extends ServiceModule {
         await ensureBuiltinRoles(broker);
     }
 }
+
+// Required to be loadable as a dynamically-loaded part (the same mechanism serve.part.start
+// already uses, and the precompiled core-parts loader `start`/`bootstrap` will use) -- both
+// dynamically `import()`/`require()` this module and construct its default export directly,
+// same convention `startService.ts` already documents ("the default export exists because it's
+// constructed").
+export default IdentityService;

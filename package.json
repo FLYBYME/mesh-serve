@@ -25,10 +25,12 @@
     "scripts": {
         "prepare": "npm run build",
         "generate": "tsx src/cli/core/generate-cli.ts",
-        "build": "npm run generate && tsc -p tsconfig.json",
+        "build": "npm run generate && tsc -p tsconfig.json && npm run build:parts",
+        "build:parts": "tsx src/cli/core/buildCoreParts.ts",
         "typecheck": "npm run generate && tsc -p tsconfig.check.json --noEmit",
         "//test": "typecheck first, because vitest transpiles without typechecking -- so the suite could be green while the compiler was not, and was, for six errors across two files. See roadmap F31.",
-        "test": "npm run typecheck && vitest run",
+        "//test:parts": "build:parts too, because corePart.integration.test.ts loads the precompiled dist/parts/*.cjs bundles for real -- the same files bootstrap loads on a live node. Without this they'd be stale or missing and the test would pass or fail for reasons unrelated to the code under test.",
+        "test": "npm run typecheck && npm run build:parts && vitest run",
         "test:watch": "vitest"
     },
     "dependencies": {

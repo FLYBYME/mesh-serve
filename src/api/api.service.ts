@@ -493,3 +493,7 @@ export class ApiService extends ServiceModule {
         }, { meta: { tenant_id: tenantId } });
     }
 }
+
+// See identity.service.ts's own comment on this -- required to be loadable as a dynamically-
+// loaded part.
+export default ApiService;

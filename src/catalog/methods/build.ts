@@ -109,6 +109,7 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
 
 async function runEsbuild(
     entryPointFiles: string[], outDir: string, external: string[], platform: 'browser' | 'node' = 'browser',
+    format: 'esm' | 'cjs' = 'esm',
 ): Promise<void> {
     for (const entryPointFile of entryPointFiles) {
         if (!(await exists(entryPointFile))) {
@@ -120,7 +121,7 @@ async function runEsbuild(
         entryPoints: entryPointFiles,
         bundle: true,
         outdir: outDir,
-        format: 'esm',
+        format,
         platform,
         // A service isn't loaded by a browser at all -- it's import()ed by a node process, on
         // whatever recent Node the cluster actually runs, not a browser-compat target.
@@ -129,6 +130,14 @@ async function runEsbuild(
         minify: true,
         logLevel: 'silent',
         external,
+        // Only meaningful for format: 'cjs' -- esbuild names a CJS bundle's own output file
+        // `<entry>.js` by default, same as ESM, so a CJS build and an ESM build of the same entry
+        // point would collide if ever written to the same outDir. Not a concern for any real caller
+        // today (each build gets its own fresh outDir), but `.cjs` is also the honest extension:
+        // Node treats a bare `.js` inside an ESM package (`"type": "module"`, which this precompiled
+        // output ships alongside) as ESM regardless of its actual CommonJS content, and would fail
+        // to `require()` it correctly otherwise.
+        outExtension: format === 'cjs' ? { '.js': '.cjs' } : undefined,
     });
 }
 

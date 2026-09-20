@@ -12,6 +12,7 @@ import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { question, questionHidden } from '../prompt.js';
 import { hashPassword } from '../../identity/methods/hash.js';
 import { ensureBootstrapApi, BOOTSTRAP_API_HOST } from '../../api/ensureBootstrapApi.js';
+import { CORE_PART_NAMES } from '../../catalog/contracts/corePart.contract.js';
 
 const bootstrapInputSchema = z.object({
     bootstrapNode: z.string().default('ws://127.0.0.1:6005').describe('ws:// URL of the running node to claim'),
@@ -69,6 +70,37 @@ export class BootstrapCommand extends BaseCommand {
         return { broker, mesh: node };
     }
 
+    /**
+     * `start` brings up the catalog kernel and nothing else, so on a fresh node none of
+     * identity/cdn/hold/queue/api exists yet -- there is literally nothing to claim an operator
+     * against until something loads them. This is that something, and bootstrap is the right (and
+     * on a fresh cluster, only) place for it: the one step that reaches into the mesh network
+     * directly rather than through the api gates, precisely because the gates don't exist yet.
+     *
+     * Each call executes *in-process on whichever node actually runs serve.catalog* -- loading a
+     * module is inherently local (`broker.registerModule`), so this can't be done by the bootstrap
+     * process itself reaching in; it has to be a contract the target node executes on its own
+     * behalf. `serve.corePart.load` is exactly that.
+     *
+     * Already-loaded parts are skipped rather than fatal: re-running bootstrap against a node
+     * that's partly up should converge, not refuse.
+     */
+    private async loadCoreParts(broker: IServiceBroker): Promise<void> {
+        for (const name of CORE_PART_NAMES) {
+            try {
+                const { domain, nodeID } = await broker.call('serve.corePart.load', { name });
+                console.log(`Loaded "${domain}" on ${nodeID}.`);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (/already running/i.test(message)) {
+                    console.log(`"${name}" was already running -- skipping.`);
+                    continue;
+                }
+                throw err;
+            }
+        }
+    }
+
     private async addCustomRoles(rl: readline.Interface, broker: IServiceBroker): Promise<void> {
         for (;;) {
             const add = await question(rl, 'Add a custom role? [y/N]: ');
@@ -96,6 +128,11 @@ export class BootstrapCommand extends BaseCommand {
         const { broker, mesh } = await this.setup(args);
 
         try {
+            // Before anything else: the target node is a bare catalog kernel until this runs, so
+            // every identity.*/serve.api.* call below would otherwise fail with "no node advertises
+            // domain identity".
+            await this.loadCoreParts(broker);
+
             const existing = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
             if (existing !== undefined) {
                 this.logger.error('Already claimed -- a "platform" organization already exists. This node has an operator; log in against its api instead.');

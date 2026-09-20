@@ -11,12 +11,7 @@ import { WSTransport } from '@flybyme/mesh/node';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
-import { IdentityService } from '../../identity/identity.service.js';
-import { CdnService } from '../../cdn/cdn.service.js';
 import { CatalogService } from '../../catalog/catalog.service.js';
-import { HoldService } from '../../hold/hold.service.js';
-import { QueueService } from '../../queue/queue.service.js';
-import { ApiService } from '../../api/api.service.js';
 
 const LogLevelMap: Record<string, LogLevel> = {
     error: LogLevel.ERROR,
@@ -41,7 +36,7 @@ const startInputSchema = z.object({
 
 export class StartCommand extends BaseCommand {
     public readonly name = 'start';
-    public readonly description = 'Start mesh node with all services running';
+    public readonly description = 'Start a bare mesh node -- the catalog kernel only, nothing else. Load everything else with bootstrap, or serve.part.start/serve.corePart.load once joined.';
 
     public register(program: CommanderCommand): void {
         const sub = program.command(this.name).description(this.description);
@@ -55,13 +50,15 @@ export class StartCommand extends BaseCommand {
         const logger = new Logger(LogLevelMap[args.logLevel]);
         const serializer = new JSONSerializer();
 
-        logger.info('[Repro] Initializing Stable Provider (Node 1)...');
         const node = new MeshApp({
             nodeID: args.nodeID,
             logger,
         });
         // ApiService and CdnService each read their own port from an env var at onStart time
-        // (SERVER_PORT, API_PORT) -- set before registering them, not passed as constructor args.
+        // (SERVER_PORT, API_PORT) -- set now, before anything actually loads them (bootstrap's
+        // serve.corePart.load, or later a peer's own serve.part.start), not passed as constructor
+        // args -- the process itself is the natural place for start-time CLI config to live,
+        // regardless of when a given service actually gets loaded onto it.
         process.env.API_PORT = String(args.apiPort);
         process.env.SERVER_PORT = String(args.cdnPort);
         // Same pattern, and both left unset (CdnService's own defaults apply) unless given --
@@ -82,15 +79,13 @@ export class StartCommand extends BaseCommand {
 
         node.use(new BrokerModule());
 
-        await node.registerModule(new IdentityService());
-        await node.registerModule(new CdnService());
+        // The one thing this command still knows about by name -- serve.catalog owns
+        // serve.part.start/serve.corePart.load, the mechanism that loads everything else,
+        // including mesh-serve's own identity/cdn/hold/queue/api. Nothing else is mounted here.
         await node.registerModule(new CatalogService());
-        await node.registerModule(new HoldService());
-        await node.registerModule(new QueueService());
-        await node.registerModule(new ApiService());
 
         await node.start();
 
-        this.logger.info('All services started successfully');
+        this.logger.info(`Node "${args.nodeID}" up (catalog kernel only). Run bootstrap to claim it, or serve.part.start/serve.corePart.load to load more.`);
     }
 }

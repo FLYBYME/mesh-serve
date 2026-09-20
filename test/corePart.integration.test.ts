@@ -1,0 +1,123 @@
+/**
+ * The new boot model, end to end, against a real node and real MongoDB.
+ *
+ * `mesh-serve start` no longer mounts all six services statically -- it brings up the catalog
+ * kernel and nothing else. Everything else (identity, cdn, hold, queue, api) is precompiled to
+ * CommonJS at build time (`cli/core/buildCoreParts.ts` -> `dist/parts/*.cjs`) and loaded onto a
+ * running node through `serve.corePart.load`, the same generic load-and-register path
+ * `serve.part.start` uses for a third party's own service -- just resolving the file from this
+ * package instead of from the content-addressed artifact store.
+ *
+ * This test boots a node exactly the way `start.ts` now does, proves identity genuinely isn't there
+ * yet, then runs the same load sequence `bootstrap.ts` runs, and proves the node becomes fully
+ * functional. It loads the real precompiled bundles -- `npm test` runs `build:parts` first so
+ * they're always current.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MongoClient } from 'mongodb';
+import {
+    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
+} from '@flybyme/mesh';
+import type { IServiceBroker } from '@flybyme/mesh';
+import { WSTransport } from '@flybyme/mesh/node';
+
+import { CatalogService } from '../src/catalog/catalog.service.js';
+import { CORE_PART_NAMES } from '../src/catalog/contracts/corePart.contract.js';
+
+const DB_NAME = 'mesh-serve-corepart-integration-test';
+const WS_PORT = 16557;
+const API_PORT = 15557;
+const CDN_PORT = 13557;
+
+describe('a bare node, loading its own core parts', () => {
+    let app: MeshApp;
+    let broker: IServiceBroker;
+
+    beforeAll(async () => {
+        const uri = process.env.MONGODB_URI ?? 'mongodb://localhost:27017';
+        const client = new MongoClient(uri);
+        await client.connect();
+        await client.db(DB_NAME).dropDatabase();
+        await client.close();
+
+        // ApiService/CdnService read their ports from env at onStart -- set before they're loaded,
+        // exactly as start.ts does now.
+        process.env.API_PORT = String(API_PORT);
+        process.env.SERVER_PORT = String(CDN_PORT);
+        process.env.PUBLIC_SCHEME = 'http';
+        process.env.PUBLIC_API_PORT = String(API_PORT);
+
+        const logger = new Logger(LogLevel.ERROR);
+        app = new MeshApp({ nodeID: 'corepart-node', logger });
+        app.use(new RegistryModule({ ttl: 5000 }));
+        app.use(new NetworkModule({
+            transports: [new WSTransport(new JSONSerializer(), WS_PORT, '127.0.0.1')],
+        }));
+        app.use(new DatabaseModule({ uri, dbName: DB_NAME }));
+        app.use(new BrokerModule());
+
+        // The one thing start.ts still mounts by name.
+        await app.registerModule(new CatalogService());
+        await app.start();
+
+        broker = app.getProvider<IServiceBroker>('broker');
+    }, 30000);
+
+    afterAll(async () => {
+        await app.stop();
+    });
+
+    it('starts with the catalog kernel only -- identity genuinely is not there yet', async () => {
+        // The kernel's own contracts answer.
+        await expect(broker.call('serve.repo.find', {}, { meta: { tenant_id: 'anything' } })).resolves.toBeDefined();
+
+        // Nothing else does. This is the "start should really do nothing" property, asserted rather
+        // than assumed: if some service were still being statically mounted, this would resolve.
+        await expect(broker.call('identity.role.find', { query: {} })).rejects.toThrow(/not found/i);
+    });
+
+    it('loads every core part through serve.corePart.load, the same sequence bootstrap runs', async () => {
+        const loaded: string[] = [];
+        for (const name of CORE_PART_NAMES) {
+            const result = await broker.call('serve.corePart.load', { name });
+            expect(result.nodeID).toBe('corepart-node');
+            loaded.push(result.domain);
+        }
+
+        // Each precompiled bundle registered under its own real domain.
+        expect(loaded).toContain('identity');
+        expect(loaded).toContain('serve.cdn');
+        expect(loaded).toContain('serve.hold');
+        expect(loaded).toContain('serve.queue');
+        expect(loaded).toContain('serve.api');
+    }, 30000);
+
+    it('is fully functional afterwards -- identity answers, and its own onStart seeding ran', async () => {
+        const roles = await broker.call('identity.role.find', { query: {} });
+        // IdentityService.onStart seeds the four builtin roles; their presence proves the loaded
+        // module's lifecycle hook actually ran, not just that its contracts got mounted.
+        const keys = roles.map((r) => r.key);
+        expect(keys).toContain('operator');
+        expect(keys).toContain('owner');
+        expect(keys).toContain('admin');
+        expect(keys).toContain('member');
+    });
+
+    it('a loaded core part can be called through the mesh like any other contract', async () => {
+        const user = await broker.call('identity.user.create', {
+            email: 'corepart@node.invalid',
+            displayName: 'corepart',
+            passwordHash: 'x'.repeat(32),
+            roles: [],
+            provisional: false,
+        });
+        expect(user.id).toBeTruthy();
+
+        const found = await broker.call('identity.user.find_one', { query: { email: 'corepart@node.invalid' } });
+        expect(found?.id).toBe(user.id);
+    });
+
+    it('refuses to load the same core part twice rather than double-registering it', async () => {
+        await expect(broker.call('serve.corePart.load', { name: 'identity' })).rejects.toThrow(/already running/i);
+    });
+});

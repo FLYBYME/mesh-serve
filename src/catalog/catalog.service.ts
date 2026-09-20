@@ -16,6 +16,8 @@ import { build } from './tools/build.js';
 import { compose } from './tools/compose.js';
 import { startService } from './tools/startService.js';
 import { stopService } from './tools/stopService.js';
+import { loadCorePart } from './tools/loadCorePart.js';
+import { corePartLoadContract } from './contracts/corePart.contract.js';
 import { buildPart, buildKernel, buildService } from './methods/build.js';
 
 export class CatalogService extends ServiceModule {
@@ -41,6 +43,7 @@ export class CatalogService extends ServiceModule {
         this.mountTool(compositionComposeContract, compose);
         this.mountTool(partStartContract, startService);
         this.mountTool(partStopContract, stopService);
+        this.mountTool(corePartLoadContract, loadCorePart);
 
         this.mountCrudHook('serve.part', 'create', {
             before: async (input, ctx) => {
