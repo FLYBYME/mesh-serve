@@ -8,9 +8,6 @@ import { issueTicket } from '../../../src/identity/tools/issueTicket.js';
 import { validateTicket } from '../../../src/identity/tools/validateTicket.js';
 import { revokeTicket } from '../../../src/identity/tools/revokeTicket.js';
 import { signOut } from '../../../src/identity/tools/signOut.js';
-import type { IdentityService } from '../../../src/identity/identity.service.js';
-
-const dummyService = {} as IdentityService;
 
 describe('identity tools', () => {
     describe('hasRole', () => {
@@ -24,7 +21,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(dummyService, { userId: 'u1', role: 'admin' }, ctx);
+            const result = await hasRole({ userId: 'u1', role: 'admin' }, ctx);
             expect(result).toEqual({ granted: true });
         });
 
@@ -40,10 +37,10 @@ describe('identity tools', () => {
                 },
             });
 
-            const resultViewer = await hasRole.call(dummyService, { userId: 'u1', role: 'viewer' }, ctx);
+            const resultViewer = await hasRole({ userId: 'u1', role: 'viewer' }, ctx);
             expect(resultViewer).toEqual({ granted: true });
 
-            const resultDev = await hasRole.call(dummyService, { userId: 'u1', role: 'developer' }, ctx);
+            const resultDev = await hasRole({ userId: 'u1', role: 'developer' }, ctx);
             expect(resultDev).toEqual({ granted: true });
         });
 
@@ -70,8 +67,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(
-                dummyService,
+            const result = await hasRole(
                 { userId: 'u1', role: 'org-admin', organizationId: 'org-1' },
                 ctx
             );
@@ -89,7 +85,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(dummyService, { userId: 'u1', role: 'admin' }, ctx);
+            const result = await hasRole({ userId: 'u1', role: 'admin' }, ctx);
             expect(result).toEqual({ granted: false });
         });
 
@@ -101,7 +97,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(dummyService, { userId: 'missing', role: 'admin' }, ctx);
+            const result = await hasRole({ userId: 'missing', role: 'admin' }, ctx);
             expect(result).toEqual({ granted: false });
         });
 
@@ -115,7 +111,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(dummyService, { userId: 'u1', role: 'org-admin' }, ctx);
+            const result = await hasRole({ userId: 'u1', role: 'org-admin' }, ctx);
             expect(result).toEqual({ granted: false });
         });
 
@@ -131,8 +127,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await hasRole.call(
-                dummyService,
+            const result = await hasRole(
                 { userId: 'u1', role: 'operator', organizationId: 'org-1' },
                 ctx
             );
@@ -148,7 +143,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(dummyService, { userId: 'u1', contract: 'identity.user.create' }, ctx);
+            const result = await permits({ userId: 'u1', contract: 'identity.user.create' }, ctx);
 
             expect(result).toEqual({ permitted: false });
             expect(calls.some((c) => c.action === 'identity.role.find')).toBe(false);
@@ -164,8 +159,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'identity.user.create' },
                 ctx
             );
@@ -182,15 +176,13 @@ describe('identity tools', () => {
                 },
             });
 
-            const result1 = await permits.call(
-                dummyService,
+            const result1 = await permits(
                 { userId: 'u1', contract: 'identity.ticket.issue' },
                 ctx
             );
             expect(result1).toEqual({ permitted: true });
 
-            const result2 = await permits.call(
-                dummyService,
+            const result2 = await permits(
                 { userId: 'u1', contract: 'serve.expose.create' },
                 ctx
             );
@@ -208,8 +200,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'catalog.artifact.get' },
                 ctx
             );
@@ -228,8 +219,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'serve.repo.create', organizationId: 'org-1' },
                 ctx
             );
@@ -246,8 +236,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'identity.user.delete' },
                 ctx
             );
@@ -264,8 +253,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'serve.repo.create' },
                 ctx
             );
@@ -282,8 +270,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await permits.call(
-                dummyService,
+            const result = await permits(
                 { userId: 'u1', contract: 'identity_logs.read' },
                 ctx
             );
@@ -303,7 +290,7 @@ describe('identity tools', () => {
                 });
 
                 await expect(
-                    issueTicket.call(dummyService, { email: 'unknown@test.invalid', password: testPassword }, ctx)
+                    issueTicket({ email: 'unknown@test.invalid', password: testPassword }, ctx)
                 ).rejects.toSatisfy((err: unknown) => {
                     expect(err).toBeInstanceOf(MeshError);
                     const meshErr = err as MeshError;
@@ -328,7 +315,7 @@ describe('identity tools', () => {
                 });
 
                 await expect(
-                    issueTicket.call(dummyService, { email: 'user@test.invalid', password: 'WrongPassword!' }, ctx)
+                    issueTicket({ email: 'user@test.invalid', password: 'WrongPassword!' }, ctx)
                 ).rejects.toSatisfy((err: unknown) => {
                     expect(err).toBeInstanceOf(MeshError);
                     const meshErr = err as MeshError;
@@ -351,7 +338,7 @@ describe('identity tools', () => {
                 });
 
                 await expect(
-                    issueTicket.call(dummyService, { email: 'user@test.invalid', password: testPassword }, ctx)
+                    issueTicket({ email: 'user@test.invalid', password: testPassword }, ctx)
                 ).rejects.toSatisfy((err: unknown) => {
                     expect(err).toBeInstanceOf(MeshError);
                     const meshErr = err as MeshError;
@@ -378,7 +365,7 @@ describe('identity tools', () => {
                 });
 
                 await expect(
-                    issueTicket.call(dummyService, { email: 'suspended@test.invalid', password: testPassword }, ctx)
+                    issueTicket({ email: 'suspended@test.invalid', password: testPassword }, ctx)
                 ).rejects.toSatisfy((err: unknown) => {
                     expect(err).toBeInstanceOf(MeshError);
                     const meshErr = err as MeshError;
@@ -404,7 +391,7 @@ describe('identity tools', () => {
                 });
 
                 await expect(
-                    issueTicket.call(dummyService, { email: 'suspended@test.invalid', password: testPassword }, ctx)
+                    issueTicket({ email: 'suspended@test.invalid', password: testPassword }, ctx)
                 ).rejects.toSatisfy((err: unknown) => {
                     expect(err).toBeInstanceOf(MeshError);
                     const meshErr = err as MeshError;
@@ -437,8 +424,7 @@ describe('identity tools', () => {
                     },
                 });
 
-                const result = await issueTicket.call(
-                    dummyService,
+                const result = await issueTicket(
                     { email: 'valid@test.invalid', password: testPassword },
                     ctx
                 );
@@ -484,8 +470,7 @@ describe('identity tools', () => {
                     },
                 });
 
-                await issueTicket.call(
-                    dummyService,
+                await issueTicket(
                     { email: 'valid@test.invalid', password: testPassword, via: 'password_reset' },
                     ctx
                 );
@@ -516,7 +501,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await validateTicket.call(dummyService, { token: 'tok-abc-123' }, ctx);
+            const result = await validateTicket({ token: 'tok-abc-123' }, ctx);
 
             expect(result).toEqual({
                 valid: true,
@@ -532,7 +517,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await validateTicket.call(dummyService, { token: 'unknown-tok' }, ctx);
+            const result = await validateTicket({ token: 'unknown-tok' }, ctx);
 
             expect(result).toEqual({ valid: false });
         });
@@ -554,7 +539,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await validateTicket.call(dummyService, { token: 'tok-expired' }, ctx);
+            const result = await validateTicket({ token: 'tok-expired' }, ctx);
 
             expect(result).toEqual({ valid: false });
         });
@@ -577,7 +562,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await validateTicket.call(dummyService, { token: 'tok-revoked' }, ctx);
+            const result = await validateTicket({ token: 'tok-revoked' }, ctx);
 
             expect(result).toEqual({ valid: false });
         });
@@ -599,7 +584,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await validateTicket.call(dummyService, { token: 'tok-both' }, ctx);
+            const result = await validateTicket({ token: 'tok-both' }, ctx);
 
             expect(result).toEqual({ valid: false });
         });
@@ -628,8 +613,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await revokeTicket.call(
-                dummyService,
+            const result = await revokeTicket(
                 { token: 'tok-target', reason: 'User requested logout' },
                 ctx
             );
@@ -674,8 +658,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await revokeTicket.call(
-                dummyService,
+            const result = await revokeTicket(
                 { userId: 'u-10', reason: 'Password reset' },
                 ctx
             );
@@ -696,7 +679,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await revokeTicket.call(dummyService, { token: 'nonexistent' }, ctx);
+            const result = await revokeTicket({ token: 'nonexistent' }, ctx);
 
             expect(result.revoked).toBe(0);
             expect(calls.some((c) => c.action === 'identity.ticket.update')).toBe(false);
@@ -715,7 +698,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await revokeTicket.call(dummyService, { token: 'tok-already' }, ctx);
+            const result = await revokeTicket({ token: 'tok-already' }, ctx);
 
             expect(result.revoked).toBe(0);
             expect(calls.some((c) => c.action === 'identity.ticket.update')).toBe(false);
@@ -725,7 +708,7 @@ describe('identity tools', () => {
         it('handles case when neither token nor userId is provided', async () => {
             const { ctx, calls, emitted } = createMockContext();
 
-            const result = await revokeTicket.call(dummyService, {}, ctx);
+            const result = await revokeTicket({}, ctx);
 
             expect(result.revoked).toBe(0);
             expect(calls).toHaveLength(0);
@@ -751,7 +734,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await revokeTicket.call(dummyService, { token: 'tok-no-reason' }, ctx);
+            const result = await revokeTicket({ token: 'tok-no-reason' }, ctx);
 
             expect(result.revoked).toBe(1);
             expect(updates[0]).not.toHaveProperty('revokedReason');
@@ -782,7 +765,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await signOut.call(dummyService, { token: 'tok-signout-1' }, ctx);
+            const result = await signOut({ token: 'tok-signout-1' }, ctx);
 
             expect(result).toEqual({ signedOut: true });
 
@@ -809,7 +792,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await signOut.call(dummyService, { token: 'tok-revoked-already' }, ctx);
+            const result = await signOut({ token: 'tok-revoked-already' }, ctx);
 
             expect(result).toEqual({ signedOut: true });
             expect(calls.some((c) => c.action === 'identity.ticket.update')).toBe(false);
@@ -823,7 +806,7 @@ describe('identity tools', () => {
                 },
             });
 
-            const result = await signOut.call(dummyService, { token: 'tok-missing' }, ctx);
+            const result = await signOut({ token: 'tok-missing' }, ctx);
 
             expect(result).toEqual({ signedOut: true });
             expect(calls.some((c) => c.action === 'identity.ticket.update')).toBe(false);

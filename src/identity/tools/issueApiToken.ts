@@ -1,12 +1,10 @@
 import { MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/apiToken.contract.js';
 import { hashToken, issuedToken } from '../methods/hash.js';
 
 export async function issueApiToken(
-    this: IdentityService,
     input: IssueInput,
     ctx: IServiceContext
 ): Promise<IssueOutput> {

@@ -1,12 +1,10 @@
 import { MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { SetPasswordInput, SetPasswordOutput } from '../contracts/user.contract.js';
 import { hashPassword } from '../methods/hash.js';
 
 export async function setPassword(
-    this: IdentityService,
     input: SetPasswordInput,
     ctx: IServiceContext
 ): Promise<SetPasswordOutput> {

@@ -1,4 +1,4 @@
-import { MeshError, ServiceModule } from '@flybyme/mesh';
+import { MeshError } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { userCrud, userRegisterContract, userSetPasswordContract, userGrantRoleContract } from './contracts/user.contract.js';
@@ -16,7 +16,7 @@ import {
 import { apiTokenCrud, apiTokenIssueContract, apiTokenValidateContract } from './contracts/apiToken.contract.js';
 import { whoamiContract, permitsContract, hasRoleContract } from './contracts/identity.contract.js';
 
-import { register } from './tools/register.js';
+import { register as registerUser } from './tools/register.js';
 import { setPassword } from './tools/setPassword.js';
 import { grantRole } from './tools/grantRole.js';
 import { upsertRole } from './tools/upsertRole.js';
@@ -33,77 +33,81 @@ import { resolveTicket } from './tools/resolveTicket.js';
 
 import { ensureBuiltinRoles } from './builtinRoles.js';
 
-export class IdentityService extends ServiceModule {
-    public readonly domain = 'identity';
+export const IDENTITY_DOMAIN = 'identity';
 
-    constructor() {
-        super();
-
-        this.mountCrud(userCrud);
-        this.mountCrud(organizationCrud);
-        this.mountCrud(membershipCrud);
-        this.mountCrud(roleCrud);
-        this.mountCrud(ticketCrud);
-        this.mountCrud(apiTokenCrud);
-
-        this.mountTool(userRegisterContract, register);
-        this.mountTool(userSetPasswordContract, setPassword);
-        this.mountTool(userGrantRoleContract, grantRole);
-        this.mountTool(roleUpsertContract, upsertRole);
-        this.mountTool(ticketIssueContract, issueTicket);
-        this.mountTool(ticketValidateContract, validateTicket);
-        this.mountTool(ticketRevokeContract, revokeTicket);
-        this.mountTool(ticketSignOutContract, signOut);
-        this.mountTool(apiTokenIssueContract, issueApiToken);
-        this.mountTool(apiTokenValidateContract, validateApiToken);
-        this.mountTool(whoamiContract, whoami);
-        this.mountTool(permitsContract, permits);
-        this.mountTool(hasRoleContract, hasRole);
-        this.mountTool(ticketResolveContract, resolveTicket);
-
-        this.mountCrudHook('identity.organization', 'create', {
-            before: async (input, ctx) => {
-                const { ownerId } = input as { ownerId: string };
-                const owner = await ctx.db('identity.user').resolve({ id: ownerId });
-                if (owner === undefined) {
-                    throw new MeshError({ message: `No account "${ownerId}".`, code: 'NOT_FOUND', status: 404 });
-                }
-                return input;
+/**
+ * Migrated off `ServiceModule` -- no class, no `mountCrud`/`mountTool`/`mountCrudHook`. The audit in
+ * docs/CONTRACT_DRIVEN_PLACEMENT.md found identity holds zero instance state, so the class was only
+ * ever where the code lived.
+ *
+ * `register` is the standalone part shape (`catalog/methods/loadModule.ts`), and it is also where
+ * the old `onStart` goes: it runs at load with the broker already live, which is exactly when the
+ * builtin roles should be seeded. No `stop` is returned because there is nothing with a lifetime
+ * here to tear down.
+ *
+ * Roles only -- no account, no "platform" organization, nothing a person could call an identity.
+ * Those used to be auto-created here too, with a randomly generated password printed once to the
+ * log and never recoverable if missed: a placeholder nobody actually chose. That whole sequence
+ * (account, operator role grant, "platform" org, owner membership, the bootstrap api, its exposed
+ * contracts) now happens exactly once, deliberately, via `bootstrap` -- a real person typing their
+ * own name/email/password, not the system inventing one for them. Roles stay here because they're
+ * safe to seed unconditionally at every boot: a role is a permission template, not an identity, and
+ * nothing downstream (bootstrap included) can proceed without `operator`/`owner` already existing.
+ */
+export async function register(broker: IServiceBroker): Promise<string> {
+    broker.registerCrud(userCrud);
+    broker.registerCrud(organizationCrud, {
+        hooks: {
+            create: {
+                before: async (input, ctx) => {
+                    const { ownerId } = input as { ownerId: string };
+                    const owner = await ctx.db('identity.user').resolve({ id: ownerId });
+                    if (owner === undefined) {
+                        throw new MeshError({ message: `No account "${ownerId}".`, code: 'NOT_FOUND', status: 404 });
+                    }
+                    return input;
+                },
             },
-        });
-
-        this.mountCrudHook('identity.membership', 'create', {
-            before: async (input, ctx) => {
-                const { organizationId } = input as { organizationId: string };
-                const org = await ctx.db('identity.organization').resolve({ id: organizationId });
-                if (org === undefined) {
-                    throw new MeshError({ message: `No organization "${organizationId}".`, code: 'NOT_FOUND', status: 404 });
-                }
-                return input;
+        },
+    });
+    broker.registerCrud(membershipCrud, {
+        hooks: {
+            create: {
+                before: async (input, ctx) => {
+                    const { organizationId } = input as { organizationId: string };
+                    const org = await ctx.db('identity.organization').resolve({ id: organizationId });
+                    if (org === undefined) {
+                        throw new MeshError({ message: `No organization "${organizationId}".`, code: 'NOT_FOUND', status: 404 });
+                    }
+                    return input;
+                },
             },
-        });
+        },
+    });
+    broker.registerCrud(roleCrud);
+    broker.registerCrud(ticketCrud);
+    broker.registerCrud(apiTokenCrud);
 
-    }
+    broker.registerContract(userRegisterContract, registerUser);
+    broker.registerContract(userSetPasswordContract, setPassword);
+    broker.registerContract(userGrantRoleContract, grantRole);
+    broker.registerContract(roleUpsertContract, upsertRole);
+    broker.registerContract(ticketIssueContract, issueTicket);
+    broker.registerContract(ticketValidateContract, validateTicket);
+    broker.registerContract(ticketRevokeContract, revokeTicket);
+    broker.registerContract(ticketSignOutContract, signOut);
+    broker.registerContract(apiTokenIssueContract, issueApiToken);
+    broker.registerContract(apiTokenValidateContract, validateApiToken);
+    broker.registerContract(whoamiContract, whoami);
+    broker.registerContract(permitsContract, permits);
+    broker.registerContract(hasRoleContract, hasRole);
+    // Deliberately replaces the `resolve` action defineCrud generates for identity.ticket: this
+    // one resolves by *token*, not by id, and has always been what `identity.ticket.resolve`
+    // actually means at runtime. Under ServiceModule that override was invisible -- mountTool's map
+    // simply let whichever mounted last win. Saying it out loud is the only change.
+    broker.registerContract(ticketResolveContract, resolveTicket, { replace: true });
 
-    /**
-     * Roles only -- no account, no "platform" organization, nothing a person could call an
-     * identity. Those used to be auto-created here too, with a randomly generated password printed
-     * once to the log and never recoverable if missed: a placeholder nobody actually chose. That
-     * whole sequence (account, operator role grant, "platform" org, owner membership, the bootstrap
-     * api, its exposed contracts) now happens exactly once, deliberately, via `src/bootstrap.ts` --
-     * a real person typing their own name/email/password, not the system inventing one for them.
-     * Roles stay here because they're safe to seed unconditionally at every boot: a role is a
-     * permission template, not an identity, and nothing downstream (bootstrap.ts included) can
-     * proceed without `operator`/`owner` already existing.
-     */
-    public async onStart(broker: IServiceBroker): Promise<void> {
-        await ensureBuiltinRoles(broker);
-    }
+    await ensureBuiltinRoles(broker);
+
+    return IDENTITY_DOMAIN;
 }
-
-// Required to be loadable as a dynamically-loaded part (the same mechanism serve.part.start
-// already uses, and the precompiled core-parts loader `start`/`bootstrap` will use) -- both
-// dynamically `import()`/`require()` this module and construct its default export directly,
-// same convention `startService.ts` already documents ("the default export exists because it's
-// constructed").
-export default IdentityService;

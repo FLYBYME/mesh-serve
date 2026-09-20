@@ -1,11 +1,9 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { PermitsInput, PermitsOutput } from '../contracts/identity.contract.js';
 import { matchesContract, resolveEffectiveRoleKeys, expandRoles } from '../methods/roles.js';
 
 export async function permits(
-    this: IdentityService,
     input: PermitsInput,
     ctx: IServiceContext
 ): Promise<PermitsOutput> {

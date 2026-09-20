@@ -1,11 +1,9 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RegisterInput, RegisterOutput } from '../contracts/user.contract.js';
 import { hashPassword } from '../methods/hash.js';
 
 export async function register(
-    this: IdentityService,
     input: RegisterInput,
     ctx: IServiceContext
 ): Promise<RegisterOutput> {

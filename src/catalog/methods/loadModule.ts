@@ -34,9 +34,33 @@ const require = createRequire(import.meta.url);
  * to `register` on its own schedule, and nothing that loads parts has to know which era a given one
  * belongs to. `register` is checked first so a module that somehow exports both is unambiguous.
  */
+/**
+ * What `register` may return. A stateless part just names its domain; one that owns something with
+ * a lifetime -- an HTTP listener, a timer -- returns a `stop` alongside it, which is the standalone
+ * equivalent of `ServiceModule.onStop`. `register` itself is the equivalent of `onStart`: it runs
+ * at load, with the broker already live, which is precisely when a listener should bind or a timer
+ * should start.
+ */
+export type PartRegistration = string | { domain: string; stop?: () => void | Promise<void> };
+
 interface LoadedPart {
-    register?: (broker: IServiceContext['broker']) => string | Promise<string>;
+    register?: (broker: IServiceContext['broker']) => PartRegistration | Promise<PartRegistration>;
     default?: new () => IServiceModule;
+}
+
+/**
+ * Teardown for standalone parts, by domain. `ServiceModule` parts don't need this --
+ * `broker.unregisterModule` already calls their own `onStop` -- so only the standalone ones are
+ * tracked here, and `stopLoadedPart` is a no-op for anything that didn't register one.
+ */
+const partTeardown = new Map<string, () => void | Promise<void>>();
+
+/** Runs a standalone part's own `stop`, if it registered one, and forgets it. */
+export async function stopLoadedPart(domain: string): Promise<void> {
+    const stop = partTeardown.get(domain);
+    if (!stop) return;
+    partTeardown.delete(domain);
+    await stop();
 }
 
 export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: string): Promise<{ domain: string; nodeID: string }> {
@@ -48,7 +72,11 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         : (await import(pathToFileURL(absolutePath).href) as LoadedPart);
 
     if (typeof imported.register === 'function') {
-        const domain = await imported.register(ctx.broker);
+        const registration = await imported.register(ctx.broker);
+        const domain = typeof registration === 'string' ? registration : registration.domain;
+        if (typeof registration !== 'string' && registration.stop) {
+            partTeardown.set(domain, registration.stop);
+        }
         return { domain, nodeID: ctx.nodeID };
     }
 

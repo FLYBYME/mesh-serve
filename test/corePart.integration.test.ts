@@ -16,7 +16,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
-    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
+    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
@@ -49,7 +49,7 @@ describe('a bare node, loading its own core parts', () => {
 
         const logger = new Logger(LogLevel.ERROR);
         app = new MeshApp({ nodeID: 'corepart-node', logger });
-        app.use(new RegistryModule({ ttl: 5000 }));
+        app.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
         app.use(new NetworkModule({
             transports: [new WSTransport(new JSONSerializer(), WS_PORT, '127.0.0.1')],
         }));

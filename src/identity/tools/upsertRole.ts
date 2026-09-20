@@ -1,11 +1,9 @@
 import { MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { UpsertInput, UpsertOutput } from '../contracts/role.contract.js';
 
 export async function upsertRole(
-    this: IdentityService,
     input: UpsertInput,
     ctx: IServiceContext
 ): Promise<UpsertOutput> {

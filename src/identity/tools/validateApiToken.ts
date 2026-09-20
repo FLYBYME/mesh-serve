@@ -1,10 +1,8 @@
 import type { IServiceContext } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { ValidateInput, ValidateOutput } from '../contracts/apiToken.contract.js';
 import { hashToken } from '../methods/hash.js';
 
 export async function validateApiToken(
-    this: IdentityService,
     input: ValidateInput,
     ctx: IServiceContext
 ): Promise<ValidateOutput> {

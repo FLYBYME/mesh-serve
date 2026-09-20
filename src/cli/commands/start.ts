@@ -4,7 +4,7 @@ import {
     DatabaseModule,
     JSONSerializer, Logger, LogLevel, MeshApp,
     NetworkModule,
-    RegistryModule,
+    PlacementRegistry, RegistryModule,
     z,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
@@ -67,7 +67,12 @@ export class StartCommand extends BaseCommand {
         if (args.publicApiPort !== undefined) process.env.PUBLIC_API_PORT = String(args.publicApiPort);
 
         const transport = new WSTransport(serializer, args.wsPort, args.host, { authKey: args.sharedKey });
-        node.use(new RegistryModule({ ttl: 5000 })); // Short TTL for faster repro
+        // PlacementRegistry, not the default Registry: a standalone part (one that registers
+        // contracts directly rather than a whole ServiceModule) is only advertised to peers by a
+        // registry that knows how to advertise a single contract. Found live -- with the default
+        // Registry every core part loaded fine and was callable *on this node*, while another node
+        // was told "no node in this mesh advertises domain identity".
+        node.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
         node.use(new NetworkModule({
             transports: [transport],
             ...(args.bootstrapNode !== undefined ? { bootstrapNodes: [args.bootstrapNode] } : {}),

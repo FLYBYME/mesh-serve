@@ -1,12 +1,10 @@
 import { Database, MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { WhoamiInput, WhoamiOutput } from '../contracts/identity.contract.js';
 import { membershipCrud } from '../contracts/membership.contract.js';
 
 export async function whoami(
-    this: IdentityService,
     _input: WhoamiInput,
     ctx: IServiceContext
 ): Promise<WhoamiOutput> {

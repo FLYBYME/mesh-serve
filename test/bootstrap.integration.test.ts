@@ -16,12 +16,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
-    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
+    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
-import { IdentityService } from '../src/identity/identity.service.js';
+import { register as registerIdentity } from '../src/identity/identity.service.js';
 import { CdnService } from '../src/cdn/cdn.service.js';
 import { CatalogService } from '../src/catalog/catalog.service.js';
 import { ApiService } from '../src/api/api.service.js';
@@ -82,17 +82,20 @@ describe('a fresh install, booted for real', () => {
         const logger = new Logger(LogLevel.INFO);
 
         app = new MeshApp({ nodeID: 'bootstrap-integration-test', logger });
-        app.use(new RegistryModule({ ttl: 5000 }));
+        app.use(new RegistryModule({ ttl: 5000, implementation: PlacementRegistry }));
         app.use(new NetworkModule({ transports: [new WSTransport(new JSONSerializer(), WS_PORT)] }));
         app.use(new DatabaseModule({ dbName: DB_NAME }));
         app.use(new BrokerModule());
 
-        await app.registerModule(new IdentityService());
         await app.registerModule(new CdnService());
         await app.registerModule(new CatalogService());
         await app.registerModule(new ApiService());
 
         await app.start();
+
+        // After start, not before: a standalone part registers against a live broker, and the
+        // broker provider doesn't exist until the app has started.
+        await registerIdentity(app.getProvider<IServiceBroker>('broker'));
 
         const broker = app.getProvider<IServiceBroker>('broker');
         await claim(broker);

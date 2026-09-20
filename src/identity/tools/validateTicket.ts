@@ -1,10 +1,8 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { ValidateInput, ValidateOutput } from '../contracts/ticket.contract.js';
 
 export async function validateTicket(
-    this: IdentityService,
     input: ValidateInput,
     ctx: IServiceContext
 ): Promise<ValidateOutput> {

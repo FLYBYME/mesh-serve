@@ -1,5 +1,4 @@
 import { MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/ticket.contract.js';
@@ -8,7 +7,6 @@ import { verifyPassword, issuedToken } from '../methods/hash.js';
 const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
 
 export async function issueTicket(
-    this: IdentityService,
     input: IssueInput,
     ctx: IServiceContext
 ): Promise<IssueOutput> {

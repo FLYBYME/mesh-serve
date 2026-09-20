@@ -1,11 +1,9 @@
 import { MeshError } from '@flybyme/mesh';
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { GrantRoleInput, GrantRoleOutput } from '../contracts/user.contract.js';
 
 export async function grantRole(
-    this: IdentityService,
     input: GrantRoleInput,
     ctx: IServiceContext
 ): Promise<GrantRoleOutput> {

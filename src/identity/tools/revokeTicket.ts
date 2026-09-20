@@ -1,10 +1,8 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RevokeInput, RevokeOutput } from '../contracts/ticket.contract.js';
 
 export async function revokeTicket(
-    this: IdentityService,
     input: RevokeInput,
     ctx: IServiceContext
 ): Promise<RevokeOutput> {

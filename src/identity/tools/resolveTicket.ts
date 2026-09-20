@@ -1,10 +1,8 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { TicketResolveInput, TicketResolveOutput } from '../contracts/ticket.contract.js';
 
 export async function resolveTicket(
-    this: IdentityService,
     input: TicketResolveInput,
     ctx: IServiceContext
 ): Promise<TicketResolveOutput> {

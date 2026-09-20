@@ -67,9 +67,19 @@ export class ApiService extends ServiceModule {
      * no "platform" organization yet either, so this also no-ops rather than failing; bootstrap.ts
      * is what actually creates both, in the one moment nothing else will retry later.
      */
+    /**
+     * No longer seeds the bootstrap api here. That was a hidden ordering dependency -- it calls
+     * `identity.organization.find_one`, so starting this service before identity was mounted threw
+     * outright, which is exactly the kind of coupling the move to independently-placed parts exists
+     * to remove (a node has no guarantee about what else happens to be loaded on it, or when).
+     *
+     * `bootstrap` already calls `ensureBootstrapApi` itself, explicitly, once, at the one moment
+     * that genuinely owns creating it -- so this was also a duplicate path to the same idempotent
+     * write, just one that ran on every boot of every node and could fail for reasons unrelated to
+     * anything this service does.
+     */
     public async onStart(broker: IServiceBroker): Promise<void> {
         this.broker = broker;
-        await ensureBootstrapApi(broker);
         await this.createServer();
     }
 

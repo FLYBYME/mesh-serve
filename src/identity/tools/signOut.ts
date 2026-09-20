@@ -1,10 +1,8 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { SignOutInput, SignOutOutput } from '../contracts/ticket.contract.js';
 
 export async function signOut(
-    this: IdentityService,
     input: SignOutInput,
     ctx: IServiceContext
 ): Promise<SignOutOutput> {

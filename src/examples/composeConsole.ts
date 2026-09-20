@@ -17,8 +17,9 @@ import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, RegistryModule,
 } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
+import type { IServiceBroker } from '@flybyme/mesh';
 
-import { IdentityService } from '../identity/identity.service.js';
+import { register as registerIdentity } from '../identity/identity.service.js';
 import { CdnService } from '../cdn/cdn.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { ApiService } from '../api/api.service.js';
@@ -90,7 +91,7 @@ async function main(): Promise<void> {
     app.use(new DatabaseModule({ dbName: DB_NAME }));
     app.use(new BrokerModule());
 
-    await app.registerModule(new IdentityService());
+    await registerIdentity(app.getProvider<IServiceBroker>('broker'));
     await app.registerModule(new CdnService());
     await app.registerModule(new CatalogService());
     await app.registerModule(new ApiService());

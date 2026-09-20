@@ -1,11 +1,9 @@
-import { IdentityService } from '../identity.service.js';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { HasRoleInput, HasRoleOutput } from '../contracts/identity.contract.js';
 import { resolveEffectiveRoleKeys, expandRoles } from '../methods/roles.js';
 
 export async function hasRole(
-    this: IdentityService,
     input: HasRoleInput,
     ctx: IServiceContext
 ): Promise<HasRoleOutput> {
