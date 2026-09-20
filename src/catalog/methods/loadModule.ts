@@ -20,17 +20,41 @@ const require = createRequire(import.meta.url);
  * docs/CONTRACT_DRIVEN_PLACEMENT.md's eviction section). Loading a `.cjs` file via `import()` here
  * would work today and quietly foreclose that later.
  */
+/**
+ * What a loaded bundle may export, in either of the two shapes a part can take:
+ *
+ * - `register` -- a standalone part: a plain function handed the broker, which registers whatever it
+ *   owns (`registerCrud`/`registerContract`/`registerCrudHook`/`registerEventHandler`) and returns
+ *   the domain it registered under. No class, no `ServiceModule`. This is the shape parts migrate
+ *   *to*.
+ * - `default` -- the legacy shape: a constructor producing an `IServiceModule`, constructed and
+ *   handed to `broker.registerModule`. This is the shape parts migrate *from*.
+ *
+ * Supporting both is what makes the migration incremental rather than a flag day: a part can move
+ * to `register` on its own schedule, and nothing that loads parts has to know which era a given one
+ * belongs to. `register` is checked first so a module that somehow exports both is unambiguous.
+ */
+interface LoadedPart {
+    register?: (broker: IServiceContext['broker']) => string | Promise<string>;
+    default?: new () => IServiceModule;
+}
+
 export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: string): Promise<{ domain: string; nodeID: string }> {
     const isCjs = absolutePath.endsWith('.cjs');
     // pathToFileURL, not the bare path: Node's dynamic import() accepts an absolute path on POSIX
     // by convention rather than by spec, and a Windows-hosted supervisor would refuse it outright.
     const imported = isCjs
-        ? (require(absolutePath) as { default?: new () => IServiceModule })
-        : (await import(pathToFileURL(absolutePath).href) as { default?: new () => IServiceModule });
+        ? (require(absolutePath) as LoadedPart)
+        : (await import(pathToFileURL(absolutePath).href) as LoadedPart);
+
+    if (typeof imported.register === 'function') {
+        const domain = await imported.register(ctx.broker);
+        return { domain, nodeID: ctx.nodeID };
+    }
 
     if (imported.default === undefined) {
         throw new MeshError({
-            message: `"${absolutePath}" has no default export -- the default export exists because it's constructed.`,
+            message: `"${absolutePath}" exports neither \`register\` (a standalone part) nor a default export (a ServiceModule constructor).`,
             code: 'BAD_REQUEST',
             status: 400,
         });

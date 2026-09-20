@@ -2,10 +2,9 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext, IServiceToolRegistry } from '@flybyme/mesh';
 
 import type { HoldDecideInput, HoldDecideOutput } from '../contracts/hold.contract.js';
-import type { HoldService } from '../hold.service.js';
 
 /**
- * `holdDecideContract` declares `leaderScoped: true`, so this only ever runs on HoldService's
+ * `holdDecideContract` declares `leaderScoped: true`, so this only ever runs on serve.hold's
  * leader node -- but that alone doesn't stop two overlapping decide calls for the *same* hold
  * (a double-click, a retried request) from both reading `status: 'held'` before either writes,
  * and both replaying the frozen call. `withLock`, keyed per holdId, closes that: only one decide
@@ -17,7 +16,6 @@ import type { HoldService } from '../hold.service.js';
  * re-derives or re-validates it beyond whatever the replayed contract's own schema does.
  */
 export async function decide(
-    this: HoldService,
     input: HoldDecideInput,
     ctx: IServiceContext
 ): Promise<HoldDecideOutput> {

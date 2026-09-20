@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMockContext } from '../helpers/mockContext.js';
 import { decide } from '../../../src/hold/tools/decide.js';
-import type { HoldService } from '../../../src/hold/hold.service.js';
-
-const dummyService = {} as HoldService;
 
 /**
  * The real bug this domain had before leaderScoped + withLock: two concurrent decide() calls for
@@ -50,8 +47,8 @@ describe('hold decide: concurrency safety', () => {
         });
 
         const [first, second] = await Promise.allSettled([
-            decide.call(dummyService, { holdId: 'hold-1', approved: true }, ctx),
-            decide.call(dummyService, { holdId: 'hold-1', approved: true }, ctx),
+            decide({ holdId: 'hold-1', approved: true }, ctx),
+            decide({ holdId: 'hold-1', approved: true }, ctx),
         ]);
 
         expect(replayCount).toBe(1);
@@ -90,10 +87,10 @@ describe('hold decide: concurrency safety', () => {
             },
         });
 
-        const rejectedA = await decide.call(dummyService, { holdId: 'hold-a', approved: false }, ctx);
+        const rejectedA = await decide({ holdId: 'hold-a', approved: false }, ctx);
         expect(rejectedA.status).toBe('rejected');
 
-        const rejectedB = await decide.call(dummyService, { holdId: 'hold-b', approved: false }, ctx);
+        const rejectedB = await decide({ holdId: 'hold-b', approved: false }, ctx);
         expect(rejectedB.status).toBe('rejected');
     });
 });

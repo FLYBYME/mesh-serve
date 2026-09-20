@@ -103,6 +103,33 @@ describe('a bare node, loading its own core parts', () => {
         expect(keys).toContain('member');
     });
 
+    it('a part migrated off ServiceModule entirely is fully functional through the same load path', async () => {
+        // serve.hold exports `register(broker)` -- no class, no ServiceModule (see
+        // src/hold/hold.service.ts). It loaded through the identical serve.corePart.load call as
+        // the four that are still ServiceModule-shaped, which is the whole point: the loader
+        // doesn't know which era a part belongs to.
+        const meta = { meta: { tenant_id: 'corepart-tenant' } };
+
+        const created = await broker.call('serve.hold.create', {
+            tenantId: 'corepart-tenant',
+            call: 'identity.whoami',
+            host: 'api.localhost',
+            input: {},
+            requestedBy: { userId: 'u1', roles: ['operator'] },
+            status: 'held',
+            requestedAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+        }, meta);
+        expect(created.id).toBeTruthy();
+
+        // Its CRUD is real (scopedBy tenantId applied, row round-trips)...
+        const found = await broker.call('serve.hold.find', {}, meta);
+        expect(found.map((h) => h.id)).toContain(created.id);
+
+        // ...and its custom contract is mounted too, not just the CRUD.
+        expect(broker.getModule('serve.hold')).toBeUndefined();
+    });
+
     it('a loaded core part can be called through the mesh like any other contract', async () => {
         const user = await broker.call('identity.user.create', {
             email: 'corepart@node.invalid',
