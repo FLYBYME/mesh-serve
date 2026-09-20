@@ -46,6 +46,14 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     // schema. Operator-gated: onboarding a new organization is a platform decision, not something
     // any signed-in account does to itself.
     { contract: 'identity.organization.create', role: 'operator' },
+    // Same finding: onboarding an org is meaningless without a way to put its own owner in it --
+    // without this there is no api-reachable way to make a second tenant's account actually resolve
+    // into that tenant at all (identity.whoami's own organizations[] comes from this collection).
+    { contract: 'identity.membership.create', role: 'operator' },
+    { contract: 'identity.membership.update', role: 'operator' },
+    // Grants/revokes a cluster-scoped role (e.g. the `member`/`admin` a site's own gates check) --
+    // distinct from org membership above, and the only api-reachable way to change one.
+    { contract: 'identity.user.grantRole', role: 'operator' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 
