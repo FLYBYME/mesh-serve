@@ -67,7 +67,7 @@ function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string
     return { sitePath, outPath, force };
 }
 
-async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegistry; mesh: IMeshApp }> {
+async function setup(bootstrapNode = 'ws://127.0.0.1:6005', sharedKey?: string): Promise<{ broker: IServiceBroker; registry: IServiceRegistry; mesh: IMeshApp }> {
     const logger = new Logger(LogLevel.WARN);
     const serializer = new JSONSerializer();
 
@@ -77,8 +77,8 @@ async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegi
 
     node.use(new RegistryModule());
     node.use(new NetworkModule({
-        bootstrapNodes: ['ws://127.0.0.1:6005'],
-        transports: [new WSTransport(serializer, 0)],
+        bootstrapNodes: [bootstrapNode],
+        transports: [new WSTransport(serializer, 0, undefined, { authKey: sharedKey })],
     }));
     node.use(new BrokerModule());
 
@@ -124,7 +124,7 @@ async function syncApi(broker: IServiceBroker, org: Organization): Promise<Api> 
         const created = await broker.call('serve.api.create', {
             tenantId: org.id,
             apiHost: site.api.host,
-            description: 'Console api',
+            description: `Api for ${site.site}`,
         }, { meta });
         console.log('Created api', created.id);
         return created;
@@ -319,10 +319,15 @@ async function syncComposition(broker: IServiceBroker, org: Organization, parts:
         services: services.map((p) => p.id),
     };
 
-    const found = await broker.call('serve.composition.find_one', { query: { tenantId: org.id, key: 'console' } }, { meta });
+    // Keyed by the site's own hostname, not a fixed 'console' -- one process now hosts more than
+    // one site (this file's whole reason to take a --site argument), and a fixed key meant every
+    // site after the first silently overwrote the console's own composition instead of getting its
+    // own. serve.cdn.host is already the platform's unique handle for "which site"; reusing it here
+    // keeps that the one identifier a site has, rather than inventing a second.
+    const found = await broker.call('serve.composition.find_one', { query: { tenantId: org.id, key: site.site } }, { meta });
 
     if (!found) {
-        const created = await broker.call('serve.composition.create', { tenantId: org.id, key: 'console', ...fields }, { meta });
+        const created = await broker.call('serve.composition.create', { tenantId: org.id, key: site.site, ...fields }, { meta });
         console.log('Created composition', created.id);
         return created;
     }
@@ -349,21 +354,34 @@ async function syncSite(
     const meta = { tenant_id: org.id };
     const open = applications.map((p) => ({ application: p.key }));
 
+    // The first application-kind part in declaration order is what the site actually opens; the
+    // rest are bundled and available (mesh-web's own `open` list, above) but not launched by
+    // default -- e.g. dns.site.yaml composes both platform/domains (primary) and
+    // platform/nameserver (a secondary telemetry app, reachable but not the landing page).
+    const primary = applications[0];
+    if (primary === undefined) {
+        throw new Error('No kind: "application" part in spec -- a site needs one to open.');
+    }
+
     const found = await broker.call('serve.cdn.find_one', { query: { tenantId: org.id, host: site.site } }, { meta });
     // `?? {}` matches the create branch's own default below -- a site spec declaring no `policy`
     // means "nothing frozen," the same as every site before this field existed, not "leave whatever
     // was there" (which is what leaving `policy` out of the update call entirely used to silently do).
     const policy = site.policy ?? {};
+    // Empty, not a hardcoded name: serve.cdn's own schema already falls back title to `application`
+    // when title is empty, so this is a real default rather than a second place a site's display
+    // name could be declared and drift from the first.
+    const title = '';
 
     const cdn = found
         ? await broker.call('serve.cdn.update', {
-            id: found.id, apiId: consoleApi.id, application: 'console', open, policy,
-            title: 'Console', description: '',
+            id: found.id, apiId: consoleApi.id, application: primary.key, open, policy,
+            title, description: '',
         }, { meta })
         : await broker.call('serve.cdn.create', {
-            tenantId: org.id, host: site.site, apiId: consoleApi.id, application: 'console',
+            tenantId: org.id, host: site.site, apiId: consoleApi.id, application: primary.key,
             policy, theme: {}, open,
-            title: 'Console', description: '',
+            title, description: '',
             indexable: false, maintenance: false,
         }, { meta });
 
@@ -488,11 +506,16 @@ async function syncGeneratedClient(broker: IServiceBroker, org: Organization, co
  * `outPath` is optional: absent, client generation is skipped rather than guessing a path. See the
  * file header for why there is no longer a spec-declared fallback to guess from.
  */
-export async function syncSpec(sitePath: string, outPath?: string, force = false): Promise<void> {
+export async function syncSpec(
+    sitePath: string,
+    outPath?: string,
+    force = false,
+    connect?: { bootstrapNode?: string; sharedKey?: string },
+): Promise<void> {
     site = loadSite(sitePath);
     console.log('Site spec', sitePath);
 
-    const { broker, mesh } = await setup();
+    const { broker, mesh } = await setup(connect?.bootstrapNode, connect?.sharedKey);
 
     try {
         // No role seeding here either: `bootstrap` calls `identity.role.ensureBuiltins` as part of

@@ -19,7 +19,7 @@ import { isLive, type Session } from './session.js';
  */
 
 /** Built-in names the api must never shadow, however an expose row is spelled. */
-const RESERVED = new Set(['start', 'bootstrap', 'generate', 'login', 'switch', 'help']);
+const RESERVED = new Set(['start', 'bootstrap', 'generate', 'sync', 'login', 'switch', 'help']);
 
 function renderResult(value: unknown): void {
     if (value === undefined) {
