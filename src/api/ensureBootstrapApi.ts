@@ -10,13 +10,19 @@ import type { IServiceBroker } from '@flybyme/mesh';
 export const BOOTSTRAP_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost';
 
 /**
- * Exposed on the bootstrap api the moment it's created -- how a fresh install gets anyone in at
- * all, plus the calls that let an operator start configuring more without anything pre-seeded by
- * hand. Kept minimal on purpose: register, log in, ask who you are, set a real password, and (for the
- * same "configure more" reason as expose.add/remove) resolve an api's own id/tenant from its
- * hostname. Public (no role): it's a read of non-sensitive routing data, the same standing
- * `serve.cdn.resolveHost` already has for exactly the same "for a caller who has nothing else yet"
- * reason. Anything else goes through explicit expose rows once something needs it.
+ * Exposed on the bootstrap api the moment it's created.
+ *
+ * Two groups. The first is how a fresh install gets anyone in at all: register, log in, ask who you
+ * are, set a real password, and resolve an api's own id/tenant from its hostname. Those are public
+ * (no role) because they are reads of non-sensitive routing data, or the login itself -- the same
+ * standing `serve.cdn.resolveHost` already has, for the same "a caller who has nothing else yet"
+ * reason.
+ *
+ * The second is the management surface: everything needed to bring a site up -- repos, parts,
+ * artifacts, compositions, sites, apis and their exposure -- each gated on `operator`. This api is
+ * the *management* api, and that is something its rows make true rather than a kind it is: nothing
+ * structurally marks an api as managerial, and an application api like `my-app-api.localhost`
+ * simply has none of these rows, so these calls 404 there rather than being forbidden.
  */
 export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'identity.user.register' },
@@ -37,6 +43,64 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'identity.organization.find_one' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
+
+    // ── Managing sites, over the api rather than around it ───────────────────────────────────
+    //
+    // `bootstrap` is the last thing that reaches into the mesh directly, because its job is to
+    // create the gate; everything after it is meant to be an ordinary api client. That was only
+    // half true: `src/sync.ts` brings a site up by calling 32 contracts over the mesh, 28 of which
+    // nothing exposed -- so the one workflow the platform exists for had no way through its own
+    // front door, and nobody noticed because the tool that did it skipped the door.
+    //
+    // Why `find_one` and `update` when the console already exposes the plural `find`: those serve
+    // different shapes. A console *browses* -- lists rows and a human picks one. A reconciler
+    // *converges* -- find-or-create-or-update by key, with nobody watching. Only `find_one` and
+    // `update` serve the second, which is why they were missing rather than forgotten.
+    //
+    // Every one carries `role: 'operator'`. The collections' own contracts declare
+    // `permissions: []` (they are reachable in-process by anything already inside the mesh), so
+    // without a role on the row these would be anonymous writes. The row is the floor here, and it
+    // is the whole reason an expose row can name one.
+    { contract: 'serve.repo.find', role: 'operator' },
+    { contract: 'serve.repo.find_one', role: 'operator' },
+    { contract: 'serve.repo.create', role: 'operator' },
+    { contract: 'serve.repo.update', role: 'operator' },
+
+    { contract: 'serve.part.find', role: 'operator' },
+    { contract: 'serve.part.find_one', role: 'operator' },
+    { contract: 'serve.part.create', role: 'operator' },
+    { contract: 'serve.part.update', role: 'operator' },
+    { contract: 'serve.part.start', role: 'operator' },
+    { contract: 'serve.part.stop', role: 'operator' },
+
+    // Reads only. `create`/`update`/`delete` are deliberately internal on this collection, behind
+    // `requestBuild` -- which resolves the part, checks driver kinds and defaults status. Writing
+    // the row directly skips all of that, which is exactly what sync.ts was doing.
+    { contract: 'serve.artifact.find', role: 'operator' },
+    { contract: 'serve.artifact.find_one', role: 'operator' },
+    { contract: 'serve.artifact.get', role: 'operator' },
+    { contract: 'serve.artifact.requestBuild', role: 'operator' },
+    { contract: 'serve.artifact.build', role: 'operator' },
+
+    { contract: 'serve.composition.find', role: 'operator' },
+    { contract: 'serve.composition.find_one', role: 'operator' },
+    { contract: 'serve.composition.create', role: 'operator' },
+    { contract: 'serve.composition.update', role: 'operator' },
+    { contract: 'serve.composition.compose', role: 'operator' },
+
+    { contract: 'serve.cdn.find', role: 'operator' },
+    { contract: 'serve.cdn.find_one', role: 'operator' },
+    { contract: 'serve.cdn.create', role: 'operator' },
+    { contract: 'serve.cdn.update', role: 'operator' },
+    { contract: 'serve.cdn.deploy', role: 'operator' },
+
+    { contract: 'serve.api.find', role: 'operator' },
+    { contract: 'serve.api.find_one', role: 'operator' },
+    { contract: 'serve.api.create', role: 'operator' },
+    { contract: 'serve.api.generateClient', role: 'operator' },
+
+    { contract: 'serve.expose.find', role: 'operator' },
+    { contract: 'serve.expose.find_one', role: 'operator' },
 ];
 
 /**

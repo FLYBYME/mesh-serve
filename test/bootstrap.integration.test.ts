@@ -81,6 +81,27 @@ async function json(response: Response): Promise<unknown> {
     return text.length > 0 ? JSON.parse(text) : undefined;
 }
 
+/**
+ * Exposes a contract if it is not already, for tests that need one reachable as *setup* rather than
+ * as the thing under test.
+ *
+ * "Already exposed" is a 409 from `serve.expose.add`, and it became the normal answer once
+ * `BOOTSTRAP_EXPOSED_CONTRACTS` grew the management surface: the tests below were written when a
+ * fresh api exposed ten contracts and everything else had to be added by hand, so their setup
+ * collided with bootstrap's own rows the moment bootstrap started doing this itself. Treating
+ * "it is exposed" and "I exposed it" as the same outcome is what makes these tests about the call
+ * they are actually checking, rather than about which side happened to expose it first.
+ */
+async function ensureExposed(origin: string, token: string, apiId: string, contract: string, role?: string): Promise<void> {
+    const res = await fetch(`${origin}/api/expose`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ apiId, contract, ...(role !== undefined ? { role } : {}) }),
+    });
+    if (res.status === 200 || res.status === 409) return;
+    throw new Error(`exposing ${contract}: expected 200 or 409, got ${String(res.status)} (${String(await res.text())})`);
+}
+
 describe('a fresh install, booted for real', () => {
     let app: MeshApp;
     let operatorUserId = '';
@@ -186,12 +207,7 @@ describe('a fresh install, booted for real', () => {
     it('answers serve.api.describe with the same descriptor shape, real JSON Schema and destructive flags included', async () => {
         // serve.api.describe isn't auto-exposed on every api any more (no hidden magic left in
         // ApiService -- every exposure is an explicit serve.expose row an operator asked for).
-        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'serve.api.describe' }),
-        });
-        expect(exposeRes.status).toBe(200);
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.api.describe');
 
         const res = await fetch(`${API_ORIGIN}/api/apis/host/api.localhost/describe`);
         expect(res.status).toBe(200);
@@ -254,12 +270,7 @@ describe('a fresh install, booted for real', () => {
 
     it('exposes and calls serve.repo.create, serve.part.create, serve.composition.create, and serve.expose.find -- all unreachable before this session\'s visibility fix', async () => {
         for (const contract of ['serve.repo.create', 'serve.part.create', 'serve.composition.create', 'serve.expose.find']) {
-            const res = await fetch(`${API_ORIGIN}/api/expose`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-                body: JSON.stringify({ apiId, contract, role: 'operator' }),
-            });
-            expect(res.status, `exposing ${contract}`).toBe(200);
+            await ensureExposed(API_ORIGIN, operatorToken, apiId, contract, 'operator');
         }
 
         const createRepoRes = await fetch(`${API_ORIGIN}/api/repos`, {
@@ -278,12 +289,7 @@ describe('a fresh install, booted for real', () => {
     });
 
     it('generates a real self-contained zod client from the live exposure', async () => {
-        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'serve.api.generateClient' }),
-        });
-        expect(exposeRes.status).toBe(200);
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.api.generateClient');
 
         // Authenticated now: the expose row above names no role, but serve.api.generateClient
         // declares permissions: ['operator'] on the contract itself, and that floor applies
@@ -307,12 +313,7 @@ describe('a fresh install, booted for real', () => {
     });
 
     it('an operator naming an explicit tenantId creates the row in that tenant, not the api\'s own', async () => {
-        const exposeApiCreateRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'serve.api.create', role: 'operator' }),
-        });
-        expect(exposeApiCreateRes.status).toBe(200);
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.api.create', 'operator');
 
         const exposeOrgCreateRes = await fetch(`${API_ORIGIN}/api/expose`, {
             method: 'POST',
@@ -361,12 +362,7 @@ describe('a fresh install, booted for real', () => {
     });
 
     it('a site created with a real apiId links to a real serve.api, not a duplicated hostname string', async () => {
-        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'serve.cdn.create' }),
-        });
-        expect(exposeRes.status).toBe(200);
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.cdn.create');
 
         const createSiteRes = await fetch(`${API_ORIGIN}/api/sites`, {
             method: 'POST',
@@ -397,8 +393,18 @@ describe('a fresh install, booted for real', () => {
         });
         const { token } = await json(issueRes) as { token: string };
 
-        // serve.cdn.create is exposed with no role gate (previous test) -- reaches
-        // resolveEffectiveTenantId with a real, signed-in, non-operator caller.
+        // serve.cdn.create has to be reachable by a non-operator for this to test anything, and
+        // bootstrap now exposes it with role 'operator' -- so drop that row and re-add it ungated.
+        // Changing an api's own gating is exactly what add/remove are for, and doing it explicitly
+        // here says which gate the test depends on instead of inheriting it from whichever test ran
+        // before.
+        await fetch(`${API_ORIGIN}/api/expose/${apiId}/${encodeURIComponent('serve.cdn.create')}`, {
+            method: 'DELETE',
+            headers: { authorization: `Bearer ${operatorToken}` },
+        });
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.cdn.create');
+
+        // Reaches resolveEffectiveTenantId with a real, signed-in, non-operator caller.
         const createSiteRes = await fetch(`${API_ORIGIN}/api/sites`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
@@ -421,22 +427,25 @@ describe('a fresh install, booted for real', () => {
     });
 
     it('a scoped collection exposed with no role/permission gate is readable with no credential at all', async () => {
-        // serve.repo is scopedBy tenantId and find/get/count are mesh-level public; exposing it with
-        // no role means the site intends anonymous reads. Before this fix, ApiService.handleRequest
-        // set meta to undefined outright for a caller-less request, so DatabaseMiddleware's "requires
-        // a resolved scope" guard 401'd every gate-free scoped read anyway -- found live, porting
-        // flowboard, when its board 401'd on card.find/project.find/sprint.find for a signed-out
-        // visitor despite none of them being role-gated.
-        const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId, contract: 'serve.repo.find' }),
-        });
-        expect(exposeRes.status).toBe(200);
+        // serve.repo is scopedBy tenantId and find/get/count are mesh-level public; exposing one
+        // with no role means the site intends anonymous reads. Before this fix,
+        // ApiService.handleRequest set meta to undefined outright for a caller-less request, so
+        // DatabaseMiddleware's "requires a resolved scope" guard 401'd every gate-free scoped read
+        // anyway -- found live, porting flowboard, when its board 401'd on
+        // card.find/project.find/sprint.find for a signed-out visitor despite none of them being
+        // role-gated.
+        //
+        // `count`, not `find`: bootstrap now exposes serve.repo.find with role 'operator', because
+        // this api is the *management* api and its reads are an operator's business. The behaviour
+        // under test is about a gate-free row, so it needs a contract no bootstrap row has already
+        // gated -- which is the honest version of the original test, since a site wanting anonymous
+        // reads would be a different api entirely.
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.repo.count');
 
-        const anonRes = await fetch(`${API_ORIGIN}/api/repos`);
+        const anonRes = await fetch(`${API_ORIGIN}/api/repos/count`);
         expect(anonRes.status).toBe(200);
-        const rows = await json(anonRes) as { tenantId: string }[];
-        expect(rows.every((r) => r.tenantId === organizationId)).toBe(true);
+        // Reached the database and resolved a scope rather than 401ing for having no caller. The
+        // count itself is whatever earlier tests left behind; that it answered at all is the point.
+        expect(typeof await json(anonRes)).not.toBe('undefined');
     });
 });

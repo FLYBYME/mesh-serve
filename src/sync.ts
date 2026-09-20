@@ -29,8 +29,6 @@ const execFileAsync = promisify(execFile);
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { IServiceBroker, IMeshApp, IServiceRegistry } from '@flybyme/mesh';
-import type { RegisterInput, User } from './identity/contracts/user.contract.js';
-import { ensureBuiltinRoles } from './identity/builtinRoles.js';
 import type { Organization } from './identity/contracts/organization.contract.js';
 import type { Api } from './api/contracts/api.contract.js';
 import type { Repo } from './catalog/contracts/repo.contract.js';
@@ -62,22 +60,6 @@ function parseArgs(argv: readonly string[]): { sitePath: string; outPath: string
     return { sitePath, outPath, force };
 }
 
-/**
- * Same email identity.service.ts's own first-boot onStart bootstraps ('operator@node.invalid'),
- * deliberately -- syncAdmin below has to recognize *that* account, not mint a second, different
- * one. It used to be a separate 'admin@example.com', which meant on any real node (onStart always
- * runs before this script ever connects) syncAdmin's find_one never matched, fell through to its
- * own register+create path, and collided on the "platform" org's unique slug -- the org bootstrap
- * had already created -- while still leaving behind a real, orphaned second account. Found live:
- * exactly that, a stray 'admin@example.com' with no organization, after a rerun against a fresh
- * database. The password here only matters for the (now rare) case nothing has bootstrapped yet.
- */
-const AdminUser: RegisterInput = {
-    email: 'operator@node.invalid',
-    password: 'password1234567',
-    displayName: 'Platform Admin',
-};
-
 async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegistry; mesh: IMeshApp }> {
     const logger = new Logger(LogLevel.WARN);
     const serializer = new JSONSerializer();
@@ -103,41 +85,28 @@ async function setup(): Promise<{ broker: IServiceBroker; registry: IServiceRegi
     return { broker, registry, mesh: node };
 }
 
-async function syncAdmin(broker: IServiceBroker): Promise<{ org: Organization; user: User }> {
-    const foundUser = await broker.call('identity.user.find_one', { query: { email: AdminUser.email } });
-
-    if (foundUser) {
-        const org = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
-        if (!org) {
-            throw new Error('Admin user exists but "platform" organization does not.');
-        }
-        console.log('Admin user and org already exist', foundUser.id, org.id);
-        return { org, user: foundUser };
+/**
+ * The organization everything here belongs to -- found, never created.
+ *
+ * This used to be `syncAdmin`, which created an operator and the "platform" organization if it
+ * could not find them, hunting for a hardcoded `operator@node.invalid` because that is what
+ * `identity.service.ts`'s first-boot `onStart` used to seed. Neither of those exists any more:
+ * seeding at load time was removed (loading is per node, so five nodes booting meant five racing
+ * seed loops), and `bootstrap` now asks a real person for a real email. So the lookup could never
+ * match on a real cluster, and the fallback path would `register` a second account and then
+ * collide on the "platform" slug bootstrap had already taken -- leaving a stray, orphaned account
+ * behind. That is the same failure its own comment described being fixed once before; making
+ * bootstrap interactive quietly un-fixed it.
+ *
+ * Claiming a cluster is a decision a person makes once, and `bootstrap` is where they make it.
+ * Refusing here, with the command to run, is the honest version of what this was pretending to do.
+ */
+async function requireClaimedCluster(broker: IServiceBroker): Promise<Organization> {
+    const org = await broker.call('identity.organization.find_one', { query: { slug: 'platform' } });
+    if (org === undefined) {
+        throw new Error('This cluster has not been claimed -- no "platform" organization. Run `mesh-serve bootstrap` first.');
     }
-
-    const register = await broker.call('identity.user.register', AdminUser);
-    let user = await broker.call('identity.user.resolve', { id: register.userId });
-    if (!user) {
-        throw new Error('No user found after register.');
-    }
-
-    user = await broker.call('identity.user.update', { id: user.id, provisional: false, roles: ['operator'] });
-
-    const org = await broker.call('identity.organization.create', {
-        slug: 'platform',
-        name: 'Platform',
-        ownerId: user.id,
-    }, { meta: { tenant_id: user.id } });
-
-    await broker.call('identity.membership.create', {
-        userId: user.id,
-        organizationId: org.id,
-        roleKey: 'owner',
-        joinedAt: new Date(),
-    }, { meta: { organization_id: org.id, user_id: user.id } });
-
-    console.log('Created admin user and org', user.id, org.id);
-    return { org, user };
+    return org;
 }
 
 async function syncApi(broker: IServiceBroker, org: Organization): Promise<Api> {
@@ -276,8 +245,13 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
             continue;
         }
 
-        const build = await broker.call('serve.artifact.create', {
-            tenantId: org.id, partId: part.id, ref,
+        // requestBuild, not a raw artifact.create: `serve.artifact`'s own contract declares
+        // create/update/delete internal precisely so every build goes through the validated path
+        // (resolving the part, checking driver kinds, defaulting status). Writing the row directly
+        // skipped all of it -- which worked only because this file talks to the mesh rather than
+        // through the api, where it would have been refused. The api was right and this was wrong.
+        const build = await broker.call('serve.artifact.requestBuild', {
+            partId: part.id, ref,
         }, { meta });
         console.log(`Building ${part.key}@${shortRef}`, build.id);
 
@@ -287,7 +261,9 @@ async function syncArtifacts(broker: IServiceBroker, org: Organization, parts: P
             throw new Error(`Build failed for ${part.key}@${shortRef}`);
         }
 
-        const artifact = await broker.call('serve.artifact.resolve', { id: build.id }, { meta, timeout: 5 * 60_000 });
+        // `get`, not `resolve`: resolve is not public on this collection, so it is unreachable over
+        // the api -- and nothing here needs more than the row by its own id.
+        const artifact = await broker.call('serve.artifact.get', { id: build.id }, { meta, timeout: 5 * 60_000 });
         if (!artifact || artifact.hash === undefined) {
             throw new Error(`No successful artifact for build ${build.id} (${part.key}@${shortRef}).`);
         }
@@ -441,8 +417,10 @@ export async function syncSpec(sitePath: string, outPath?: string, force = false
     const { broker, mesh } = await setup();
 
     try {
-        await ensureBuiltinRoles(broker);
-        const { org } = await syncAdmin(broker);
+        // No role seeding here either: `bootstrap` calls `identity.role.ensureBuiltins` as part of
+        // claiming, before anything can be granted `operator`. Doing it again from here was a
+        // second owner of the same shared cluster state, differing only in which one ran first.
+        const org = await requireClaimedCluster(broker);
 
         const consoleApi = await syncApi(broker, org);
         const repos = await syncRepos(broker, org);
