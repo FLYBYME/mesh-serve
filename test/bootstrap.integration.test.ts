@@ -30,7 +30,13 @@ import '../src/identity/contracts/apiToken.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
 import '../src/cdn/contracts/site.contract.js';
-import { CatalogService } from '../src/catalog/catalog.service.js';
+import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
+import '../src/catalog/contracts/repo.contract.js';
+import '../src/catalog/contracts/part.contract.js';
+import '../src/catalog/contracts/composition.contract.js';
+import '../src/catalog/contracts/artifact.contract.js';
+import '../src/catalog/contracts/release.contract.js';
+import '../src/catalog/contracts/corePart.contract.js';
 import '../src/api/contracts/api.contract.js';
 import '../src/api/contracts/expose.contract.js';
 import '../src/api/contracts/want.contract.js';
@@ -101,7 +107,6 @@ describe('a fresh install, booted for real', () => {
         app.use(new DatabaseModule({ dbName: DB_NAME }));
         app.use(new BrokerModule());
 
-        await app.registerModule(new CatalogService());
 
         await app.start();
 
@@ -112,6 +117,9 @@ describe('a fresh install, booted for real', () => {
         // own contract declares.
         // One call covers identity.user/.ticket/.role/... too -- loadDomain takes the domain and
         // its sub-domains, which is exactly the set one part owns.
+        for (const domain of CATALOG_DOMAINS) {
+            await app.getProvider<IServiceBroker>('broker').loadDomain(domain, {}, { resolve: resolveHandler });
+        }
         await app.getProvider<IServiceBroker>('broker').loadDomain('identity', {}, { resolve: resolveHandler });
         await app.getProvider<IServiceBroker>('broker').loadDomain('serve.cdn', {}, { resolve: resolveHandler });
         await app.getProvider<IServiceBroker>('broker').loadDomain('serve.api', {}, { resolve: resolveHandler });

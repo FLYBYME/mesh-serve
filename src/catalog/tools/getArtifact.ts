@@ -2,10 +2,8 @@ import { Database, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { artifactCrud, type GetArtifactInput, type GetArtifactOutput } from '../contracts/artifact.contract.js';
-import type { CatalogService } from '../catalog.service.js';
 
 export async function getArtifact(
-    this: CatalogService,
     input: GetArtifactInput,
     ctx: IServiceContext,
 ): Promise<GetArtifactOutput> {

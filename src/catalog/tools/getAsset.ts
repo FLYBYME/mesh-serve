@@ -6,11 +6,9 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { type GetAssetInput, type GetAssetOutput } from '../contracts/artifact.contract.js';
-import type { CatalogService } from '../catalog.service.js';
 import { contentTypeFor, artifactAssetPath } from '../methods/artifacts.js';
 
 export async function getAsset(
-    this: CatalogService,
     input: GetAssetInput,
     ctx: IServiceContext,
 ): Promise<GetAssetOutput> {

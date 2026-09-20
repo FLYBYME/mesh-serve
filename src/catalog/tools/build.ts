@@ -2,10 +2,10 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { BuildInput, BuildOutput } from '../contracts/artifact.contract.js';
-import type { CatalogService } from '../catalog.service.js';
+import { buildArtifact } from '../methods/buildArtifact.js';
 
 /**
- * The dispatch target serve.queue actually calls. buildArtifact (private on CatalogService)
+ * The dispatch target serve.queue actually calls. buildArtifact
  * already swallows its own failures into an artifact-status update rather than throwing -- that's
  * right for watchRelease's old inline loop (one artifact's failure shouldn't stop the next), but
  * it would make every build look like a "completed" queue job even when the build failed. Re-check
@@ -13,7 +13,6 @@ import type { CatalogService } from '../catalog.service.js';
  * honest record of whether the dispatch actually worked.
  */
 export async function build(
-    this: CatalogService,
     input: BuildInput,
     ctx: IServiceContext,
 ): Promise<BuildOutput> {
@@ -28,7 +27,7 @@ export async function build(
     }
 
     const start = Date.now();
-    await this.buildArtifact(artifact);
+    await buildArtifact(ctx.broker, artifact);
     const duration = Date.now() - start;
 
 

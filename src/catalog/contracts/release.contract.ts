@@ -1,6 +1,7 @@
 import { defineContract, defineCrud, z } from '@flybyme/mesh';
 
 import { releaseArtifactSchema, releaseSchema } from '../schema/release.js';
+import { computeReleaseHash } from '../methods/release.js';
 
 export const releaseCrud = defineCrud('serve.release', releaseSchema, {
     pluralPath: 'releases',
@@ -8,6 +9,17 @@ export const releaseCrud = defineCrud('serve.release', releaseSchema, {
     unique: [{ fields: 'hash', scope: 'global' }],
     visibility: {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
+    },
+    hooks: {
+        create: {
+            // A release is identified by the content it pins, so its hash is derived, not supplied
+            // -- unless the caller already computed the same thing and passed it.
+            before: (input: never) => {
+                const record = input as unknown as { hash?: string; compositionId: string; artifacts: ReleaseArtifact[] };
+                if (record.hash !== undefined) return record;
+                return { ...record, hash: computeReleaseHash(record.compositionId, record.artifacts) };
+            },
+        },
     },
     dependencies: ['serve.composition', 'serve.artifact'],
     filePath: 'src/catalog/contracts/release.contract.ts',

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { discoverPartContracts } from '../../../src/cli/core/discoverPartContracts.js';
+import { CATALOG_DOMAINS } from '../../../src/catalog/domains.js';
 
 /**
  * `filePath` has to name the module that actually implements the contract.
@@ -25,6 +26,17 @@ function partDirs(): string[] {
         .filter((e) => e.isDirectory() && fs.existsSync(path.join(SRC, e.name, 'contracts')))
         .map((e) => e.name);
 }
+
+describe('the catalog names its own domains', () => {
+    // Every other part's domain list is derived. The catalog's is written out (src/catalog/
+    // domains.ts) because it owns serve.corePart.load and so cannot be loaded through it -- which
+    // means a newly added catalog domain would be silently absent from every booted node. This is
+    // the check that catches that.
+    it('CATALOG_DOMAINS matches what the catalog contracts actually declare', () => {
+        const { domains } = discoverPartContracts(path.join(SRC, 'catalog'));
+        expect([...CATALOG_DOMAINS].sort()).toEqual([...domains].sort());
+    });
+});
 
 describe('every contract points at real, loadable code', () => {
     const dirs = partDirs();

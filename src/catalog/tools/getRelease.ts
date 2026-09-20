@@ -2,10 +2,8 @@ import { Database, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { releaseCrud, type GetReleaseInput, type GetReleaseOutput } from '../contracts/release.contract.js';
-import type { CatalogService } from '../catalog.service.js';
 
 export async function getRelease(
-    this: CatalogService,
     input: GetReleaseInput,
     ctx: IServiceContext,
 ): Promise<GetReleaseOutput> {

@@ -11,7 +11,18 @@ import { WSTransport } from '@flybyme/mesh/node';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
-import { CatalogService } from '../../catalog/catalog.service.js';
+import type { IServiceBroker } from '@flybyme/mesh';
+
+import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
+import { CATALOG_DOMAINS } from '../../catalog/domains.js';
+// Importing a contract module is what registers its contracts, which is where loadDomain reads
+// them from.
+import '../../catalog/contracts/repo.contract.js';
+import '../../catalog/contracts/part.contract.js';
+import '../../catalog/contracts/composition.contract.js';
+import '../../catalog/contracts/artifact.contract.js';
+import '../../catalog/contracts/release.contract.js';
+import '../../catalog/contracts/corePart.contract.js';
 
 const LogLevelMap: Record<string, LogLevel> = {
     error: LogLevel.ERROR,
@@ -84,12 +95,20 @@ export class StartCommand extends BaseCommand {
 
         node.use(new BrokerModule());
 
-        // The one thing this command still knows about by name -- serve.catalog owns
+        await node.start();
+
+        // The one thing this command still knows about by name -- the catalog owns
         // serve.part.start/serve.corePart.load, the mechanism that loads everything else,
         // including mesh-serve's own identity/cdn/hold/queue/api. Nothing else is mounted here.
-        await node.registerModule(new CatalogService());
-
-        await node.start();
+        //
+        // Loaded like any other part, from what its contracts declare. It just cannot load itself
+        // through serve.corePart.load, because that contract is one of the ones being loaded --
+        // so the list of its domains is written out here, and this is the only place in the
+        // codebase that names a part's domains by hand.
+        const broker = node.getProvider<IServiceBroker>('broker');
+        for (const domain of CATALOG_DOMAINS) {
+            await broker.loadDomain(domain, {}, { resolve: resolveHandler });
+        }
 
         this.logger.info(`Node "${args.nodeID}" up (catalog kernel only). Run bootstrap to claim it, or serve.part.start/serve.corePart.load to load more.`);
     }

@@ -3,7 +3,6 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { ComposeInput, ComposeOutput } from '../contracts/composition.contract.js';
 import type { Part } from '../contracts/part.contract.js';
-import type { CatalogService } from '../catalog.service.js';
 import { computeReleaseHash } from '../methods/release.js';
 
 function sameDrivers(a: readonly string[], b: readonly string[]): boolean {
@@ -59,7 +58,6 @@ async function latestArtifact(part: Part, tenantId: string, drivers: readonly st
 }
 
 export async function compose(
-    this: CatalogService,
     input: ComposeInput,
     ctx: IServiceContext,
 ): Promise<ComposeOutput> {

@@ -1,8 +1,8 @@
 /**
  * The new boot model, end to end, against a real node and real MongoDB.
  *
- * `mesh-serve start` no longer mounts all six services statically -- it brings up the catalog
- * kernel and nothing else. Everything else (identity, cdn, hold, queue, api) is precompiled to
+ * `mesh-serve start` no longer mounts anything statically -- it brings up the catalog kernel and
+ * nothing else, and there are no *.service.ts files left anywhere to mount. Everything else (identity, cdn, hold, queue, api) is precompiled to
  * CommonJS at build time (`cli/core/buildCoreParts.ts` -> `dist/parts/*.cjs`) and loaded onto a
  * running node through `serve.corePart.load`, the same generic load-and-register path
  * `serve.part.start` uses for a third party's own service -- just resolving the file from this
@@ -21,7 +21,13 @@ import {
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
-import { CatalogService } from '../src/catalog/catalog.service.js';
+import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
+import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
+import '../src/catalog/contracts/repo.contract.js';
+import '../src/catalog/contracts/part.contract.js';
+import '../src/catalog/contracts/composition.contract.js';
+import '../src/catalog/contracts/artifact.contract.js';
+import '../src/catalog/contracts/release.contract.js';
 import { CORE_PART_NAMES } from '../src/catalog/contracts/corePart.contract.js';
 
 const DB_NAME = 'mesh-serve-corepart-integration-test';
@@ -40,8 +46,8 @@ describe('a bare node, loading its own core parts', () => {
         await client.db(DB_NAME).dropDatabase();
         await client.close();
 
-        // ApiService/CdnService read their ports from env at onStart -- set before they're loaded,
-        // exactly as start.ts does now.
+        // The api and cdn gateways read their ports from env when their listen contract runs -- set
+        // before they're loaded, exactly as start.ts does.
         process.env.API_PORT = String(API_PORT);
         process.env.SERVER_PORT = String(CDN_PORT);
         process.env.PUBLIC_SCHEME = 'http';
@@ -56,11 +62,13 @@ describe('a bare node, loading its own core parts', () => {
         app.use(new DatabaseModule({ uri, dbName: DB_NAME }));
         app.use(new BrokerModule());
 
-        // The one thing start.ts still mounts by name.
-        await app.registerModule(new CatalogService());
         await app.start();
-
         broker = app.getProvider<IServiceBroker>('broker');
+
+        // The one thing start.ts still mounts by name -- loaded exactly as start.ts does it.
+        for (const domain of CATALOG_DOMAINS) {
+            await broker.loadDomain(domain, {}, { resolve: resolveHandler });
+        }
     }, 30000);
 
     afterAll(async () => {
@@ -119,11 +127,8 @@ describe('a bare node, loading its own core parts', () => {
     });
 
     it('a part with no hand-written registration at all is fully functional through the same load path', async () => {
-        // serve.hold has no service file. Its entry point is src/hold/handlers.generated.ts, which
-        // is derived from its contracts' own declared filePaths -- nothing enumerates what to
-        // mount. It loaded through the identical serve.corePart.load call as the ones still
-        // exporting a class, which is the whole point: the loader doesn't know which era a part
-        // belongs to.
+        // serve.hold has no registration file. Its bundle's entry is synthesized at build time from
+        // its contracts' own declared filePaths -- nothing enumerates what to mount.
         const meta = { meta: { tenant_id: 'corepart-tenant' } };
 
         const created = await broker.call('serve.hold.create', {

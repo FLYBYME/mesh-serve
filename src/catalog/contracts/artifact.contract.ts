@@ -162,3 +162,33 @@ export const artifactBuildContract = defineContract({
 
 export type BuildInput = z.infer<typeof artifactBuildContract.inputSchema>;
 export type BuildOutput = z.infer<typeof artifactBuildContract.outputSchema>;
+
+export const watchReleaseOutputSchema = z.object({
+    enqueued: z.number().describe('Pending artifacts handed to serve.queue by this sweep'),
+}).describe('What one build sweep found');
+
+/**
+ * The pending-artifact sweep, as an interval contract: the broker owns the 60s timer, so there is
+ * no `watchInterval` field and no `clearInterval` in an `onStop` to remember.
+ *
+ * Not `leaderScoped`, deliberately -- the sweep flips each artifact to 'running' before enqueuing
+ * it, so two nodes sweeping concurrently cannot enqueue the same artifact twice, and the write
+ * itself is what serializes them.
+ */
+export const artifactWatchReleaseContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'watchRelease',
+    description: 'Find pending artifacts across every tenant and enqueue a build for each.',
+    inputSchema: z.object({}),
+    outputSchema: watchReleaseOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/watch' },
+    destructive: true,
+    dependencies: ['serve.artifact', 'serve.queue'],
+    filePath: 'src/catalog/tools/watchRelease.ts',
+    concurrency: 'interval',
+    intervalMs: 60_000,
+    permissions: [],
+    print: (o) => `enqueued ${o.enqueued}`,
+});
+
+export type WatchReleaseOutput = z.infer<typeof artifactWatchReleaseContract.outputSchema>;

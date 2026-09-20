@@ -2,10 +2,8 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RequestBuildInput, RequestBuildOutput } from '../contracts/artifact.contract.js';
-import type { CatalogService } from '../catalog.service.js';
 
 export async function requestBuild(
-    this: CatalogService,
     input: RequestBuildInput,
     ctx: IServiceContext,
 ): Promise<RequestBuildOutput> {

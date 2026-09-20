@@ -28,7 +28,13 @@ import '../identity/contracts/ticket.contract.js';
 import '../identity/contracts/apiToken.contract.js';
 import '../identity/contracts/identity.contract.js';
 import '../cdn/contracts/site.contract.js';
-import { CatalogService } from '../catalog/catalog.service.js';
+import { CATALOG_DOMAINS } from '../catalog/domains.js';
+import '../catalog/contracts/repo.contract.js';
+import '../catalog/contracts/part.contract.js';
+import '../catalog/contracts/composition.contract.js';
+import '../catalog/contracts/artifact.contract.js';
+import '../catalog/contracts/release.contract.js';
+import '../catalog/contracts/corePart.contract.js';
 import '../api/contracts/api.contract.js';
 import '../api/contracts/expose.contract.js';
 import '../api/contracts/want.contract.js';
@@ -101,13 +107,13 @@ async function main(): Promise<void> {
     app.use(new DatabaseModule({ dbName: DB_NAME }));
     app.use(new BrokerModule());
 
-    await app.registerModule(new CatalogService());
 
     await app.start();
 
     // After start, not before: serve.cdn's register binds its listener through
     // serve.cdn.listen, which is a real call and wants a running broker underneath it.
     const broker = app.getProvider<IServiceBroker>('broker');
+    for (const domain of CATALOG_DOMAINS) await broker.loadDomain(domain, {}, { resolve: resolveHandler });
     await broker.loadDomain('identity', {}, { resolve: resolveHandler });
     await broker.call('identity.role.ensureBuiltins', {});
     await broker.loadDomain('serve.cdn', {}, { resolve: resolveHandler });
