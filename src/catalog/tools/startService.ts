@@ -1,7 +1,11 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { PartStartInput, PartStartOutput } from '../contracts/part.contract.js';
+import type { Artifact } from '../contracts/artifact.contract.js';
 import { artifactAssetPath } from '../methods/artifacts.js';
 import { ensureArtifactNodeModules } from '../methods/build.js';
 import { getRunningService, markServiceRunning } from '../methods/services.js';
@@ -39,6 +43,8 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
         throw new MeshError({ message: `Artifact ${artifact.hash} for "${part.key}" has no .js entry.`, code: 'NOT_FOUND', status: 404 });
     }
 
+    await ensureArtifactPresent(ctx, artifact as Artifact & { hash: string }, jsAsset.url, meta);
+
     // buildService marks @flybyme/mesh external and relies entirely on this symlink to resolve it
     // at runtime (see ensureArtifactNodeModules's own doc comment) -- only ever created during a
     // build, so a part whose artifact was *linked* from an existing cache this run (no build step
@@ -46,9 +52,54 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
     // buildService, is what makes starting a cached artifact work the same as starting a fresh one.
     await ensureArtifactNodeModules('@flybyme/mesh');
 
-    const absolutePath = artifactAssetPath(artifact.hash, jsAsset.url);
+    const absolutePath = artifactAssetPath(artifact.hash, jsAsset.url, ctx.nodeID);
     const { domain, nodeID } = await loadAndRegisterModule(ctx, absolutePath);
     markServiceRunning(ctx.nodeID, part.id, domain, absolutePath);
 
     return { domain, nodeID };
+}
+
+/**
+ * `~/.mesh/artifacts` is plain node-local disk, written only by whichever node ran the build
+ * (`buildArtifact.ts`, dispatched off the serve.queue leader -- a single node). Placement --
+ * automatic (`placementFor`) or pinned (`nodeSelector`) -- routinely picks a *different* node to
+ * actually run the part, so this has to close that gap before `loadAndRegisterModule` ever tries
+ * to import a path that was never written here.
+ *
+ * `jsAssetUrl` alone is checked for local presence -- cheap, and it's the one file that has to
+ * exist for the import below to succeed at all -- but every asset in `artifact.assets` is fetched
+ * and written back, not just that one, so a node that pulls an artifact ends up with the same
+ * complete local copy a real build would have produced (source maps included).
+ */
+async function ensureArtifactPresent(
+    ctx: IServiceContext,
+    artifact: Artifact & { hash: string },
+    jsAssetUrl: string,
+    meta: Record<string, unknown>,
+): Promise<void> {
+    const localPath = artifactAssetPath(artifact.hash, jsAssetUrl, ctx.nodeID);
+    const alreadyLocal = await fs.access(localPath).then(() => true, () => false);
+    if (alreadyLocal) return;
+
+    if (artifact.builtOn === undefined || artifact.builtOn === ctx.nodeID) {
+        // Missing, and either nobody recorded having built it (an artifact from before this field
+        // existed) or the node that supposedly did is this one -- fetching from ctx.nodeID would
+        // just fail the same way again. Only a rebuild can fix either case.
+        throw new MeshError({
+            message: `Artifact ${artifact.hash} has no local copy on this node and no other node is recorded as having built it. Rebuild with serve.artifact.requestBuild.`,
+            code: 'NOT_FOUND',
+            status: 404,
+        });
+    }
+
+    for (const asset of artifact.assets ?? []) {
+        const { contentBase64 } = await ctx.call('serve.artifact.fetchAssetBytes', {
+            artifactHash: artifact.hash,
+            path: asset.url,
+        }, { nodeID: artifact.builtOn, meta });
+
+        const destination = artifactAssetPath(artifact.hash, asset.url, ctx.nodeID);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, Buffer.from(contentBase64, 'base64'));
+    }
 }

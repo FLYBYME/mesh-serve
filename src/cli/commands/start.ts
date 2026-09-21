@@ -51,6 +51,7 @@ const startInputSchema = z.object({
     host: z.string().default('127.0.0.1').describe('Interface to bind the mesh transport (--wsPort) to -- 0.0.0.0 (or a real address) for a multi-machine cluster, the default loopback for a single local node. Non-loopback requires --sharedKey'),
     bootstrapNode: z.string().optional().describe('ws:// URL of an existing node to join as a peer, e.g. ws://10.0.0.5:6005 -- omit to start a fresh, standalone cluster of one'),
     parts: z.string().optional().describe(`Core parts to run on this node, comma-separated (${CORE_PART_NAMES.join(', ')}) -- what this node is *for*. Only needed for parts that nothing will ever call into existence: an http listener (api, cdn) or a timer (queue) is never demand-loaded, because the demand arrives through the thing that isn't running yet. Everything else loads on first call and needs no flag. The usual second-node case is --parts api,cdn`),
+    labels: z.array(z.string()).optional().describe('This node\'s own labels, as key=value pairs (e.g. --labels role=dns region=bhs) -- carried in every presence broadcast (serve.node.find) and what serve.part\'s nodeSelector matches against to pin a service to this node instead of wherever placementFor would otherwise pick'),
 });
 
 export class StartCommand extends BaseCommand {
@@ -68,6 +69,7 @@ export class StartCommand extends BaseCommand {
     protected async execute(args: z.infer<typeof startInputSchema>): Promise<void> {
         const logger = new Logger(LogLevelMap[args.logLevel]);
         const serializer = new JSONSerializer();
+        const labels = this.parseLabels(args.labels);
 
         const node = new MeshApp({
             nodeID: args.nodeID,
@@ -94,7 +96,7 @@ export class StartCommand extends BaseCommand {
         // any real multi-node cluster each peer was marked offline two thirds of the time, pruned,
         // rediscovered, and pruned again -- silently, since a single node never notices. Found the
         // first time two nodes ran together. The default (30000, two presences) is correct.
-        node.use(new RegistryModule({ implementation: PlacementRegistry }));
+        node.use(new RegistryModule({ implementation: PlacementRegistry, metadata: labels }));
         node.use(new NetworkModule({
             transports: [transport],
             ...(args.bootstrapNode !== undefined ? { bootstrapNodes: [args.bootstrapNode] } : {}),
@@ -157,5 +159,18 @@ export class StartCommand extends BaseCommand {
             throw new Error(`Unknown part(s) in --parts: ${unknown.join(', ')}. Known parts: ${CORE_PART_NAMES.join(', ')}.`);
         }
         return Array.from(new Set(names)) as CorePartName[];
+    }
+
+    /** Same up-front validation as parseParts -- a malformed --labels token fails before anything joins. */
+    private parseLabels(raw: string[] | undefined): Record<string, string> {
+        const labels: Record<string, string> = {};
+        for (const token of raw ?? []) {
+            const eq = token.indexOf('=');
+            if (eq <= 0) {
+                throw new Error(`--labels expects "key=value" pairs, got "${token}".`);
+            }
+            labels[token.slice(0, eq)] = token.slice(eq + 1);
+        }
+        return labels;
     }
 }

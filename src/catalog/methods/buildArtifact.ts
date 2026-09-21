@@ -88,6 +88,7 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
             hash,
             assets,
             duration,
+            builtOn: broker.nodeID,
         }, { meta });
 
         // wants is resolved from the repo at build time (mesh.wants.json), not hand-edited --

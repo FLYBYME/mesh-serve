@@ -3,6 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { partCrud } from '../contracts/part.contract.js';
 import type { PartReconcileOutput } from '../contracts/supervisor.contract.js';
+import { resolveNodeSelector } from '../methods/resolveNode.js';
 
 /**
  * One pass of desired-vs-observed.
@@ -48,14 +49,25 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         const runningOn = observed.get(part.id);
 
         if (part.desired === 'running' && runningOn === undefined) {
-            // `placementFor`, not `leaderFor`: the latter only considers nodes already advertising
-            // the thing, so for a service nobody is running it answers undefined -- correctly, and
-            // uselessly here. Deterministic either way, so every pass agrees on where this belongs
-            // without remembering a previous decision, and the answer moves on its own when a node
-            // leaves.
-            const target = ctx.broker.registry.placementFor(part.key);
+            // A declared nodeSelector is a pin, not a hint: honor it or fail loudly, never fall back
+            // to automatic placement silently. Real physical constraints (DNS on the box with the
+            // right PTR record, mail on the box with the established sending IP) mean "somewhere" is
+            // sometimes the wrong answer, and a pin that quietly landed elsewhere would be worse than
+            // one that visibly failed.
+            //
+            // With no selector: `placementFor`, not `leaderFor` -- the latter only considers nodes
+            // already advertising the thing, so for a service nobody is running it answers undefined
+            // -- correctly, and uselessly here. Deterministic either way, so every pass agrees on
+            // where this belongs without remembering a previous decision, and the answer moves on its
+            // own when a node leaves.
+            const target = part.nodeSelector !== undefined
+                ? resolveNodeSelector(ctx.broker.registry, part.nodeSelector)
+                : ctx.broker.registry.placementFor(part.key);
             if (target === undefined) {
-                failed.push({ partId: part.id, key: part.key, error: 'no node available to place it on' });
+                const error = part.nodeSelector !== undefined
+                    ? `no online node matches nodeSelector "${part.nodeSelector}"`
+                    : 'no node available to place it on';
+                failed.push({ partId: part.id, key: part.key, error });
                 continue;
             }
 

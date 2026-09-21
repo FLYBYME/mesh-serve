@@ -17,4 +17,5 @@ export const artifactSchema = z.object({
   assets: z.array(artifactAssetSchema).optional().describe('Every file this artifact serves; set once status is success'),
   error: z.string().optional().describe('What went wrong; set once status is failed'),
   duration: z.number().optional().describe('How long this build took in seconds'),
+  builtOn: z.string().optional().describe('nodeID that produced this build\'s files; set once status is success. ~/.mesh/artifacts is node-local disk, never replicated -- serve.part.start fetches from this node (serve.artifact.fetchAssetBytes) the first time a different node needs to load it'),
 }).describe('One attempt to build a part at a git ref, and its output once it succeeds');

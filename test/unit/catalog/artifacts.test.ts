@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { MeshError } from '@flybyme/mesh';
-import { contentTypeFor, artifactAssetPath, artifactDir } from '../../../src/catalog/methods/artifacts.js';
+import { contentTypeFor, artifactAssetPath, artifactDir, setTestArtifactDir, clearTestArtifactDirs } from '../../../src/catalog/methods/artifacts.js';
 
 describe('catalog artifact utilities', () => {
     describe('contentTypeFor', () => {
@@ -112,6 +112,30 @@ describe('catalog artifact utilities', () => {
         it('rejects directory itself or parent directory references', () => {
             expect(() => artifactAssetPath(hash, '.')).toThrow(MeshError);
             expect(() => artifactAssetPath(hash, '..')).toThrow(MeshError);
+        });
+
+        describe('nodeID test-seam override', () => {
+            afterEach(() => clearTestArtifactDirs());
+
+            it('resolves against the real artifactDir when no override is registered for that nodeID', () => {
+                expect(artifactAssetPath(hash, 'entry.js', 'unregistered-node')).toBe(
+                    path.resolve(artifactDir, hash, 'entry.js'),
+                );
+            });
+
+            it('resolves against a registered override only for the nodeID it was set for', () => {
+                setTestArtifactDir('node-a', '/tmp/fake-artifacts-a');
+
+                expect(artifactAssetPath(hash, 'entry.js', 'node-a')).toBe(
+                    path.resolve('/tmp/fake-artifacts-a', hash, 'entry.js'),
+                );
+                expect(artifactAssetPath(hash, 'entry.js', 'node-b')).toBe(
+                    path.resolve(artifactDir, hash, 'entry.js'),
+                );
+                expect(artifactAssetPath(hash, 'entry.js')).toBe(
+                    path.resolve(artifactDir, hash, 'entry.js'),
+                );
+            });
         });
     });
 });

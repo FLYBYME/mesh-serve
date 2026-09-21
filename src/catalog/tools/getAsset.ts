@@ -12,7 +12,7 @@ export async function getAsset(
     input: GetAssetInput,
     ctx: IServiceContext,
 ): Promise<GetAssetOutput> {
-    const filePath = artifactAssetPath(input.artifactHash, input.path);
+    const filePath = artifactAssetPath(input.artifactHash, input.path, ctx.nodeID);
 
     let stat;
     try {

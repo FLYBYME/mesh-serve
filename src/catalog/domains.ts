@@ -9,6 +9,7 @@ import './contracts/artifact.contract.js';
 import './contracts/release.contract.js';
 import './contracts/corePart.contract.js';
 import './contracts/supervisor.contract.js';
+import './contracts/node.contract.js';
 
 /**
  * The domains the catalog part implements.
@@ -30,4 +31,5 @@ export const CATALOG_DOMAINS = [
     'serve.artifact',
     'serve.release',
     'serve.corePart',
+    'serve.node',
 ] as const;

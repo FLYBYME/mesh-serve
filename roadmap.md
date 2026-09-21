@@ -782,3 +782,105 @@ again -- the exact sequence that used to throw `"domain.create" is already mount
 Confirmed the test is load-bearing, not incidentally green: reverted just the `loadModule.ts` change
 and reran it alone, which failed at the exact assertion (`unloaded.contracts` was `0`) the fix makes
 true. 234/234 on the full suite with the fix in.
+
+---
+
+## Done — real multi-node deployment has no node-targeting over the api, and artifacts don't travel
+
+Found reasoning through "how do I run surfdns code across 6 real VPS" rather than one localhost demo
+process. Two separate, confirmed gaps, both load-bearing for that goal and neither exercised by any
+test so far (everything tested this far has been one node):
+
+**1. `serve.part.start` cannot be aimed at a specific node through the api.** `ServiceBroker.call`
+(`mesh/src/core/ServiceBroker.ts:1063`) dispatches locally whenever the calling node already has the
+tool mounted (`!targetNodeID && !this.localTools.has(toolName)` -- local wins, no registry lookup,
+no placement). `serve.part` is one of `CATALOG_DOMAINS`, loaded on every node by `start.ts`, so
+`serve.part.start` is always local on whichever node's `ApiService` actually receives the HTTP
+request. `partStartContract`'s own doc comment (`part.contract.ts`) says targeting is "`ctx.call`'s
+own job, the `nodeID` call option" -- true internally, but `gateway.ts`'s `handleRequest` never
+passes `nodeID` through from an incoming request, and there is no `nodeID`-shaped input field on the
+contract either (deliberately, per that same comment, to avoid two ways to say the same thing). Net
+effect: **through the api -- the only sanctioned path, since mesh-serve's own CLI must not touch the
+mesh network directly -- every `serve.part.start` call lands on whichever single node is running the
+`api` core part, with no way to choose otherwise.** `createCorePartPlacement`'s own comment confirms
+this is known and scoped out on purpose for third-party parts: "a third party's own service lives in
+the artifact store behind `serve.part.start` and needs a `serve.part` row to find it; that is a
+separate provider and is not built yet."
+
+**2. Artifacts are node-local filesystem state, never replicated.** `artifactDir` (`catalog/methods/
+artifacts.ts`) is `~/.mesh/artifacts/<hash>/` on whatever machine ran the build. `startService.ts`
+resolves `artifactAssetPath(artifact.hash, jsAsset.url)` and loads it straight off that node's own
+disk -- no fetch-if-missing, even though `serve.artifact.getAsset`/`getArtifact` already exist and
+could serve the bytes from whichever node built it. Builds run wherever the `serve.queue` leader
+currently is (`buildArtifact.ts`, dispatched off a `leaderScoped` interval) -- a single node, not
+necessarily the one an operator later asks to start the part. A part built on node A and started via
+node B's api will resolve a hash that never landed on B's disk and fail to load.
+
+**Practical workaround with zero new code**, since each api instance dispatches locally: run a
+`mesh-serve start --parts api,cdn` (or whichever core parts a box needs) on every VPS that should
+host workloads, all joined into one mesh (`--host`, `--sharedKey`, `--bootstrapNode`, one shared
+`MONGODB_URI` reachable from all boxes so `serve.part`/`serve.repo`/`serve.artifact` rows are the
+same catalog everywhere) -- then use the CLI's `switch`/`login` to address a specific VPS's own api
+directly when placing a part there. Because local-dispatch always wins, this is currently the *only*
+way to choose the node. The artifact problem still has to be handled by hand in this workaround: a
+part must be built and started against the same node's api (so the build and the local disk agree),
+or the built `~/.mesh/artifacts/<hash>/` directory has to be copied to the target box out of band
+before `serve.part.start` there.
+
+**Fixed**, on a different shape than either draft above once `serve.part.reconcile` (`tools/
+reconcile.ts`, added the same week this file's supervisor section was written) turned out to already
+place every `desired: running` service cluster-wide via `registry.placementFor(part.key)` -- the real
+gap was never "no placement at all," it was "no way to *pin*" a hash-based automatic pick can't
+respect physical constraints like `paas/SERVERS.md`'s (DNS on `ns1`/`ns2`, mail on `surf`'s one
+established sending IP). So the fix landed as two additive pieces instead of a `serve.part.start`
+wrapper:
+
+1. **Labels.** `NodeInfo.metadata` (`mesh`) already propagates to every peer for free -- `broadcast
+   Presence` sends the whole local node record, and `registerNode` stores `metadata` as given -- but
+   every constructor hardcoded `metadata: {}`. `Registry`/`PlacementRegistry`/`RegistryModule` (mesh
+   v4.1.0) now accept a `metadata` option; `mesh-serve start --labels role=dns region=bhs` sets it.
+   `serve.node.find` (new, `catalog/contracts/node.contract.ts`) lists what's online and its labels,
+   optionally filtered by one. `resolveNode.ts`'s `resolveNodeSelector`/`nodesForLabel` resolve a
+   `"key=value"` selector or an exact nodeID against `getAvailableNodes()`.
+2. **Pinning.** `serve.part` gained `nodeSelector` (`catalog/schema/part.ts`), a sibling of `desired`
+   rather than a parameter on the imperative `serve.part.start` (whose own "no `nodeID` field" doc
+   comment stays correct and untouched -- pinning is declarative, not a one-off flag).
+   `reconcile.ts` resolves it via `resolveNodeSelector` when set, `placementFor(part.key)` when not,
+   and fails a pin that matches nothing online into `failed[]` with a clear message rather than
+   silently falling back to automatic placement.
+3. **Artifacts.** `serve.artifact` gained `builtOn` (set to `broker.nodeID` in `buildArtifact.ts` on
+   every success). New internal contract `serve.artifact.fetchAssetBytes` (no `visibility`, same
+   pattern as `serve.corePart.load`) reads one asset's real bytes off whichever node has them.
+   `startService.ts`'s new `ensureArtifactPresent` checks the js asset locally first; if missing and
+   `builtOn` names a different node, it fetches every asset in `artifact.assets` from that node
+   (`{ nodeID: artifact.builtOn }`, the same internal targeting `reconcile.ts` already uses for
+   `runningHere`/`start`/`stop`) and writes them into the local `~/.mesh/artifacts/<hash>/` before
+   falling through to the existing `ensureArtifactNodeModules`/`loadAndRegisterModule` path unchanged.
+
+**Verified**, not just typechecked: `mesh` 556/556 (two new specs assert a constructed registry's own
+`getNode(id).metadata` reflects a passed `metadata` option and survives a later `registerContract`,
+which is the whole mechanism labels depend on). `mesh-serve` 243/243, including two new integration
+files exercising real two-`MeshApp` clusters (not mocks):
+
+- `test/nodeLabels.integration.test.ts` -- `serve.node.find` reflects real labels and narrows by one;
+  `serve.part.reconcile` resolves a label selector, an exact-nodeID selector, and reports (rather than
+  silently swallowing) an unmatched one, distinguished from an ordinary unbuilt-part failure by the
+  error text each produces.
+- `test/artifactPortability.integration.test.ts` -- proves the fetch is real, not routing-only: two
+  nodes are given genuinely separate artifact directories (`setTestArtifactDir`, a nodeID-keyed test
+  seam in `artifacts.ts` that is always empty and a no-op in production -- one real node has exactly
+  one real `~/.mesh/artifacts`), a build's bytes are written to only one of them, and after
+  `serve.part.start` targets the other, its disk is asserted to now genuinely contain the identical
+  fetched file. A second case confirms an artifact with no recorded `builtOn` (predates this field, or
+  a genuinely unknown builder) fails cleanly rather than attempting a pointless self-fetch.
+
+**Also found, not fixed (out of scope here):** no test before this one ever drove a real
+`serve.part.start` handler far enough under `vitest run` to reach `ensureArtifactNodeModules`
+(`build.ts`), which resolves `@flybyme/mesh` via `import.meta.resolve` -- Vitest's SSR module
+transform doesn't implement that (`__vite_ssr_import_meta__.resolve is not a function`).
+`registerShapeRestart.integration.test.ts` avoids it by calling `loadAndRegisterModule` directly for
+unrelated reasons, and that happened to hide this too. `artifactPortability.integration.test.ts`
+works around it (asserts the fetch's filesystem effect directly rather than requiring the call to
+fully succeed) rather than fixing Vitest's SSR transform, which is unrelated to artifact portability.
+Worth a real fix if anything else ever needs `serve.part.start` to succeed end-to-end under this test
+runner.

@@ -104,6 +104,40 @@ export const artifactGetAssetContract = defineContract({
 export type GetAssetInput = z.infer<typeof artifactGetAssetContract.inputSchema>;
 export type GetAssetOutput = z.infer<typeof artifactGetAssetContract.outputSchema>;
 
+export const fetchAssetBytesInputSchema = z.object({
+    artifactHash: z.string().min(1).describe('The artifact hash a file lives under'),
+    path: z.string().min(1).describe('The path to the asset within that artifact'),
+}).describe('One file\'s real bytes out of a built artifact, for another node to copy locally');
+
+export const fetchAssetBytesOutputSchema = z.object({
+    contentBase64: z.string().describe('The file\'s exact bytes, base64-encoded'),
+}).describe('One artifact asset file\'s content');
+
+/**
+ * Internal (no `visibility`), like `serve.corePart.load`: this moves a build's real bytes between
+ * two nodes' own disks, never something an ordinary api caller has a reason to call directly.
+ * `startService.ts` is the one caller -- when it goes to start a `kind: 'service'` part whose
+ * artifact was built on a *different* node than the one asked to run it (~/.mesh/artifacts is
+ * node-local, never replicated), it calls this once per asset, targeted at `artifact.builtOn` via
+ * the same `nodeID` call option every other cross-node call in this framework already uses, and
+ * writes the result into its own local artifact store under the same content hash before loading.
+ */
+export const artifactFetchAssetBytesContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'fetchAssetBytes',
+    description: 'Read one artifact asset\'s real bytes off this node\'s own disk, for another node to copy.',
+    inputSchema: fetchAssetBytesInputSchema,
+    outputSchema: fetchAssetBytesOutputSchema,
+    rest: { method: 'GET', path: '/artifacts/:artifactHash/assets/:path/bytes' },
+    filePath: 'src/catalog/tools/fetchAssetBytes.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.contentBase64.length} base64 chars`,
+});
+
+export type FetchAssetBytesInput = z.infer<typeof artifactFetchAssetBytesContract.inputSchema>;
+export type FetchAssetBytesOutput = z.infer<typeof artifactFetchAssetBytesContract.outputSchema>;
+
 export const requestBuildInputSchema = z.object({
     partId: z.string().min(1).describe('The serve.part to build -- kernel, driver, application, extension, and theme are all queued the same way'),
     ref: z.string().min(1).describe('The git ref to build at'),

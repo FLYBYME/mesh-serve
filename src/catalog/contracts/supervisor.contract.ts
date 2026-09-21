@@ -61,9 +61,11 @@ export const partReconcileOutputSchema = z.object({
  * every node loads this and only one acts -- and leadership moving is picked up on the next tick
  * without anything watching for it.
  *
- * Placement is deterministic rather than balanced: the target node is `leaderFor(part.key)`, so
- * every pass agrees on where a given service belongs without needing to remember a previous
- * decision. A real scheduler would weigh capacity; this only has to be stable and to converge.
+ * Placement is deterministic rather than balanced: with no `nodeSelector` the target node is
+ * `placementFor(part.key)`, so every pass agrees on where a given service belongs without needing
+ * to remember a previous decision. A real scheduler would weigh capacity; this only has to be
+ * stable and to converge. A declared `nodeSelector` (serve.part's own field) overrides this with an
+ * exact nodeID or a "key=value" label match instead -- see reconcile.ts.
  */
 export const partReconcileContract = defineContract({
     domain: 'serve.part',
