@@ -884,3 +884,64 @@ works around it (asserts the fetch's filesystem effect directly rather than requ
 fully succeed) rather than fixing Vitest's SSR transform, which is unrelated to artifact portability.
 Worth a real fix if anything else ever needs `serve.part.start` to succeed end-to-end under this test
 runner.
+
+---
+
+## Open — a `long-running` contract in a `register()`-shaped part is never started by anything
+
+Found live, putting `surfdns-proxy` on the real genesis node. `serve.part.reconcile` starts a
+`desired: running` service with `serve.part.start`, which mounts a `register()` part's contracts and
+stops there -- a `concurrency: 'long-running'` contract (`proxy.listen`, `dns.listen`) is never
+called, so the part is "running" and binds nothing. Someone has to call `listen` by hand, and that
+call does not survive a node restart: the reconciler brings the part back, the ports stay dark.
+
+Two related findings from the same session, both fixed at the source rather than here:
+
+- `proxy.listen` and `dns.listen` declared no `visibility`, which defaults to internal, and
+  `serve.expose.add` refuses anything non-public ("is not a public contract") -- so neither could be
+  called through the api at all. `surfdns-proxy` fixed (b088683); `surfdns-nameserver` still has it.
+- `serve.part.start` does not touch `desired`, so a hand-started service is stopped by the very next
+  30s reconcile tick (`desired` defaults `stopped`). Documented on the field, but easy to walk into:
+  it looked like "running" for about half a minute.
+
+Direction, not decided: have `reconcile` (or `startService`) also invoke a started part's
+`long-running` contracts with their declared defaults, so `desired: running` means "listening", not
+"mounted". The open question is where a listener's parameters (port, host) come from -- the contract's
+input has them, the `serve.part` row does not, and `options` on the part is the obvious home.
+
+---
+
+## Done — a real multi-machine cluster: peers dropped as "ghosts of self", and a silent presence storm
+
+Found the first time three real machines (edge1, ns1, ns2 -- every node `--host 0.0.0.0` on the same
+port 6005) were joined into one cluster. Every earlier multi-node test ran on one machine, where each
+node has its own port. Two bugs, one symptom-free-looking and one very loud:
+
+**1. Peers were connected but never registered.** A node's identity in the registry is its address,
+and `registerNode` discards any peer whose address overlaps the local node's ("ghost of self", a
+debug-level log). A node advertised `ws://${bindHost}:${port}` -- `ws://0.0.0.0:6005` on a wildcard
+bind -- plus whatever `TransportManager.getAddresses` enumerated, which was only loopback: its
+`eval('require')('os')` throws inside an ES module and the surrounding `catch` swallows it. So every
+node advertised the same addresses, every peer looked like the local node, and the transport joined
+happily ("Peer connected", "Connected to MongoDB", `Node "ns1" up`) while `serve.node.find` listed
+one node. Nothing in any log said why.
+
+**2. It became a busy loop.** `handlePresence` decides a peer `isNew` *before* `registerNode` runs,
+and replies to a new peer immediately so it learns about us. A refused peer is new on every packet, so
+every packet drew a reply -- and the peer, refusing us the same way, did the same. Presence packets
+ping-ponged at wire speed with no timer and nothing logged: all three nodes pinned one core at
+100% within a minute of joining, and a `serve.node.find` that takes 1.8s took 13.4s. Any refusal path
+(address conflict, not just this one) would have looped the same way.
+
+**Fixed** in `mesh` v4.2.0: `handlePresence` returns without replying when the registry did not accept
+the peer (regression test drives five packets from a refused peer and asserts zero replies -- it failed
+with five before the change); and `advertiseHost` on `NetworkModule`/`MeshNetwork` -- the address a
+node tells peers to dial, separate from the interface it binds, and the *only* address advertised when
+set. A wildcard bind without one now warns. In mesh-serve, `start --advertise <public ip or host>`,
+and joining a cluster (`--bootstrapNode`) from a wildcard bind without it is a hard error, since that
+combination cannot work and fails silently.
+
+**Not done, worth doing:** `getAddresses`' interface enumeration still silently returns loopback only
+(the `eval('require')` in an ES module). With `advertiseHost` it no longer matters for a cluster that
+sets it, but a node that does not will still advertise loopback and lose to the same collision on a
+shared port.

@@ -49,6 +49,7 @@ const startInputSchema = z.object({
     publicApiPort: z.coerce.number().optional().describe('Port appended to those same public-facing api URLs -- unset in production, where the public port is always the standard one for publicScheme. Needed only when apiPort is reached directly, unproxied (e.g. matching --apiPort for local dev)'),
     sharedKey: z.string().optional().describe('Shared secret required to join this node\'s mesh network (WSTransport\'s own authKey) -- also read from MESH_KEY if unset. Anything that can open a connection to --wsPort can otherwise call internal contracts directly, bypassing every api-level role/exposure check; required if --host binds to a non-loopback address'),
     host: z.string().default('127.0.0.1').describe('Interface to bind the mesh transport (--wsPort) to -- 0.0.0.0 (or a real address) for a multi-machine cluster, the default loopback for a single local node. Non-loopback requires --sharedKey'),
+    advertise: z.string().optional().describe('The address other nodes reach this one on -- its public IP or hostname -- when --host is a wildcard (0.0.0.0). A node\'s identity in the registry is its address, so without this every node on a wildcard bind advertises ws://0.0.0.0:<port> and each peer discards the others as a copy of itself. Required to join a cluster (--bootstrapNode) from a wildcard bind'),
     bootstrapNode: z.string().optional().describe('ws:// URL of an existing node to join as a peer, e.g. ws://10.0.0.5:6005 -- omit to start a fresh, standalone cluster of one'),
     parts: z.string().optional().describe(`Core parts to run on this node, comma-separated (${CORE_PART_NAMES.join(', ')}) -- what this node is *for*. Only needed for parts that nothing will ever call into existence: an http listener (api, cdn) or a timer (queue) is never demand-loaded, because the demand arrives through the thing that isn't running yet. Everything else loads on first call and needs no flag. The usual second-node case is --parts api,cdn`),
     labels: z.array(z.string()).optional().describe('This node\'s own labels, as key=value pairs (e.g. --labels role=dns region=bhs) -- carried in every presence broadcast (serve.node.find) and what serve.part\'s nodeSelector matches against to pin a service to this node instead of wherever placementFor would otherwise pick'),
@@ -70,6 +71,15 @@ export class StartCommand extends BaseCommand {
         const logger = new Logger(LogLevelMap[args.logLevel]);
         const serializer = new JSONSerializer();
         const labels = this.parseLabels(args.labels);
+
+        // Checked before anything binds, like parseParts/parseLabels. From a wildcard bind with no
+        // advertised address a joining node tells the cluster to dial "0.0.0.0", which every peer
+        // reads as itself -- so it connects, logs a healthy join, and is never registered. A lone
+        // genesis node on a wildcard bind is unaffected until something else joins it (mesh warns).
+        const wildcard = args.host === '0.0.0.0' || args.host === '::';
+        if (wildcard && args.bootstrapNode !== undefined && args.advertise === undefined) {
+            throw new Error(`--host ${args.host} joins a cluster with no way for peers to dial it back. Pass --advertise <this machine's public IP or hostname>.`);
+        }
 
         const node = new MeshApp({
             nodeID: args.nodeID,
@@ -99,6 +109,7 @@ export class StartCommand extends BaseCommand {
         node.use(new RegistryModule({ implementation: PlacementRegistry, metadata: labels }));
         node.use(new NetworkModule({
             transports: [transport],
+            ...(args.advertise !== undefined ? { advertiseHost: args.advertise } : {}),
             ...(args.bootstrapNode !== undefined ? { bootstrapNodes: [args.bootstrapNode] } : {}),
         }));
 
