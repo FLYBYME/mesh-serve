@@ -887,7 +887,7 @@ runner.
 
 ---
 
-## Open — a `long-running` contract in a `register()`-shaped part is never started by anything
+## Done — a `long-running` contract in a `register()`-shaped part is never started by anything
 
 Found live, putting `surfdns-proxy` on the real genesis node. `serve.part.reconcile` starts a
 `desired: running` service with `serve.part.start`, which mounts a `register()` part's contracts and
@@ -904,10 +904,28 @@ Two related findings from the same session, both fixed at the source rather than
   30s reconcile tick (`desired` defaults `stopped`). Documented on the field, but easy to walk into:
   it looked like "running" for about half a minute.
 
-Direction, not decided: have `reconcile` (or `startService`) also invoke a started part's
-`long-running` contracts with their declared defaults, so `desired: running` means "listening", not
-"mounted". The open question is where a listener's parameters (port, host) come from -- the contract's
-input has them, the `serve.part` row does not, and `options` on the part is the obvious home.
+**Fixed** (mesh-serve v0.7.0) with a new `serve.part` field, `onStart`: a list of `{ contract, params }`
+the part declares, e.g. `[{ "contract": "dns.listen", "params": { "port": 53, "host": "<public ip>" } }]`.
+The answer to "where do a listener's parameters come from" was neither of the two candidates above
+(not the contract's defaults, and not `options`, which is documented as a mesh-web constructor
+argument): its own field, so what a service *starts* is stated on the part like `desired` and
+`nodeSelector` are.
+
+Where it runs matters more than what it is. It runs inside `serve.part.start`, on the node that just
+mounted the part -- not from `reconcile`, and not from outside. From outside it cannot work: an api
+call lands on whichever node the balancer picks, so two nameservers sharing `dns.listen` cannot each
+be told to listen. From `reconcile` it would run once per start but a failure would go unseen, since
+the part is already "running" and the supervisor never looks again. Inside the start, it is local by
+construction and survives every restart. **All or nothing:** an entry that throws unloads the part
+again (unregistering a `long-running` contract aborts its `ctx.signal`, which closes any listener an
+earlier entry opened) and rethrows, so the part is not-running and the next 30s tick retries from the
+top -- a service that mounted but failed to listen is never left looking healthy.
+
+Verified with `test/onStart.integration.test.ts` (real broker, real `register()`-shaped fixture with
+a `long-running` contract): an entry gets its declared params; a failing second entry leaves nothing
+listening and the part unloaded; a part with no `onStart` is untouched. Driven through `runOnStart`
+rather than `serve.part.start` for the same `import.meta.resolve`-under-vitest reason as artifact
+portability above.
 
 ---
 

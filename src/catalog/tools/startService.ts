@@ -10,6 +10,7 @@ import { artifactAssetPath } from '../methods/artifacts.js';
 import { ensureArtifactNodeModules } from '../methods/build.js';
 import { getRunningService, markServiceRunning } from '../methods/services.js';
 import { loadAndRegisterModule } from '../methods/loadModule.js';
+import { runOnStart } from '../methods/onStart.js';
 
 export async function startService(input: PartStartInput, ctx: IServiceContext): Promise<PartStartOutput> {
     const part = await ctx.db('serve.part').resolve({ id: input.id });
@@ -55,6 +56,10 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
     const absolutePath = artifactAssetPath(artifact.hash, jsAsset.url, ctx.nodeID);
     const { domain, nodeID } = await loadAndRegisterModule(ctx, absolutePath);
     markServiceRunning(ctx.nodeID, part.id, domain, absolutePath);
+
+    // After it is marked running, not before: runOnStart's failure path unloads the part and clears
+    // exactly that mark, so the mark has to exist for the cleanup to undo.
+    await runOnStart(ctx, part, absolutePath, meta);
 
     return { domain, nodeID };
 }
