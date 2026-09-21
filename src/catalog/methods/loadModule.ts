@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-import { MeshError } from '@flybyme/mesh';
+import { MeshError, toolKey } from '@flybyme/mesh';
 import type { ContractHandlerMap, IServiceContext } from '@flybyme/mesh';
 
 import { resolveHandler } from './resolveHandler.js';
@@ -198,15 +198,27 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
     }
 
     if (typeof imported.register === 'function') {
+        // `register(broker)` mounts whatever it likes with no obligation to say what -- but
+        // every contract it mounts is already sitting in `broker.listContracts()` the instant
+        // `registerContract`/`registerCrud` runs, because that is the whole point of the list.
+        // Snapshotting it before and after is what `loadDomain` gets for free by filtering the
+        // *same* information down to one domain before mounting anything; `register` mounts
+        // first and names no domain up front, so the only difference is doing the filtering
+        // after the fact instead of before. No change needed in any `register.ts` -- this reads
+        // real broker state, not something the part has to opt into reporting.
+        const before = new Set(ctx.broker.listContracts().map((contract) => toolKey(contract)));
+
         const registration = await imported.register(ctx.broker);
         const domain = typeof registration === 'string' ? registration : registration.domain;
         if (typeof registration !== 'string' && registration.stop) {
             partTeardown.set(domain, registration.stop);
         }
-        // No contract list: a `register` part mounts whatever it likes without telling anyone, so
-        // unloading one can run its `stop` and evict its module but cannot unmount its contracts.
-        // That asymmetry is the reason the manifest shape is the one to write.
-        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [domain], contracts: [] });
+
+        const mounted = ctx.broker.listContracts()
+            .map((contract) => toolKey(contract))
+            .filter((key) => !before.has(key));
+
+        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [domain], contracts: mounted });
         return { domain, nodeID: ctx.nodeID };
     }
 

@@ -734,7 +734,7 @@ were.
 
 ---
 
-## Open — a `register()`-shaped `kind: 'service'` part cannot be cleanly restarted
+## Done — a `register()`-shaped `kind: 'service'` part cannot be cleanly restarted
 
 Found live, composing `dns.site.yaml` end to end for the first time against real third-party repos
 (`surfdns-registry`, `surfdns-domains`, `surfdns-nameserver`) rather than mesh-serve's own six core
@@ -759,18 +759,26 @@ node` -- a 500, not the clean 400 "already running" a stale-tracking case would 
 **Immediate, sufficient fix for now**: declare `desired: running` on every `kind: 'service'` part
 meant to stay up, so the reconciler never calls `stop` on it at all. Done for `dns.site.yaml`.
 
-**The real gap, unresolved**: any `register()`-shaped service *will* hit this the moment something
-legitimately toggles `desired` to `'stopped'` and back (an operator pausing a service, a supervisor
-decision, anything short-lived) -- stop silently does not do what its own 200 response claims. Two
-directions, not decided:
-- Make `register(broker)` itself trackable: wrap the `broker` handed to it so every
-  `registerContract`/`registerCrud` call is recorded, the same way the manifest shape's `loadDomain`
-  already knows exactly what it mounted. This closes the gap for every `register()`-shaped part at
-  once, with no change needed in any of them.
-- Or: stop pretending `register()` is stoppable at all -- have `serve.part.stop` refuse outright for
-  a part with no recorded contract list, with a message naming the manifest shape as the fix, rather
-  than reporting `{ stopped: true }` for something it did not actually do.
+**Fixed**, the same day, on a simpler mechanism than either direction above considered: no wrapping,
+no refusal. `loadAndRegisterModule`'s `register` branch now snapshots `broker.listContracts()`
+immediately before calling `register(broker)` and again immediately after, and records whatever tool
+keys are new as the contract list `unloadAndEvictModule` unregisters. Every contract a `register()`
+call mounts is already sitting in that list the instant `registerContract`/`registerCrud` runs --
+that is the whole reason the list exists -- so this needed no cooperation from any `register.ts` at
+all, past or future. `loadDomain` gets its own clean unmount by filtering the *same* information
+down to one domain before mounting anything; this is the identical filter run after the fact instead
+of before, because `register()` mounts first and names no domain up front.
 
-Whichever direction, `serve.part.stop`'s current `{ stopped: true }` for a `register()`-shaped part
-is a real lie today, and every one of `surfdns-registry`/`surfdns-domains`/`surfdns-nameserver`'s new
-`register.ts` entries (added this session, replacing the manifest shape's absence) is exposed to it.
+Both wrong turns worth naming, since they were the first two things this looked like: wrapping the
+broker handed to `register()` would have worked but is strictly more machinery for the same answer,
+and refusing to stop a `register()`-shaped part at all would have papered over a bug that had an
+actual fix instead of designing around it.
+
+Verified with a new, real fixture (`test/fixtures/register-shape/widget.ts`, a genuine
+`register(broker)` export -- not a mock) and a new integration test
+(`test/registerShapeRestart.integration.test.ts`) that starts it, confirms its contract is live and
+callable, stops it, confirms the contract is genuinely gone (a 404, not just a claim), and starts it
+again -- the exact sequence that used to throw `"domain.create" is already mounted on this node`.
+Confirmed the test is load-bearing, not incidentally green: reverted just the `loadModule.ts` change
+and reran it alone, which failed at the exact assertion (`unloaded.contracts` was `0`) the fix makes
+true. 234/234 on the full suite with the fix in.
