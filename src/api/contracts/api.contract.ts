@@ -8,6 +8,7 @@ export const apiCrud = defineCrud('serve.api', apiSchema, {
     unique: [{ fields: 'apiHost', scope: 'global' }],
     visibility: {
         find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public',
+        update: 'public', delete: 'public',
     },
     dependencies: [],
     filePath: 'src/api/contracts/api.contract.ts',
