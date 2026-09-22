@@ -138,7 +138,16 @@ export class ApiGateway {
     }
 
     private async resolveHostname(req: http.IncomingMessage): Promise<string> {
-        const host = req.headers.host;
+        // A route through the edge proxy connects to this node's own upstream address (e.g.
+        // 127.0.0.1:5005), not the public hostname a client actually typed -- Node's http.request
+        // sets the outgoing Host header to whatever address it's connecting to, unless told
+        // otherwise. The proxy already sends the real one separately, the standard way
+        // (x-forwarded-host, set from surfdns-proxy/src/services/wire/gateway.ts); prefer it,
+        // falling back to Host for a direct, unproxied hit (e.g. this node's own --publicApiPort).
+        // Found live: every request through a real route resolved to "No api for host 127.0.0.1"
+        // instead of the api the client actually asked for.
+        const forwardedHost = req.headers['x-forwarded-host'];
+        const host = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) ?? req.headers.host;
         if (host === undefined) {
             throw new MeshError({ code: 'Bad Request', message: 'No host header', status: 400 });
         }
