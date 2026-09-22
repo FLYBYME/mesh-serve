@@ -1106,6 +1106,10 @@ missing on either side (a mixed-version peer mid-rollout). Regression tests
 orderings plus the missing-`bootedAt` fallback -- the reverse-ordering case failed under the
 `trusted`-only version of the fix and passes with `bootedAt` added. `mesh-serve` bumped to v0.7.7.
 
+Confirmed live: after rolling `v0.7.7` out to the real cluster, `ns1` shows its real `--labels`
+through `edge1` -- five consecutive reads, all correct, matching `ns2` and `edge1`'s own. DNS on both
+nameservers and the proxy stayed healthy through the whole rollout.
+
 ---
 
 ## Done — the PEX metadata fix alone wasn't enough: registerNode still locked labels at {}
