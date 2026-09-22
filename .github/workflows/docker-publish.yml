@@ -1,0 +1,46 @@
+name: Publish Docker image
+
+# Tags only, same discipline as mesh's own publish.yml: a release is an explicit act (bump the
+# version, merge, tag), and the tag is both the trigger and the record of what was released. No
+# floating build-on-every-push -- "which version is this" should always be answerable by the tag
+# alone, on the image and in whatever systemd unit/docker run line references it.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the tag matches the version in package.json
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}."
+            exit 1
+          fi
+          echo "Publishing ${PKG_VERSION} from ${GITHUB_REF_NAME}."
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/flybyme/mesh-serve:${{ github.ref_name }}
+            ghcr.io/flybyme/mesh-serve:latest
