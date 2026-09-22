@@ -1061,3 +1061,27 @@ bind on `edge1` identically; `ns1` just got there first.
 the runtime stage, before `USER node`. A file capability is independent of the calling process's uid,
 still bounded by whatever the container itself was granted. Verified directly: a plain
 `dgram.createSocket('udp4').bind(53, ...)` as `--user node` succeeds in the rebuilt image.
+
+---
+
+## Done — the PEX metadata fix alone wasn't enough: registerNode still locked labels at {}
+
+Found immediately after v4.2.2 (the PEX fix, two entries up) shipped and rolled out: cycling
+`edge1`/`ns1`/`ns2` through Docker restarts within minutes of each other, both spokes still landed
+at `{}` on the hub, this time for a different reason. `registerNode`'s equal-`nodeSeq` fast path
+(the branch a second registration for an already-known node takes) only ever refreshed
+`available`/`cpu`/`activeRequests` -- never metadata, PEX fix or not. So whichever packet happened
+to register a peer *first* for a given `nodeSeq` permanently decided its labels: a genuine race
+between a peer's own direct presence (always correct) and a second-hand PEX relay through the hub
+(now carrying real metadata thanks to v4.2.2, but still capable of relaying an intermediary's own
+stale, pre-reconnect copy) -- and on a cluster where three nodes reconnect to each other within
+seconds of each other, that race is not rare.
+
+**Fixed** in `mesh` v4.2.3: the equal-`nodeSeq` path now takes `node.metadata` whenever the incoming
+packet actually has a non-empty one, and never erases real metadata with an empty one. Safe because,
+unlike services or capacity, a node's `--labels` are fixed for its whole lifetime -- there's no
+staleness for `nodeSeq` to guard against here. Regression test
+(`RegisterNodeMetadataBackfill.spec.ts`, run against both `Registry` and `PlacementRegistry`) drives
+an empty-then-real registration at the same `nodeSeq` and the reverse order -- both failed before
+the fix (real labels either never arrived, or arrived and then got erased), both pass after.
+`mesh-serve` bumped to v0.7.6 to pick it up.
