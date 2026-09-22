@@ -1163,3 +1163,7 @@ real `bootstrapNodes: string[]` and dialing every entry -- the CLI just never ex
 Now variadic (`--bootstrapNode <values...>`, same pattern as `--labels`), so a node can hold genuine,
 direct connections to more than one hub at once instead of relying on `dialLearnedPeer` for the rest.
 Every OVH box's unit now bootstraps from both `surf` and `edge1`.
+
+Confirmed live: `ss -tn` on `ns1` and `ns2` now shows a real `ESTAB` connection to each of `surf` and
+`edge1`, not just one. Both nameservers back to answering authoritatively, the proxy responding, and
+`serve.node.find` stable across repeated reads.
