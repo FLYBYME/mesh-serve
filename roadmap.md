@@ -1008,3 +1008,35 @@ documented escape hatch for this (`Database.repo()`: unscoped, no hooks, "use `c
 specifically need every tenant's rows") is the likely shape -- a trusted infrastructure service reading
 its own projection directly rather than a tenant-scoped cross-service call. Not started: it changes how
 `surfdns-nameserver` is built and which of its tests mean anything, so it wants a decision.
+
+---
+
+## Done — a peer's `--labels` never actually reached any other node's registry, only its own
+
+Found rolling the Docker image out to the live cluster: `serve.node.find` from `edge1` showed real
+labels for itself but `{}` for both `ns1` and `ns2` -- immediately after `ns1` (never touched by
+tonight's Docker work, running the exact same code as before) turned out to show the same empty
+labels, ruling out the rollout itself.
+
+Root cause was in `mesh` core, not mesh-serve: `MeshOrchestrator.gossipRound`'s peer projection lists
+the `NodeInfo` fields worth forwarding to other nodes by hand, and `metadata` (an operator's
+`--labels` set) was never one of them -- the same class of bug already fixed once for `hostname`
+("a node learned about second-hand showed up as unknown forever"), just never applied to the field
+this session's own `--labels`/`nodeSelector` work added. A peer's *own* direct presence broadcast
+always carried metadata correctly (`broadcastPresence` sends the whole node record); the only path
+that dropped it was second-hand discovery through an intermediary -- which, on a hub-and-spoke
+topology (every spoke bootstraps to `edge1`, spokes never connect directly to each other), is the
+*only* way one spoke ever learns about another at all. And once a peer was first registered via PEX
+with empty metadata, `registerNode`'s equal-`nodeSeq` fast path (only refreshes
+`available`/`cpu`/`activeRequests`) meant a later, correct presence packet for that same `nodeSeq`
+could never backfill it -- so this wasn't a startup race, it was permanent for the life of the node.
+
+Nothing pinned by `nodeSelector` broke tonight only by luck: every part with a label selector
+(`role=control-plane`) happens to select the node that evaluates it, and both nameserver parts use an
+exact `nodeID`, not a label, having been pinned that way while chasing an unrelated issue earlier.
+A label selector aimed at a genuinely remote node would have silently matched nothing.
+
+**Fixed** in `mesh` v4.2.2: `metadata: n.metadata` added to the `gossipRound` peer projection.
+Regression test (`PexMetadata.spec.ts`) drives the real `gossipRound` closure with a mocked
+`publish`, asserting the outgoing PEX payload carries a peer's metadata, and that a receiver's
+`registerNode` stores it intact -- failed (empty object) before the fix, passes after.
