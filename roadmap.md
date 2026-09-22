@@ -1064,7 +1064,7 @@ still bounded by whatever the container itself was granted. Verified directly: a
 
 ---
 
-## Open — a node's own presence can still lose to a stale second-hand relay of itself
+## Done — a node's own presence can still lose to a stale second-hand relay of itself
 
 Found live, after both metadata fixes above (v4.2.2, v4.2.3) shipped: `ns1` still showed `{}` on
 `edge1` no matter how many times it reconnected, while `ns2` showed correctly. A one-off debug-level
@@ -1081,15 +1081,30 @@ for that `nodeSeq` -- including `ns1`'s own genuine presence, before it ever rea
 equal-`nodeSeq` backfill added in the fix above. Not metadata-specific: the same guard would drop a
 real address or capability change from a freshly-restarted node the same way.
 
-The real fix isn't another field-level patch: `registry.registerNode` currently can't tell a node's
-own first-hand report about itself (`handlePresence`, always authoritative) from second-hand gossip
-about it (`handlePEX`, genuinely staleness-prone, which is what the `nodeSeq` guard exists to filter).
-Collapsing both into one function with one comparison is the actual gap. Likely shape: a separate
-entry point (or a `trusted` flag) that lets first-hand presence always win, while PEX keeps today's
-`nodeSeq` gate. Not started -- found and diagnosed live against production without hot-patching it
-(a `docker exec sed -i` into the running container was, correctly, refused), not worth a rushed fix
-under time pressure. Does not block anything today: DNS and the proxy both work regardless of what
-`serve.node.find` displays, and nothing currently pins placement to `ns1` by label, only by nodeID.
+Diagnosed live against production without hot-patching it (a `docker exec sed -i` into the running
+container was, correctly, refused) -- a one-off `--logLevel debug` restart, reverted immediately
+after, was enough.
+
+**Fixed** in `mesh` v4.2.4, in two parts. First, a `trusted` flag on `registerNode` (`true` only from
+`handlePresence`, never from `handlePEX`): a node's own first-hand report about itself skips the
+`nodeSeq` guard entirely, since that guard exists to filter second-hand gossip, not to second-guess a
+node speaking for itself. That alone closed the *observed* ordering (relay first, genuine presence
+1.4s later) but not the reverse -- a stale relay arriving *after* a correct trusted registration could
+still fully replace it, because "incoming nodeSeq is numerically higher" already won outright,
+trusted or not, and a stale relay's cached nodeSeq from a peer's *previous*, longer-lived boot really
+can be numerically higher than that peer's fresh, low nodeSeq after restarting. `nodeSeq` alone cannot
+tell "genuinely newer, from the current boot" apart from "stale, from a previous boot" when both are
+higher than what's on record.
+
+Second, and the part that actually closes the gap for good: `bootedAt` -- already on `NodeInfo`,
+already relayed faithfully through both presence and PEX, set once at process start and never
+recomputed -- is a real generation marker in a way `nodeSeq` was never meant to be. When both sides
+of a comparison have one and they disagree, it settles which record is newer on its own, independent
+of `nodeSeq` or `trusted`; the `nodeSeq`+`trusted` logic remains the fallback for when `bootedAt` is
+missing on either side (a mixed-version peer mid-rollout). Regression tests
+(`TrustedPresenceOutranksStaleRelay.spec.ts`, both `Registry` and `PlacementRegistry`) drive both
+orderings plus the missing-`bootedAt` fallback -- the reverse-ordering case failed under the
+`trusted`-only version of the fix and passes with `bootedAt` added. `mesh-serve` bumped to v0.7.7.
 
 ---
 
