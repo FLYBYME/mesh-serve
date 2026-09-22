@@ -963,3 +963,48 @@ combination cannot work and fails silently.
 (the `eval('require')` in an ES module). With `advertiseHost` it no longer matters for a cluster that
 sets it, but a node that does not will still advertise loopback and lose to the same collision on a
 shared port.
+
+---
+
+## Done — the second remote call in a handler timed out, every time, at exactly the timeout
+
+Found bringing up the first real nameserver on a second machine. `surfdns-nameserver`'s zone loader
+runs inside `dns.listen` and makes two remote calls back to the `domains` node in sequence,
+`dnsZone.find` then `dnsRecord.find`. The first answered; the second failed with `RPC Timeout ... after
+10000ms`, on every attempt, while a probe making the same two calls as separate top-level calls got
+both answered in ~25ms each. Not slowness, and not index creation (which was the first guess).
+
+`executeRemote` used the caller's `correlationID` as the request's packet id, and `MeshNetwork` drops
+any non-response packet whose id it saw in the last 10s as a duplicate. Every call in one chain shares
+a correlationID, so the first remote call from inside a handler worked and each later one carried the
+same id, was discarded at the receiver, and left its caller waiting out the full timeout. It also meant
+a callee never saw the real chain id (it got the request id in that slot). Every earlier test made at
+most one nested remote call per chain, which is why none of them noticed.
+
+**Fixed** in `mesh` v4.2.1: a fresh id per remote call; the correlationID travels in meta. Regression
+test (`RemoteChainCalls.spec.ts`, two real nodes over `WSTransport`) makes two sequential remote calls
+from one handler -- it failed with the second timing out before the change and passes after.
+
+**Worth knowing:** the failure inside `onStart` was *contained*. `dns.listen` threw, `runOnStart`
+unloaded the part again, and the supervisor retried each tick rather than leaving a nameserver that
+mounted but never listened looking healthy -- which is the reason `onStart` is all-or-nothing.
+
+---
+
+## Open — the nameserver reads every tenant's zones through calls that are scoped to one tenant
+
+Found in the same session, hidden behind the bug above. `surfdns-nameserver`'s `loadFromDatabase`
+calls `dnsZone.find` and `dnsRecord.find` on `surfdns-domains` with **no meta at all**. Both
+collections are `scopedBy: 'tenantId'`, so a call with no resolvable scope is refused outright -- a
+probe from a second node got `401 UNAUTHORIZED: Scoped collection "dnsZone" requires a resolved
+"tenantId" scope` in ~5ms. It only appeared to work because, inside `onStart`, the calls inherit the
+supervisor's ambient `meta: { tenant_id }`, which lets them through -- scoped to *that one tenant*.
+
+So an authoritative nameserver started this way serves only the zones of whichever tenant the part
+belongs to. Correct for a single-tenant demo, wrong for a platform: a nameserver's whole job is every
+tenant's zones. The scoping is doing exactly what it is for; the loader is asking the wrong question
+through the wrong door. Every node already has the database provider, so the framework's own
+documented escape hatch for this (`Database.repo()`: unscoped, no hooks, "use `ctx.db()` unless you
+specifically need every tenant's rows") is the likely shape -- a trusted infrastructure service reading
+its own projection directly rather than a tenant-scoped cross-service call. Not started: it changes how
+`surfdns-nameserver` is built and which of its tests mean anything, so it wants a decision.
