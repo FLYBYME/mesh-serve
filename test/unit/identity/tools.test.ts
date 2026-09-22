@@ -6,6 +6,7 @@ import { hasRole } from '../../../src/identity/tools/hasRole.js';
 import { permits } from '../../../src/identity/tools/permits.js';
 import { issueTicket } from '../../../src/identity/tools/issueTicket.js';
 import { validateTicket } from '../../../src/identity/tools/validateTicket.js';
+import { validateApiToken } from '../../../src/identity/tools/validateApiToken.js';
 import { revokeTicket } from '../../../src/identity/tools/revokeTicket.js';
 import { signOut } from '../../../src/identity/tools/signOut.js';
 
@@ -477,6 +478,69 @@ describe('identity tools', () => {
 
                 expect(capturedVia).toBe('password_reset');
             });
+        });
+    });
+
+    describe('validateApiToken', () => {
+        it('returns the token\'s own organizationId when it has one', async () => {
+            const { ctx } = createMockContext({
+                handlers: {
+                    'identity.apiToken.find_one': async () => ({
+                        userId: 'u-789',
+                        organizationId: 'org-42',
+                        roles: ['operator'],
+                        name: 'ci-token',
+                        revokedAt: undefined,
+                        expiresAt: undefined,
+                    }),
+                },
+            });
+
+            const result = await validateApiToken({ token: 'any-token' }, ctx);
+
+            expect(result).toEqual({
+                valid: true,
+                userId: 'u-789',
+                organizationId: 'org-42',
+                roles: ['operator'],
+                name: 'ci-token',
+            });
+        });
+
+        it('omits organizationId for a token with no organization scope, rather than sending null', async () => {
+            const { ctx } = createMockContext({
+                handlers: {
+                    'identity.apiToken.find_one': async () => ({
+                        userId: 'u-789',
+                        organizationId: undefined,
+                        roles: [],
+                        name: 'personal-token',
+                        revokedAt: undefined,
+                        expiresAt: undefined,
+                    }),
+                },
+            });
+
+            const result = await validateApiToken({ token: 'any-token' }, ctx);
+
+            expect(result.organizationId).toBeUndefined();
+            expect('organizationId' in result).toBe(false);
+        });
+
+        it('returns valid: false for a revoked token', async () => {
+            const { ctx } = createMockContext({
+                handlers: {
+                    'identity.apiToken.find_one': async () => ({
+                        userId: 'u-789',
+                        organizationId: 'org-42',
+                        roles: [],
+                        name: 't',
+                        revokedAt: new Date(Date.now() - 1000),
+                    }),
+                },
+            });
+
+            expect(await validateApiToken({ token: 'any-token' }, ctx)).toEqual({ valid: false });
         });
     });
 

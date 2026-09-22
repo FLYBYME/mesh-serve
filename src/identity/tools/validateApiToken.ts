@@ -15,5 +15,11 @@ export async function validateApiToken(
 
     ctx.logger.debug(`validated apiToken "${input.token}"`, { id: token.userId, token: input.token });
 
-    return { valid: true, userId: token.userId, roles: token.roles, name: token.name };
+    return {
+        valid: true,
+        userId: token.userId,
+        ...(token.organizationId !== undefined ? { organizationId: token.organizationId } : {}),
+        roles: token.roles,
+        name: token.name,
+    };
 }

@@ -56,6 +56,7 @@ export const validateInputSchema = z.object({
 export const validateOutputSchema = z.object({
     valid: z.boolean().describe('False for an expired, revoked, or unknown token'),
     userId: z.string().optional().describe('The account this token acts as, when valid'),
+    organizationId: z.string().optional().describe('The token\'s own optional organization scope (apiTokenSchema.organizationId), when it has one'),
     roles: z.array(z.string()).optional().describe('Roles granted to this token'),
     name: z.string().optional().describe('The token\'s name'),
 }).describe('Whether the token is valid, and what it represents');
