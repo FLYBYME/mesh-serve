@@ -19,8 +19,18 @@ RUN npm prune --omit=dev
 # to build a service part on demand (serve.artifact.requestBuild) -- the container needs those
 # binaries and a real shell to exec them from, not just node.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# `docker run --cap-add=NET_BIND_SERVICE` only grows the container's bounding set -- it does not
+# hand the capability to a process that execs as non-root, the way systemd's own
+# AmbientCapabilities= does for a plain `ubuntu`-user unit. Found live: nameserver fell back to
+# port 1053 ("Port 53 requires root (EACCES)") the moment this image replaced the bare process it
+# was modeled on. A file capability on the node binary itself is the container-native equivalent --
+# effective independent of the process's uid, still confined to what --cap-add=NET_BIND_SERVICE
+# grants the container in the first place. `readlink -f`: setcap needs the real inode, not the
+# `/usr/local/bin/node` symlink.
+RUN setcap cap_net_bind_service=+ep "$(readlink -f "$(which node)")"
 
 # The base image already ships a `node` user at uid/gid 1000 -- which happens to be the real
 # `ubuntu` user's own uid/gid on every one of these VPS boxes, confirmed directly (`id ubuntu`).

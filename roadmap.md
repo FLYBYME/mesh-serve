@@ -1040,3 +1040,24 @@ A label selector aimed at a genuinely remote node would have silently matched no
 Regression test (`PexMetadata.spec.ts`) drives the real `gossipRound` closure with a mocked
 `publish`, asserting the outgoing PEX payload carries a peer's metadata, and that a receiver's
 `registerNode` stores it intact -- failed (empty object) before the fix, passes after.
+
+---
+
+## Done — the Docker image couldn't bind port 53/80/443 as its own non-root user
+
+Found rolling the image out to `ns1`: `dns.listen` logged `Port 53 requires root (EACCES), falling
+back to port 1053` the moment the bare-process deployment (systemd `AmbientCapabilities=
+CAP_NET_BIND_SERVICE`, which really did grant it to the non-root `ubuntu` user) was replaced by this
+image's own `docker run --cap-add=NET_BIND_SERVICE`, running as the image's non-root `node` user.
+
+`--cap-add` only grows the *container's* capability bounding set -- it does not hand a capability to
+a process that execs as non-root inside it. Root gets it implicitly; a `USER node` process does not,
+with nothing in between to grant it, unlike systemd's `AmbientCapabilities=`, which genuinely
+threads a capability down to a non-root unit's process. Would have hit `proxy.listen`'s port 80/443
+bind on `edge1` identically; `ns1` just got there first.
+
+**Fixed** in `mesh-serve` v0.7.5: `Dockerfile` now `setcap cap_net_bind_service=+ep` on the real
+`node` binary (`readlink -f` past the `/usr/local/bin/node` symlink -- setcap needs the real inode) in
+the runtime stage, before `USER node`. A file capability is independent of the calling process's uid,
+still bounded by whatever the container itself was granted. Verified directly: a plain
+`dgram.createSocket('udp4').bind(53, ...)` as `--user node` succeeds in the rebuilt image.
