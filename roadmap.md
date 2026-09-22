@@ -1064,6 +1064,35 @@ still bounded by whatever the container itself was granted. Verified directly: a
 
 ---
 
+## Open — a node's own presence can still lose to a stale second-hand relay of itself
+
+Found live, after both metadata fixes above (v4.2.2, v4.2.3) shipped: `ns1` still showed `{}` on
+`edge1` no matter how many times it reconnected, while `ns2` showed correctly. A one-off debug-level
+restart of both (`--logLevel debug`, reverted immediately after) showed why: `edge1` logs
+`"Node ns1 registered/updated"` (the *new-node* registration path, via a PEX relay) roughly 1.4s
+*before* `"Peer connected: ns1. Sending immediate presence and PEX"` (`ns1`'s own direct, first-hand
+presence). Both calls go through the same `registerNode`, gated by the same `nodeSeq` comparison --
+and `nodeSeq` is not a boot generation, it is just how many contracts a node has registered so far in
+its *current* process, which resets low on every restart. If whatever relayed the first, second-hand
+sighting of `ns1` was still holding `ns1`'s `nodeSeq` from a *previous*, longer-lived boot (more
+contracts loaded, so a higher count), that stale-but-numerically-higher value wins the very first
+guard clause (`existing.nodeSeq > incoming.nodeSeq -> return`) and silently drops every later packet
+for that `nodeSeq` -- including `ns1`'s own genuine presence, before it ever reaches the
+equal-`nodeSeq` backfill added in the fix above. Not metadata-specific: the same guard would drop a
+real address or capability change from a freshly-restarted node the same way.
+
+The real fix isn't another field-level patch: `registry.registerNode` currently can't tell a node's
+own first-hand report about itself (`handlePresence`, always authoritative) from second-hand gossip
+about it (`handlePEX`, genuinely staleness-prone, which is what the `nodeSeq` guard exists to filter).
+Collapsing both into one function with one comparison is the actual gap. Likely shape: a separate
+entry point (or a `trusted` flag) that lets first-hand presence always win, while PEX keeps today's
+`nodeSeq` gate. Not started -- found and diagnosed live against production without hot-patching it
+(a `docker exec sed -i` into the running container was, correctly, refused), not worth a rushed fix
+under time pressure. Does not block anything today: DNS and the proxy both work regardless of what
+`serve.node.find` displays, and nothing currently pins placement to `ns1` by label, only by nodeID.
+
+---
+
 ## Done — the PEX metadata fix alone wasn't enough: registerNode still locked labels at {}
 
 Found immediately after v4.2.2 (the PEX fix, two entries up) shipped and rolled out: cycling
