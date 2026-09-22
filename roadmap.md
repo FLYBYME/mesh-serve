@@ -1133,3 +1133,33 @@ staleness for `nodeSeq` to guard against here. Regression test
 an empty-then-real registration at the same `nodeSeq` and the reverse order -- both failed before
 the fix (real labels either never arrived, or arrived and then got erased), both pass after.
 `mesh-serve` bumped to v0.7.6 to pick it up.
+
+---
+
+## Done — `--bootstrapNode` only ever accepted one URL, so a spoke of two hubs could only ever directly connect to one of them
+
+Found moving the cluster's bootstrap/rendezvous role from `edge1` (which also hosts every real
+service: `api`, `cdn`, `queue`, `proxy`, `routes`, `domains`) to `surf` (a new, lightweight node whose
+only job is being a stable address the OVH boxes can always rejoin through, so any of them --
+`edge1` included -- can be wiped and rebuilt without losing the cluster's entry point). Once every
+node's `--bootstrapNode` pointed at `surf` instead of `edge1`, `ns1`'s nameserver -- which calls
+`dnsZone.find`, living on `edge1` -- started failing: `RPC Timeout calling dnsZone.find on edge1
+after 10000ms`, and sometimes `no domain "dnsZone" is mounted anywhere on this broker` outright. Live
+DNS went from answering authoritatively to `REFUSED`.
+
+`ss -tn` on `ns1` showed why: exactly one established connection, to `surf`. None to `edge1`. `ns1`
+no longer dials `edge1` directly at all -- only `surf` -- so every call to a service that still lives
+on `edge1` now depends entirely on `dialLearnedPeer` (the existing peer-to-peer direct-dial-once-
+discovered-via-PEX mechanism) successfully promoting that second-hand knowledge into a real
+connection. That mechanism's reliability was already flagged and deferred earlier this session (see
+the "ghosts of self" entry above) for the unrelated `ns1`\<->`ns2` pair; this is the same gap, now
+hit by a real service call instead of a cosmetic label, because moving the rendezvous role off
+`edge1` demoted `edge1` to "just another spoke" from the network's point of view, while every actual
+service call still targets it directly by name.
+
+**Fixed** in `mesh-serve` v0.7.8: `--bootstrapNode` was artificially restricted to a single URL
+(`z.string().optional()`) despite mesh core's own `MeshOrchestrator.bootstrap()` already iterating a
+real `bootstrapNodes: string[]` and dialing every entry -- the CLI just never exposed more than one.
+Now variadic (`--bootstrapNode <values...>`, same pattern as `--labels`), so a node can hold genuine,
+direct connections to more than one hub at once instead of relying on `dialLearnedPeer` for the rest.
+Every OVH box's unit now bootstraps from both `surf` and `edge1`.
