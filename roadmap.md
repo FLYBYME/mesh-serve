@@ -1210,3 +1210,30 @@ has `publicKey` (moot per above) that the schema lacks. Every cast between them 
 whichever side the target type doesn't declare. Not chased further since none of those particular
 fields are load-bearing anywhere found so far -- flagged here so the next person hitting a "field I
 set never seems to arrive" bug on a node record checks this first.
+
+---
+
+## Open — `surfdns-smtpserver`/`surfdns-imapserver` call tenant-scoped mail collections with no tenant
+
+Found in the same cast-cleanup pass as the `email.message_receive` bug above (see the "Done" entry
+in `surfdns-smtpserver`'s own history, not this file -- rejected every inbound email; fixed
+2026-09-23). While removing the `as unknown as` casts, both `surfdns-smtpserver/src/services/wire/
+gateway.ts` and `surfdns-imapserver/src/services/wire/gateway.ts` call `mailAddress.find_one` and
+`emailMessage.find`/`create`/`update`/`delete` directly on the raw `broker` from inside a TCP socket
+event handler -- never through `ctx.call`, never with an explicit `meta`. Both `mailAddressCrud` and
+`emailMessageCrud` (`surfdns-mail/src/services/contracts/mail.contract.ts`) are `scopedBy: 'tenantId'`.
+
+Same shape as `surfdns-nameserver`'s `dns.projection_sync` bug, and possibly worse: that one silently
+scoped to one tenant. This one, per `CrudExecutor.ts`'s `if (scopedBy) { ... throw 401 if
+!callerScope }`, should throw outright on every call -- there is no ambient `meta` for a raw socket
+callback to inherit the way `onStart`'s own call chain does. Not confirmed live (no test in either
+repo exercises the real `broker.call` path -- both suites mock `ImapWireServerDependencies`/
+`SmtpWireServerDependencies` at the interface boundary, the same blind spot that hid the
+`email.message_receive` bug), so this is reported, not proven, but the code reads as broken: SMTP
+AUTH, RCPT TO validation, and every IMAP mailbox operation would 401 against a real multi-tenant
+deployment.
+
+Not fixed: this is the same fork as `dns.projection_sync` -- either these two services only ever
+legitimately act within one resolvable tenant (in which case something needs to supply that `meta`,
+today nothing does), or mail/IMAP genuinely needs a cross-tenant-safe contract the way DNS did.
+Wants the same kind of decision, not a guess, and it's two repos wide instead of one.
