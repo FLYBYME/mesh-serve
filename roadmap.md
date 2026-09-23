@@ -1210,27 +1210,39 @@ set never seems to arrive" bug on a node record checks this first.
 
 ---
 
-## Open — `surfdns-smtpserver`/`surfdns-imapserver` call tenant-scoped mail collections with no tenant
+## Done — `surfdns-smtpserver`/`surfdns-imapserver` called tenant-scoped mail collections with no tenant
 
-Found in the same cast-cleanup pass as the `email.message_receive` bug above (see the "Done" entry
-in `surfdns-smtpserver`'s own history, not this file -- rejected every inbound email; fixed
-2026-09-23). While removing the `as unknown as` casts, both `surfdns-smtpserver/src/services/wire/
-gateway.ts` and `surfdns-imapserver/src/services/wire/gateway.ts` call `mailAddress.find_one` and
-`emailMessage.find`/`create`/`update`/`delete` directly on the raw `broker` from inside a TCP socket
-event handler -- never through `ctx.call`, never with an explicit `meta`. Both `mailAddressCrud` and
-`emailMessageCrud` (`surfdns-mail/src/services/contracts/mail.contract.ts`) are `scopedBy: 'tenantId'`.
+Fixed 2026-09-23, confirmed live (not just read as broken) by tracing the real mechanics of
+`ctx.db()` and `CrudExecutor`: it turned out to be worse than this entry originally guessed. Two
+distinct bugs, both real:
 
-Same shape as `surfdns-nameserver`'s `dns.projection_sync` bug, and possibly worse: that one silently
-scoped to one tenant. This one, per `CrudExecutor.ts`'s `if (scopedBy) { ... throw 401 if
-!callerScope }`, should throw outright on every call -- there is no ambient `meta` for a raw socket
-callback to inherit the way `onStart`'s own call chain does. Not confirmed live (no test in either
-repo exercises the real `broker.call` path -- both suites mock `ImapWireServerDependencies`/
-`SmtpWireServerDependencies` at the interface boundary, the same blind spot that hid the
-`email.message_receive` bug), so this is reported, not proven, but the code reads as broken: SMTP
-AUTH, RCPT TO validation, and every IMAP mailbox operation would 401 against a real multi-tenant
-deployment.
+1. **`surfdns-mail`'s own inbound pipeline was broken for every anonymous caller**, not just the two
+   SMTP/IMAP entry points this entry originally named. `ctx.db()` is *scoped to `ctx.meta`*, not an
+   unscoped escape hatch (its own doc comment in `IServiceContext.ts` says so plainly) -- every
+   pipeline stage (dedup/thread/store/quarantine) called `ctx.db(domain).xxx(...)` with no meta
+   override, and an anonymous inbound SMTP delivery carries no meta at all. Passing an explicit
+   `tenantId` field in the create payload did nothing: `CrudExecutor`'s `create` case overwrites
+   `scopedBy` fields from the resolved caller scope, not from the payload. Masked in every existing
+   test only because the mock context's default `meta` carried a tenant no real inbound message ever
+   has -- the exact blind spot this entry called out, just one layer deeper than expected.
+2. **Both wire gateways called the scoped `mailAddress.find_one`/raw `emailMessage.*` verbs
+   directly**, exactly as this entry described, for RCPT TO/AUTH lookups that structurally cannot
+   know a tenant before they've resolved one, and (IMAP) for every post-auth mailbox operation.
 
-Not fixed: this is the same fork as `dns.projection_sync` -- either these two services only ever
-legitimately act within one resolvable tenant (in which case something needs to supply that `meta`,
-today nothing does), or mail/IMAP genuinely needs a cross-tenant-safe contract the way DNS did.
-Wants the same kind of decision, not a guess, and it's two repos wide instead of one.
+Fix, matching `dns.projection_sync`'s already-established shape: added `email.address_resolve`
+(`surfdns-mail`, internal, cross-tenant lookup by the collection's own globally-unique `address`
+key, via `Database.collection()`), routed `stage1_accept.ts` and both wire gateways' `findMailAddress`
+through it instead of the scoped verb, and threaded the *resolved* tenant explicitly everywhere a
+tenant-scoped write follows: `ctx.db(domain, { tenant_id })` overrides throughout the mail pipeline,
+and `tenantId` added as an explicit parameter next to `mailAddressId` on every
+`ImapRouterDependencies` method (`findMessages`/`getMailboxStatus`/`updateMessageFlags`/
+`moveMessages`/`expungeMessages`, matching `appendMessage`'s existing shape), passed as
+`broker.call`'s `meta` option in `gateway.ts`.
+
+Each of the three repos got a regression test that goes through the real, un-mocked call chain this
+entry's own root cause was hiding behind: `surfdns-mail`'s `email.message_receive` test with
+`ctx.meta = {}`, `surfdns-smtpserver`'s existing live-wire `smtp.spec.ts` test (which needed its
+mock broker's `email.address_resolve` response fixed to match the real contract's shape, not a bare
+`null`), and a new `surfdns-imapserver` test that goes through the real `ImapGateway` instead of a
+mocked `ImapRouterDependencies`, asserting AUTH calls `email.address_resolve` and the resolved
+tenant reaches `emailMessage.find` as real `meta`.
