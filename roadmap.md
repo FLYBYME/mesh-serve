@@ -1167,3 +1167,46 @@ Every OVH box's unit now bootstraps from both `surf` and `edge1`.
 Confirmed live: `ss -tn` on `ns1` and `ns2` now shows a real `ESTAB` connection to each of `surf` and
 `edge1`, not just one. Both nameservers back to answering authoritatively, the proxy responding, and
 `serve.node.find` stable across repeated reads.
+
+---
+
+## Open — `mesh`'s TCPTransport Ed25519 handshake can never succeed; nothing ever sets `publicKey`
+
+Found auditing every `as unknown as X` cast in `mesh` core's production `src/` for a company-wide
+dependency-management writeup (`company/DEPENDENCIES.md`), while looking at
+`Registry.ts`/`PlacementRegistry.ts` bridging two independently-defined `NodeInfo` shapes
+(`types/registry.schema.ts`'s zod-derived one and `interfaces/IMeshNetwork.ts`'s hand-written one)
+through 18 total `as unknown as CoreNodeInfo` casts between them.
+
+`transports/helpers/TCPAuthHandler.ts:31` gates its whole Ed25519 handshake on
+`nodeInfo.publicKey`:
+
+```ts
+const nodeInfo = this.transport.registry?.getNode(data.nodeID);
+if (!nodeInfo || !nodeInfo.publicKey) {
+    throw new Error(`Public key not found for node: ${data.nodeID}`);
+}
+```
+
+Grepped the entire `mesh` core `src/` for every write to `.publicKey` on a node record: there is
+none. `IMeshNetwork.ts`'s `NodeInfo.publicKey?: string` is declared and read (here, and nowhere
+else outside `AuthInterceptorEd25519.ts`, which is a *different* mechanism -- a caller-supplied
+`publicKeyResolver` callback, not this field) but never populated by anything in `registerNode`,
+presence, or PEX. Every call into this handler would throw "Public key not found" for every node,
+always -- this isn't a scoping bug like the `NodeInfo`/`CoreNodeInfo` cast, it's a handshake with no
+code path that can ever satisfy it.
+
+Not fixed: not clear yet whether the intended fix is wiring a real key-distribution path (presence
+carrying a public key the way it already carries `hostname`/`metadata`) or whether `TCPTransport`
+was left deliberately incomplete in favor of `WSTransport` (the only transport any live
+`surfdns-*`/`mesh-serve` deployment actually uses -- grepped, zero references to `TCPTransport` or
+`TCPAuthHandler` outside `mesh` core's own `src/`). Not a live production risk today for exactly
+that reason, but a real landmine for whoever reaches for `TCPTransport` next expecting its
+auth to work. Wants a decision on which one, not a guess.
+
+Separately, worth its own look someday: the `NodeInfo`/`CoreNodeInfo` split itself has drifted --
+the schema-derived type has `region`/`cachedBigIntID` that `CoreNodeInfo` lacks, and `CoreNodeInfo`
+has `publicKey` (moot per above) that the schema lacks. Every cast between them silently drops
+whichever side the target type doesn't declare. Not chased further since none of those particular
+fields are load-bearing anywhere found so far -- flagged here so the next person hitting a "field I
+set never seems to arrive" bug on a node record checks this first.
