@@ -991,23 +991,20 @@ mounted but never listened looking healthy -- which is the reason `onStart` is a
 
 ---
 
-## Open — the nameserver reads every tenant's zones through calls that are scoped to one tenant
+## Done — the nameserver read every tenant's zones through calls that were scoped to one tenant
 
-Found in the same session, hidden behind the bug above. `surfdns-nameserver`'s `loadFromDatabase`
-calls `dnsZone.find` and `dnsRecord.find` on `surfdns-domains` with **no meta at all**. Both
-collections are `scopedBy: 'tenantId'`, so a call with no resolvable scope is refused outright -- a
-probe from a second node got `401 UNAUTHORIZED: Scoped collection "dnsZone" requires a resolved
-"tenantId" scope` in ~5ms. It only appeared to work because, inside `onStart`, the calls inherit the
-supervisor's ambient `meta: { tenant_id }`, which lets them through -- scoped to *that one tenant*.
-
-So an authoritative nameserver started this way serves only the zones of whichever tenant the part
-belongs to. Correct for a single-tenant demo, wrong for a platform: a nameserver's whole job is every
-tenant's zones. The scoping is doing exactly what it is for; the loader is asking the wrong question
-through the wrong door. Every node already has the database provider, so the framework's own
-documented escape hatch for this (`Database.repo()`: unscoped, no hooks, "use `ctx.db()` unless you
-specifically need every tenant's rows") is the likely shape -- a trusted infrastructure service reading
-its own projection directly rather than a tenant-scoped cross-service call. Not started: it changes how
-`surfdns-nameserver` is built and which of its tests mean anything, so it wants a decision.
+Fixed 2026-09-23, in the same session as the `gateway.ts` God-class rewrite. Resolution: a real
+`dns.projection_sync` contract (`surfdns-domains/src/services/contracts/projection.contract.ts`,
+`domain: 'dns'`, `action: 'projection_sync'`, `visibility: 'internal'`) whose tool
+(`src/services/tools/projection_sync.ts`) reads `dnsZone`/`dnsRecord` unscoped via
+`ctx.broker.getProvider<Database>('database').collection(...)` from *inside* `surfdns-domains`
+itself -- the same "trusted infrastructure service reading its own projection directly" shape this
+entry originally guessed at, matching `mesh-serve/src/catalog/tools/watchRelease.ts`'s existing
+precedent for a legitimate unscoped internal read. Not reachable from outside `surfdns-domains` --
+`surfdns-nameserver`'s `ControlPlaneSync.sync()` calls it like any other contract, no `Database`
+reach-across from a foreign service (an earlier attempt at that shape was correctly rejected).
+Covered by `surfdns-domains/src/tests/services/projection_sync.spec.ts` (cross-tenant read with no
+`zoneId`, and single-zone scoping).
 
 ---
 
