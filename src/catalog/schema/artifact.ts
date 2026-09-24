@@ -11,6 +11,7 @@ export const artifactSchema = z.object({
   tenantId: z.string().describe('The organization that owns this artifact'),
   partId: z.string().describe('The serve.part this is a build of'),
   ref: z.string().describe('The git ref (commit, branch, or tag) this was built from'),
+  commit: z.string().optional().describe('The exact commit `ref` resolved to when this built; set once status is success. `ref` is often a branch, which moves -- this is what says which version the artifact actually is'),
   drivers: z.array(z.string()).optional().describe('serve.part (kind: driver) keys baked into this build; only set when the part being built is kind: kernel -- the same kernel part with a different driver set is a different artifact'),
   status: z.enum(['pending', 'running', 'success', 'failed']).default('pending').describe('Where this build attempt is'),
   hash: z.string().optional().describe('Content hash of the built output; set once status is success'),

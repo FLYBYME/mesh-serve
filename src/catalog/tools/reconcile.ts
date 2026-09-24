@@ -20,19 +20,21 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
     const services = (await repo.find({ query: { kind: 'service' } }))
         .map((raw) => partCrud.get.outputSchema.parse(raw));
     if (services.length === 0) {
-        return { started: [], stopped: [], failed: [] };
+        return { started: [], stopped: [], redeployed: [], failed: [] };
     }
 
     // Observed: ask every node what it is running. A node that has died is absent from the
     // registry and simply is not asked, which is exactly the signal we want -- there is no stale
     // record of it claiming to still host anything.
     const nodes = ctx.broker.registry.getNodes();
-    const observed = new Map<string, string>(); // partId -> nodeID
+    const observed = new Map<string, { nodeID: string; artifactId?: string | undefined }>(); // by partId
 
     for (const node of nodes) {
         try {
             const report = await ctx.call('serve.part.runningHere', {}, { nodeID: node.nodeID });
-            for (const service of report.services) observed.set(service.partId, report.nodeID);
+            for (const service of report.services) {
+                observed.set(service.partId, { nodeID: report.nodeID, artifactId: service.artifactId });
+            }
         } catch (err) {
             // A node that cannot answer is one we cannot reason about. Treating it as "running
             // nothing" would start a second copy of everything it holds, so skip it instead and
@@ -43,10 +45,40 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
 
     const started: PartReconcileOutput['started'] = [];
     const stopped: PartReconcileOutput['stopped'] = [];
+    const redeployed: PartReconcileOutput['redeployed'] = [];
     const failed: PartReconcileOutput['failed'] = [];
 
     for (const part of services) {
-        const runningOn = observed.get(part.id);
+        const observedRun = observed.get(part.id);
+        const runningOn = observedRun?.nodeID;
+
+        // Running, but not the build it is pinned to: the pin moved (a deploy or a rollback). Restart
+        // it in place, on the node it already runs on -- placement is not what changed. Only a pinned
+        // part is compared; an unpinned one has no declared build to be out of date against.
+        if (
+            part.desired === 'running' && observedRun !== undefined
+            && part.artifactId !== undefined && observedRun.artifactId !== part.artifactId
+        ) {
+            const scoped = { nodeID: observedRun.nodeID, meta: { tenant_id: part.tenantId } };
+            try {
+                await ctx.call('serve.part.stop', { id: part.id }, scoped);
+                // If this start fails the part is now simply not running, and the next pass's
+                // not-running branch retries it like any other missing service.
+                await ctx.call('serve.part.start', { id: part.id }, scoped);
+                redeployed.push({
+                    partId: part.id,
+                    key: part.key,
+                    nodeID: observedRun.nodeID,
+                    ...(observedRun.artifactId !== undefined ? { from: observedRun.artifactId } : {}),
+                    to: part.artifactId,
+                });
+                ctx.logger.info(`serve.part.reconcile: redeployed "${part.key}" on ${observedRun.nodeID}: ${observedRun.artifactId ?? '(unknown)'} -> ${part.artifactId}`);
+            } catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                failed.push({ partId: part.id, key: part.key, error });
+            }
+            continue;
+        }
 
         if (part.desired === 'running' && runningOn === undefined) {
             // A declared nodeSelector is a pin, not a hint: honor it or fail loudly, never fall back
@@ -99,5 +131,5 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         }
     }
 
-    return { started, stopped, failed };
+    return { started, stopped, redeployed, failed };
 }

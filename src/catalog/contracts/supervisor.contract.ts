@@ -18,6 +18,7 @@ export const partRunningHereOutputSchema = z.object({
     services: z.array(z.object({
         partId: z.string().describe('The serve.part this node has loaded'),
         domain: z.string().describe('The mount key it registered under here'),
+        artifactId: z.string().optional().describe('The serve.artifact this node actually loaded for it -- compared against the part\'s pinned artifactId to tell a stale service from a current one'),
     })).describe('Every kind: "service" part this node is currently running'),
 }).describe('What one node is actually running');
 
@@ -49,6 +50,8 @@ export const partReconcileOutputSchema = z.object({
         .describe('Services that should have been running somewhere and were not'),
     stopped: z.array(z.object({ partId: z.string(), key: z.string(), nodeID: z.string() }))
         .describe('Services still running that are no longer desired'),
+    redeployed: z.array(z.object({ partId: z.string(), key: z.string(), nodeID: z.string(), from: z.string().optional(), to: z.string() }))
+        .describe('Services running a different artifact than their pinned artifactId, restarted on the pinned one'),
     failed: z.array(z.object({ partId: z.string(), key: z.string(), error: z.string() }))
         .describe('Services that could not be started -- reported rather than thrown, so one bad part cannot stall the rest'),
 }).describe('What one reconcile pass changed');

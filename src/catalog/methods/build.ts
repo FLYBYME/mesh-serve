@@ -29,6 +29,23 @@ async function git(args: string[], cwd?: string): Promise<string> {
     return stdout;
 }
 
+/** What a build produced, and from exactly which commit. */
+export interface BuiltOutput {
+    hash: string;
+    assets: ArtifactAssetInput[];
+    wants: string[];
+    /**
+     * The commit the checkout was at when this built -- read inside the checkout lock, so it is the
+     * one esbuild actually read. `ref` alone ("master") names a moving target and says nothing about
+     * which version a running artifact is.
+     */
+    commit: string;
+}
+
+async function headCommit(dir: string): Promise<string> {
+    return (await git(['rev-parse', 'HEAD'], dir)).trim();
+}
+
 /**
  * A part's real npm dependencies (mesh-operator's generated client imports real `zod`) were
  * unresolvable at build time -- the checkout is a fresh clone, never `npm install`ed, so esbuild
@@ -167,6 +184,14 @@ async function runEsbuild(
         minify: true,
         logLevel: 'silent',
         external,
+        // A sibling library installed from git (`github:FLYBYME/surfdns-certs#master`) arrives with
+        // no dist/ -- dist is gitignored, and ensureNpmInstall's --ignore-scripts means its `prepare`
+        // never built one. It can still be bundled the way this part itself is, straight from its
+        // TypeScript source, if its package.json exports that source under this condition (e.g.
+        // `".": { "mesh-source": "./src/index.ts", "default": "./dist/index.js" }`). Named rather
+        // than a generic "source", which some third-party packages declare without shipping the
+        // files it points at.
+        conditions: ['mesh-source'],
         // Only meaningful for format: 'cjs' -- esbuild names a CJS bundle's own output file
         // `<entry>.js` by default, same as ESM, so a CJS build and an ESM build of the same entry
         // point would collide if ever written to the same outDir. Not a concern for any real caller
@@ -256,16 +281,17 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
  * that doesn't import any of them is unaffected -- esbuild only externalizes what's actually
  * imported.
  */
-export async function buildPart(part: Part, repo: Repo, ref: string, external: string[]): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+export async function buildPart(part: Part, repo: Repo, ref: string, external: string[]): Promise<BuiltOutput> {
     return withCheckoutLock(checkoutDir(repo), async () => {
         const repoDir = await ensureRepoCheckout(repo, ref);
+        const commit = await headCommit(repoDir);
         const entry = path.join(repoDir, part.path, part.entryPoint);
         const wants = await readWants(repoDir, part);
 
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
             await runEsbuild([entry], buildTmpDir, external);
-            return { ...await hashAndStoreOutput(buildTmpDir), wants };
+            return { ...await hashAndStoreOutput(buildTmpDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
         }
@@ -325,9 +351,10 @@ export async function ensureArtifactNodeModules(pkg: string): Promise<void> {
  * disconnected one. (The same module-realm hazard `MESH_ERROR_BRAND` exists for.)
  * Node builtins need no such list: esbuild's own `platform: 'node'` already leaves them external.
  */
-export async function buildService(part: Part, repo: Repo, ref: string): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+export async function buildService(part: Part, repo: Repo, ref: string): Promise<BuiltOutput> {
     return withCheckoutLock(checkoutDir(repo), async () => {
         const repoDir = await ensureRepoCheckout(repo, ref);
+        const commit = await headCommit(repoDir);
         const entry = path.join(repoDir, part.path, part.entryPoint);
         const wants = await readWants(repoDir, part);
 
@@ -336,7 +363,7 @@ export async function buildService(part: Part, repo: Repo, ref: string): Promise
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
             await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
-            return { ...await hashAndStoreOutput(buildTmpDir), wants };
+            return { ...await hashAndStoreOutput(buildTmpDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
         }
@@ -358,7 +385,7 @@ export async function buildKernel(
     kernelRepo: Repo,
     ref: string,
     drivers: readonly { part: Part; repo: Repo }[],
-): Promise<{ hash: string; assets: ArtifactAssetInput[]; wants: string[] }> {
+): Promise<BuiltOutput> {
     // Locked on the kernel's own checkout. A driver's repo is checked out inside this and is *not*
     // separately locked: taking a second lock here could deadlock against a concurrent build that
     // wants the same two repos in the opposite order, and drivers are currently unused
@@ -366,6 +393,9 @@ export async function buildKernel(
     // the first time a real driver exists.
     return withCheckoutLock(checkoutDir(kernelRepo), async () => {
     const kernelDir = await ensureRepoCheckout(kernelRepo, ref);
+    // The kernel repo's commit. Drivers are built at their own defaultBranch tips and are not
+    // captured here -- per-driver ref pinning doesn't exist yet (see above).
+    const commit = await headCommit(kernelDir);
     const kernelEntry = path.join(kernelDir, kernelPart.path, kernelPart.entryPoint);
     const wants = new Set(await readWants(kernelDir, kernelPart));
 
@@ -403,7 +433,7 @@ export async function buildKernel(
         // externalized specifier resolves against on the page, so it has to carry mesh-web and every
         // baked-in driver itself, not a bare import of them.
         await runEsbuild([synthEntry], buildTmpDir, []);
-        return { ...await hashAndStoreOutput(buildTmpDir), wants: [...wants] };
+        return { ...await hashAndStoreOutput(buildTmpDir), wants: [...wants], commit };
     } finally {
         await fs.rm(synthDir, { recursive: true, force: true });
         await fs.rm(buildTmpDir, { recursive: true, force: true });

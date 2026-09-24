@@ -10,6 +10,8 @@ export interface RunningService {
     readonly domain: string;
     /** The module this was loaded from, so stopping it can evict that module too. */
     readonly modulePath?: string;
+    /** The serve.artifact actually loaded -- absent only for core parts, which are not built artifacts. */
+    readonly artifactId?: string;
 }
 
 const running = new Map<string, RunningService>();
@@ -26,8 +28,12 @@ function key(nodeID: string, partId: string): string {
     return `${nodeID}\u0000${partId}`;
 }
 
-export function markServiceRunning(nodeID: string, partId: string, domain: string, modulePath?: string): void {
-    running.set(key(nodeID, partId), modulePath === undefined ? { domain } : { domain, modulePath });
+export function markServiceRunning(nodeID: string, partId: string, domain: string, modulePath?: string, artifactId?: string): void {
+    running.set(key(nodeID, partId), {
+        domain,
+        ...(modulePath !== undefined ? { modulePath } : {}),
+        ...(artifactId !== undefined ? { artifactId } : {}),
+    });
 }
 
 export function getRunningService(nodeID: string, partId: string): RunningService | undefined {
@@ -45,15 +51,19 @@ export function clearServiceRunning(nodeID: string, partId: string): void {
  * have no desired state for the supervisor to compare against. Only catalog-managed services are
  * its business.
  */
-export function listServicesRunning(nodeID: string): { partId: string; domain: string }[] {
+export function listServicesRunning(nodeID: string): { partId: string; domain: string; artifactId?: string }[] {
     const prefix = `${nodeID}\u0000`;
-    const found: { partId: string; domain: string }[] = [];
+    const found: { partId: string; domain: string; artifactId?: string }[] = [];
 
     for (const [entryKey, service] of running) {
         if (!entryKey.startsWith(prefix)) continue;
         const partId = entryKey.slice(prefix.length);
         if (partId.startsWith('core:')) continue;
-        found.push({ partId, domain: service.domain });
+        found.push({
+            partId,
+            domain: service.domain,
+            ...(service.artifactId !== undefined ? { artifactId: service.artifactId } : {}),
+        });
     }
 
     return found;

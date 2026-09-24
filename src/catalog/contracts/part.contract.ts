@@ -3,6 +3,19 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { partSchema } from '../schema/part.js';
 import { validatePartKey } from '../methods/partKey.js';
+import { resolvePinnedArtifact } from '../methods/partArtifact.js';
+
+/** The fields the hooks below read, parsed out of what the CRUD layer hands them; the rest pass through untouched. */
+const partCreateHookInput = z.object({
+    tenantId: z.string(),
+    key: z.string(),
+    artifactId: z.string().optional(),
+});
+const partUpdateHookInput = z.object({
+    id: z.string(),
+    key: z.string().optional(),
+    artifactId: z.string().optional(),
+});
 
 export const partCrud = defineCrud('serve.part', partSchema, {
     pluralPath: 'parts',
@@ -19,25 +32,40 @@ export const partCrud = defineCrud('serve.part', partSchema, {
     },
     hooks: {
         create: {
-            before: async (input: never, ctx: never) => {
-                const record = input as unknown as { tenantId: string; key: string };
-                await validatePartKey(record, record.tenantId, ctx as IServiceContext);
-                return record;
+            before: async (input: unknown, ctx: IServiceContext) => {
+                const record = partCreateHookInput.parse(input);
+                await validatePartKey(record, record.tenantId, ctx);
+                if (record.artifactId !== undefined) {
+                    // A pin names a build *of this part*, and no build of a part can exist before
+                    // the part does. Build it, then pin it with serve.part.update.
+                    throw new MeshError({
+                        message: 'A new part cannot be created with an artifactId; build it first, then set artifactId with serve.part.update.',
+                        code: 'BAD_REQUEST',
+                        status: 400,
+                    });
+                }
+                return input;
             },
         },
         update: {
-            // An update need not carry `key` at all; only validate when it is actually changing
-            // one, and resolve the part's own tenant rather than trusting the caller for it.
-            before: async (input: never, ctx: never) => {
-                const record = input as unknown as { id: string; key?: string };
-                if (record.key === undefined) return record;
+            // An update need not carry `key` or `artifactId` at all; only validate what it is
+            // actually changing, against the part's own tenant rather than trusting the caller.
+            before: async (input: unknown, ctx: IServiceContext) => {
+                const record = partUpdateHookInput.parse(input);
+                if (record.key === undefined && record.artifactId === undefined) return input;
 
-                const part = await (ctx as IServiceContext).db('serve.part').resolve({ id: record.id });
+                const part = await ctx.db('serve.part').resolve({ id: record.id });
                 if (part === undefined) {
                     throw new MeshError({ message: `No part "${record.id}".`, code: 'NOT_FOUND', status: 404 });
                 }
-                await validatePartKey({ key: record.key }, part.tenantId, ctx as IServiceContext);
-                return record;
+                if (record.key !== undefined) {
+                    await validatePartKey({ key: record.key }, part.tenantId, ctx);
+                }
+                if (record.artifactId !== undefined) {
+                    // Refuse a pin that start could never load, now rather than on the next restart.
+                    await resolvePinnedArtifact(ctx, part.id, record.artifactId);
+                }
+                return input;
             },
         },
     },

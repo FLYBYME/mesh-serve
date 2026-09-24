@@ -74,7 +74,7 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
 
         const startedAt = Date.now();
 
-        const { hash, assets, wants } = part.kind === 'kernel'
+        const { hash, assets, wants, commit } = part.kind === 'kernel'
             ? await buildKernel(part, repo, artifact.ref, await resolveDrivers(broker, artifact))
             : part.kind === 'service'
                 ? await buildService(part, repo, artifact.ref)
@@ -89,6 +89,7 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
             assets,
             duration,
             builtOn: broker.nodeID,
+            commit,
         }, { meta });
 
         // wants is resolved from the repo at build time (mesh.wants.json), not hand-edited --
