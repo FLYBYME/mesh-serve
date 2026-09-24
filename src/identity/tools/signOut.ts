@@ -12,9 +12,10 @@ export async function signOut(
 
         ctx.emit('identity.user.signed_out', { userId: ticket.userId });
 
-        ctx.logger.debug(`signed out ticket "${input.token}"`, { id: ticket.userId, token: input.token });
+        // Never the ticket itself -- it is a bearer credential.
+        ctx.logger.debug(`signed out a ticket for "${ticket.userId}"`, { id: ticket.userId });
     } else {
-        ctx.logger.debug(`ticket "${input.token}" not found or already revoked`, { token: input.token });
+        ctx.logger.debug('ticket not found or already revoked');
     }
     return { signedOut: true };
 }

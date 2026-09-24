@@ -34,7 +34,8 @@ export async function issueTicket(
         via: input.via ?? 'login',
     });
 
-    ctx.logger.debug(`issued ticket "${token}" to "${user.id}"`, { id: user.id, token });
+    // Never the ticket itself: it is a bearer credential, and anyone reading the log could replay it.
+    ctx.logger.debug(`issued ticket to "${user.id}"`, { id: user.id });
 
     return { token, userId: user.id, expiresAt: expiresAt.getTime() };
 }

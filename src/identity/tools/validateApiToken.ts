@@ -13,7 +13,8 @@ export async function validateApiToken(
         return { valid: false };
     }
 
-    ctx.logger.debug(`validated apiToken "${input.token}"`, { id: token.userId, token: input.token });
+    // Never the token itself: anyone who can read the log could replay it.
+    ctx.logger.debug(`validated api token "${token.name}" for "${token.userId}"`, { id: token.userId, name: token.name });
 
     return {
         valid: true,

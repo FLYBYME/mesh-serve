@@ -8,11 +8,12 @@ export async function resolveTicket(
 ): Promise<TicketResolveOutput> {
     const ticket = await ctx.db('identity.ticket').findOne({ query: { token: input.token } });
     if (ticket === undefined) {
-        ctx.logger.debug(`ticket "${input.token}" not found`, { token: input.token });
+        // Never the ticket itself -- it is a bearer credential.
+        ctx.logger.debug('ticket not found');
         return { ticket: undefined };
     }
 
-    ctx.logger.debug(`resolved ticket "${input.token}"`, { id: ticket.userId, token: input.token });
+    ctx.logger.debug(`resolved ticket for "${ticket.userId}"`, { id: ticket.userId });
 
     return { ticket };
 }
