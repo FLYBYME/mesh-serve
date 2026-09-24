@@ -161,7 +161,41 @@ async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
     return dir;
 }
 
-async function runEsbuild(
+/**
+ * A native addon (`*.node`) is compiled machine code, not JavaScript, so it can never be bundled.
+ * Left external, its require() fails at runtime -- which is how every well-behaved package treats
+ * an optional one already: ssh2 loads cpu-features and its own crypto binding inside try/catch and
+ * falls back to plain JavaScript. Without this the whole build failed at resolve time over a
+ * dependency the service would have done fine without.
+ */
+const nativeAddonsExternal: esbuild.Plugin = {
+    name: 'native-addons-external',
+    setup(build) {
+        build.onResolve({ filter: /\.node$/ }, (args) => ({ path: args.path, external: true }));
+    },
+};
+
+/**
+ * An ES module has none of CommonJS's module-scope names, and bundled CommonJS dependencies still
+ * use them. esbuild's stand-in for `require`, in a bundle that pulls in a dependency calling
+ * `require('crypto')` (acme-client, so every surfdns-certs build), throws "Dynamic require of
+ * \"crypto\" is not supported" the moment the bundle is imported; ssh2 (surfdns-ssh) reads
+ * `__dirname` at load and throws "__dirname is not defined in ES module scope". Real ones, from
+ * node:module/node:url/node:path: `require` is what esbuild's stand-in defers to when it exists,
+ * and `__dirname`/`__filename` point at the bundle's own location, which is where a dependency
+ * looking beside itself would now have to look anyway.
+ */
+const ESM_REQUIRE_BANNER = [
+    "import { createRequire as __meshCreateRequire } from 'node:module';",
+    "import { fileURLToPath as __meshFileURLToPath } from 'node:url';",
+    "import { dirname as __meshDirname } from 'node:path';",
+    'const require = __meshCreateRequire(import.meta.url);',
+    'const __filename = __meshFileURLToPath(import.meta.url);',
+    'const __dirname = __meshDirname(__filename);',
+].join('\n');
+
+/** Exported for tests only -- every real build goes through buildPart/buildService/buildKernel. */
+export async function runEsbuild(
     entryPointFiles: string[], outDir: string, external: string[], platform: 'browser' | 'node' = 'browser',
     format: 'esm' | 'cjs' = 'esm',
 ): Promise<void> {
@@ -171,7 +205,11 @@ async function runEsbuild(
         }
     }
 
+    const nodeEsm = platform === 'node' && format === 'esm';
+
     await esbuild.build({
+        ...(nodeEsm ? { banner: { js: ESM_REQUIRE_BANNER } } : {}),
+        ...(platform === 'node' ? { plugins: [nativeAddonsExternal] } : {}),
         entryPoints: entryPointFiles,
         bundle: true,
         outdir: outDir,
