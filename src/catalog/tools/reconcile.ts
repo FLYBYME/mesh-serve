@@ -131,5 +131,34 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         }
     }
 
+    reportFailures(ctx, failed);
     return { started, stopped, redeployed, failed };
+}
+
+/** The last error logged for each part that is failing, by partId -- see reportFailures. */
+const lastFailure = new Map<string, { key: string; error: string }>();
+
+/**
+ * `failed` is only ever returned, and an interval contract's return value goes nowhere: a part
+ * whose start kept failing was invisible -- no log on the leader, and nothing on the target node,
+ * which never got far enough to log anything itself. Found on the live cluster, when a nameserver
+ * build that could not load left ns1 without DNS and nothing anywhere said why.
+ *
+ * Logged on change rather than every pass, since a part with no successful build fails every 30s
+ * for as long as it stays that way: once when it starts failing, again if the error changes, and
+ * once when it stops.
+ */
+function reportFailures(ctx: IServiceContext, failed: PartReconcileOutput['failed']): void {
+    const failingNow = new Set<string>();
+    for (const { partId, key, error } of failed) {
+        failingNow.add(partId);
+        if (lastFailure.get(partId)?.error === error) continue;
+        lastFailure.set(partId, { key, error });
+        ctx.logger.warn(`serve.part.reconcile: "${key}" failed: ${error}`);
+    }
+    for (const [partId, { key }] of lastFailure) {
+        if (failingNow.has(partId)) continue;
+        lastFailure.delete(partId);
+        ctx.logger.info(`serve.part.reconcile: "${key}" no longer failing`);
+    }
 }

@@ -9,7 +9,7 @@
  *
  * Two nodes, because failover is not a thing one node can demonstrate.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
@@ -191,4 +191,37 @@ describe('desired state, observed state, and the loop between them', () => {
         const registryB = appB.getProvider<{ leaderFor: (d: string) => { nodeID: string } | undefined }>('registry');
         expect(registryA.leaderFor('serve.part')?.nodeID).toBe(registryB.leaderFor('serve.part')?.nodeID);
     });
+
+    it('logs a failing service once when it starts failing, not every pass, and once when it stops', async () => {
+        // `failed` is only returned, and nothing reads an interval contract's return: before this,
+        // a part whose start kept failing left no trace anywhere. Logged on change, so a part with
+        // no build does not write the same line every 30s forever.
+        const meta = { meta: { tenant_id: tenantId } };
+        const repo = await brokerA.call('serve.repo.create', {
+            tenantId, name: 'sup-repo-logging', url: '/tmp/nonexistent-logging.git', defaultBranch: 'master',
+        }, meta);
+        const part = await brokerA.call('serve.part.create', {
+            tenantId, repoId: repo.id, key: `${ORG_SLUG}/unbuildable`, kind: 'service',
+            path: '.', entryPoint: 'src/index.ts', wants: [], desired: 'running',
+        }, meta);
+
+        const warn = vi.spyOn(Logger.prototype, 'warn');
+        const info = vi.spyOn(Logger.prototype, 'info');
+        const about = (spy: typeof warn, text: RegExp): number => spy.mock.calls
+            .filter((args) => typeof args[0] === 'string' && args[0].includes(`${ORG_SLUG}/unbuildable`) && text.test(args[0])).length;
+        try {
+            await brokerA.call('serve.part.reconcile', {});
+            await brokerA.call('serve.part.reconcile', {});
+            await brokerA.call('serve.part.reconcile', {});
+            expect(about(warn, /failed: .*no successful build/i)).toBe(1);
+
+            await brokerA.call('serve.part.update', { id: part.id, desired: 'stopped' }, meta);
+            await brokerA.call('serve.part.reconcile', {});
+            await brokerA.call('serve.part.reconcile', {});
+            expect(about(info, /no longer failing/)).toBe(1);
+        } finally {
+            warn.mockRestore();
+            info.mockRestore();
+        }
+    }, 30000);
 });
