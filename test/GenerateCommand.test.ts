@@ -204,3 +204,27 @@ describe('generating artifacts for a domain split across multiple files', () => 
         expect(refCount).toBeGreaterThan(0);
     });
 });
+
+describe('an --include of another package', () => {
+    // A package include is there for its type declarations (another repo's registry augmentation).
+    // Emitted as a plain `import 'pkg'` it became a real runtime import, which the cluster builder
+    // had to bundle -- and could not, when the package was a devDependency it never installs.
+    let tmpDir: string;
+    const fixturesDir = path.resolve(__dirname, 'fixtures/split-domain');
+    const pkg = '@flybyme/mesh-serve/dist/generated/api.js';
+
+    beforeEach(async () => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesh-serve-include-test-'));
+        await new GenerateCommand().execute({ dir: fixturesDir, out: tmpDir, include: [pkg] });
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it.each(['api.ts', 'events.ts', 'collections.ts'])('%s includes it type-only, never as a runtime import', (file) => {
+        const code = fs.readFileSync(path.join(tmpDir, file), 'utf-8');
+        expect(code).toContain(`import type {} from '${pkg}';`);
+        expect(code).not.toContain(`import '${pkg}';`);
+    });
+});

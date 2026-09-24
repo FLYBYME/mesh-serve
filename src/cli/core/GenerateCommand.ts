@@ -23,6 +23,17 @@ interface EventDiscovery {
     filePath: string;
 }
 
+/**
+ * An `--include` of a package (e.g. `@flybyme/mesh-serve/dist/generated/api.js`) exists for its
+ * type declarations -- another repo's registry augmentation -- and nothing else. A bare
+ * `import 'pkg'` is a real runtime import, which the cluster's builder then has to bundle: it
+ * failed outright for a devDependency, which the builder never installs. `import type {} from`
+ * brings the same declarations into the program and is erased at emit.
+ */
+export function typeInclude(specifier: string): string {
+    return `import type {} from '${specifier}';\n`;
+}
+
 interface CrudDiscovery {
     exportName: string; // the defineCrud export itself, e.g. 'userCrud' -- not dotted with an action
     domain: string;
@@ -126,7 +137,7 @@ export class GenerateCommand extends BaseCommand {
             code += `\n// External Type Includes\n`;
             for (const includePath of includes) {
                 if (!includePath.startsWith('.') && !includePath.startsWith('/') && !includePath.includes('\\')) {
-                    code += `import '${includePath}';\n`;
+                    code += typeInclude(includePath);
                 } else {
                     const absoluteInclude = path.resolve(includePath);
                     let rel = path.relative(artifactRoot, absoluteInclude).replace(/\\/g, '/');
@@ -183,7 +194,7 @@ export class GenerateCommand extends BaseCommand {
             code += `\n// External Type Includes\n`;
             for (const includePath of includes) {
                 if (!includePath.startsWith('.') && !includePath.startsWith('/') && !includePath.includes('\\')) {
-                    code += `import '${includePath}';\n`;
+                    code += typeInclude(includePath);
                     continue;
                 }
 
@@ -267,7 +278,7 @@ export class GenerateCommand extends BaseCommand {
             code += `\n// External Type Includes\n`;
             for (const includePath of includes) {
                 if (!includePath.startsWith('.') && !includePath.startsWith('/') && !includePath.includes('\\')) {
-                    code += `import '${includePath}';\n`;
+                    code += typeInclude(includePath);
                 } else {
                     const absoluteInclude = path.resolve(includePath);
                     let rel = path.relative(artifactRoot, absoluteInclude).replace(/\\/g, '/');
