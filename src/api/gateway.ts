@@ -4,7 +4,8 @@ import { globalContractRegistry, isMeshError, isPublicContract, MeshError } from
 import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
 
 import { type Expose } from './contracts/expose.contract.js';
-import { buildDescriptor, API_BASE } from './methods/descriptor.js';
+import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
+import { EventHub, openStream, type Omitted, type Subscriber } from './methods/events.js';
 import { matchPath } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
 
@@ -45,8 +46,13 @@ interface Target {
  */
 export class ApiGateway {
     private server?: http.Server;
+    private readonly hub: EventHub;
+    /** Open `/events` subscriptions -- closed by `stop()`, since a stream never ends on its own. */
+    private readonly streams = new Set<{ close(reason?: string): void }>();
 
-    constructor(private readonly broker: IServiceBroker) {}
+    constructor(private readonly broker: IServiceBroker) {
+        this.hub = new EventHub(broker);
+    }
 
     /** Binds and resolves once listening -- the returned address is what the contract reports. */
     public async start(port?: number, host?: string): Promise<string> {
@@ -130,6 +136,9 @@ export class ApiGateway {
 
     /** Called from `serve.api.listen`'s abort handler -- nothing else stops this. */
     public async stop(): Promise<void> {
+        // `server.close` waits for every open connection to end, and a subscription never ends by
+        // itself -- without this, stopping the api with one browser tab open hung forever.
+        for (const stream of [...this.streams]) stream.close('the api is stopping');
         if (this.server) {
             this.server.closeIdleConnections?.();
             await new Promise((resolve) => this.server?.close(resolve));
@@ -233,6 +242,7 @@ export class ApiGateway {
         const urlPath = fullPath.slice(API_BASE.length) || '/';
 
         for (const row of rows) {
+            if (row.kind === 'event') continue; // Streamed over /events, never called.
             const contract = globalContractRegistry.get(row.contract);
             if (contract === undefined) {
                 // An exposed contract this node has never seen the *declaration* of. It may well be
@@ -429,6 +439,88 @@ export class ApiGateway {
         return { ...(body as Record<string, unknown>), ...params };
     }
 
+    /**
+     * `GET /api/events[?events=a,b]`: a Server-Sent Events subscription to this api's exposed events
+     * (`serve.expose` rows of kind `event`), or the named subset of them.
+     *
+     * Each event's gate is checked once here, like a call's. What the caller cannot receive -- not
+     * exposed, not deliverable from this node, a role they lack -- is named in a
+     * `subscription.omitted` event before anything else; if that is *everything*, the request is
+     * refused outright with the reasons, never accepted into a stream that stays silent.
+     */
+    private async handleEvents(target: Target, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const rows = target.rows.filter((row) => row.kind === 'event');
+        if (rows.length === 0) {
+            throw new MeshError({ message: `No events are streamed on ${target.host}.`, code: 'NOT_FOUND', status: 404 });
+        }
+
+        const requested = new URL(req.url ?? '/', 'http://localhost').searchParams.get('events');
+        const wanted = requested === null ? undefined : new Set(requested.split(',').map((name) => name.trim()).filter((name) => name !== ''));
+
+        const caller = await this.resolveCaller(req);
+        const events: string[] = [];
+        const omitted: Omitted[] = [];
+
+        for (const name of wanted ?? []) {
+            if (!rows.some((row) => row.contract === name)) omitted.push({ name, reason: 'not streamed on this api' });
+        }
+        for (const row of rows) {
+            const name = row.contract;
+            if (wanted !== undefined && !wanted.has(name)) continue;
+            if (!streamableFrom(name)) {
+                omitted.push({ name, reason: 'this node has no definition of it that can be scoped to a subscriber' });
+                continue;
+            }
+            if (row.role !== undefined) {
+                if (caller === undefined) {
+                    omitted.push({ name, reason: `requires role "${row.role}" -- not signed in` });
+                    continue;
+                }
+                if (!(await this.hasRole(caller, row.role, target.tenantId))) {
+                    omitted.push({ name, reason: `requires role "${row.role}"` });
+                    continue;
+                }
+            }
+            events.push(name);
+        }
+
+        if (events.length === 0) {
+            const reasons = omitted.map((entry) => `${entry.name}: ${entry.reason}`).join('; ');
+            throw caller === undefined && omitted.some((entry) => entry.reason.includes('not signed in'))
+                ? new MeshError({ message: `Authentication required. ${reasons}`, code: 'UNAUTHORIZED', status: 401 })
+                : new MeshError({ message: `Nothing here can be streamed to you. ${reasons}`, code: 'FORBIDDEN', status: 403 });
+        }
+
+        const subscriberFor = async (who: Caller | undefined): Promise<Subscriber> => ({
+            scope: target.tenantId,
+            operator: who !== undefined && await this.hasRole(who, 'operator', target.tenantId),
+        });
+
+        const stream = openStream({
+            res,
+            events,
+            omitted,
+            hub: this.hub,
+            subscriber: await subscriberFor(caller),
+            // A signed-in subscription ends when its credential does; an anonymous one has nothing
+            // to lose. Roles are re-read, so a revoked operator stops seeing other tenants' events.
+            recheck: async () => {
+                const current = await this.resolveCaller(req);
+                if (caller !== undefined && current === undefined) return undefined;
+                return subscriberFor(current);
+            },
+        });
+        this.streams.add(stream);
+        res.on('close', () => this.streams.delete(stream));
+    }
+
+    private async hasRole(caller: Caller, role: string, tenantId: string): Promise<boolean> {
+        // The same call and meta checkGate makes -- see its comment for why organizationId too.
+        const meta = { user: { id: caller.userId, tenant_id: tenantId, organizationId: tenantId } };
+        const result = await this.broker.call('identity.hasRole', { userId: caller.userId, role, organizationId: tenantId }, { meta });
+        return result.granted;
+    }
+
     private async handleDescribe(target: Target, res: http.ServerResponse): Promise<void> {
         const descriptor = buildDescriptor(target.host, target.rows);
 
@@ -444,6 +536,9 @@ export class ApiGateway {
         const urlPath = (req.url ?? '/').split('?')[0];
         if (urlPath === `${API_BASE}/_describe`) {
             return this.handleDescribe(target, res);
+        }
+        if (urlPath === `${API_BASE}/events` && (req.method ?? 'GET').toUpperCase() === 'GET') {
+            return this.handleEvents(target, req, res);
         }
 
         const route = this.findRoute(target.rows, req);

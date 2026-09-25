@@ -1,4 +1,4 @@
-import { globalContractRegistry, isPublicContract, MeshError } from '@flybyme/mesh';
+import { eventScope, globalContractRegistry, isPublicContract, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { AddInput, AddOutput } from '../contracts/expose.contract.js';
@@ -11,9 +11,13 @@ export async function add(
         throw new MeshError({ message: 'At most one of role or permission may be set.', code: 'BAD_REQUEST', status: 400 });
     }
 
-    const contract = globalContractRegistry.get(input.contract);
-    if (contract === undefined || !isPublicContract(contract)) {
-        throw new MeshError({ message: `"${input.contract}" is not a public contract.`, code: 'BAD_REQUEST', status: 400 });
+    if (input.kind === 'event') {
+        refuseUnstreamableEvent(input);
+    } else {
+        const contract = globalContractRegistry.get(input.contract);
+        if (contract === undefined || !isPublicContract(contract)) {
+            throw new MeshError({ message: `"${input.contract}" is not a public contract.`, code: 'BAD_REQUEST', status: 400 });
+        }
     }
 
     // The target api can belong to any tenant, unrelated to the caller's own, so its tenant isn't
@@ -43,6 +47,7 @@ export async function add(
     const row = await ctx.db('serve.expose', meta).create({
         tenantId: api.tenantId,
         apiId: input.apiId,
+        kind: input.kind,
         contract: input.contract,
         ...(input.role !== undefined ? { role: input.role } : {}),
         ...(input.permission !== undefined ? { permission: input.permission } : {}),
@@ -51,4 +56,30 @@ export async function add(
     ctx.logger.debug(`exposed "${input.contract}" on api "${input.apiId}"`, { role: input.role, permission: input.permission });
 
     return row;
+}
+
+/**
+ * An event is exposed only if it can be delivered to somebody: an event this node has no definition
+ * of, or whose definition cannot be narrowed to a subscriber, is refused here with the reason --
+ * never accepted into a stream that then stays silent, the hardest failure to see.
+ */
+function refuseUnstreamableEvent(input: AddInput): void {
+    if (input.permission !== undefined) {
+        throw new MeshError({
+            message: 'An event is gated by role only -- a permission names a contract to be permitted to call.',
+            code: 'BAD_REQUEST',
+            status: 400,
+        });
+    }
+    const scope = eventScope(input.contract);
+    if (scope === undefined) {
+        throw new MeshError({
+            message: `Cannot stream "${input.contract}": no module loaded on this node defines it.`,
+            code: 'BAD_REQUEST',
+            status: 400,
+        });
+    }
+    if (scope !== 'global' && 'refusal' in scope) {
+        throw new MeshError({ message: `Cannot stream "${input.contract}": ${scope.refusal}.`, code: 'BAD_REQUEST', status: 400 });
+    }
 }

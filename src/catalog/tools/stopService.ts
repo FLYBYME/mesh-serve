@@ -35,5 +35,13 @@ export async function stopService(input: PartStopInput, ctx: IServiceContext): P
     await unloadAndEvictModule(ctx, running.modulePath);
     clearServiceRunning(ctx.nodeID, part.id);
 
+    ctx.emit('serve.part.stopped', {
+        tenantId: part.tenantId,
+        partId: part.id,
+        key: part.key,
+        nodeID: ctx.nodeID,
+        ...(running.artifactId !== undefined ? { artifactId: running.artifactId } : {}),
+    });
+
     return { stopped: true };
 }

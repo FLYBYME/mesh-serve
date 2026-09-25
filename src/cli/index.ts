@@ -8,6 +8,7 @@ import { SyncCommand } from './commands/sync.js';
 import { LoginCommand } from './commands/login.js';
 import { SwitchCommand } from './commands/switch.js';
 import { ApisCommand } from './commands/apis.js';
+import { WatchCommand } from './commands/watch.js';
 import { registerDiscoveredCommands } from './core/dynamicCommands.js';
 import { readSession } from './core/session.js';
 
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
     new LoginCommand().register(program);
     new SwitchCommand().register(program);
     new ApisCommand().register(program);
+    new WatchCommand().register(program);
 
     // Last, and from cache: a discovered command must never shadow a built-in, and `--help` has to
     // render without a cluster to ask.

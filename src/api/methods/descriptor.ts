@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { globalContractRegistry, isPublicContract } from '@flybyme/mesh';
+import { eventScope, globalContractRegistry, isPublicContract } from '@flybyme/mesh';
 import type { ToolContract } from '@flybyme/mesh';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -23,12 +23,19 @@ export interface DescribedCall {
     readonly stream?: boolean;
 }
 
+/** An event streamed over `${base}/events` -- mesh-web's `DescribedEvent`. No gate means public. */
+export interface DescribedEvent {
+    readonly name: string;
+    readonly gate?: { readonly kind: 'role'; readonly role: string };
+}
+
 export interface ExposureDescriptor {
     readonly host: string;
     readonly base: string;
     readonly exposure: string;
     readonly shapeHash: string;
     readonly calls: readonly DescribedCall[];
+    readonly events: readonly DescribedEvent[];
 }
 
 /**
@@ -53,8 +60,17 @@ function gateOf(row: Expose, contract: ToolContract): string {
  */
 export function buildDescriptor(host: string, rows: readonly Expose[]): ExposureDescriptor {
     const calls: DescribedCall[] = [];
+    const events: DescribedEvent[] = [];
 
     for (const row of rows) {
+        if (row.kind === 'event') {
+            // Advertised only if deliverable from here -- the same check serve.expose.add made,
+            // made again rather than trusted, like a contract row's public check below.
+            if (streamableFrom(row.contract)) {
+                events.push({ name: row.contract, ...(row.role !== undefined ? { gate: { kind: 'role', role: row.role } } : {}) });
+            }
+            continue;
+        }
         const contract = globalContractRegistry.get(row.contract);
         if (contract === undefined || !isPublicContract(contract)) {
             continue;
@@ -76,14 +92,25 @@ export function buildDescriptor(host: string, rows: readonly Expose[]): Exposure
     }
 
     calls.sort((a, b) => a.key.localeCompare(b.key));
+    events.sort((a, b) => a.name.localeCompare(b.name));
 
     const shapeHash = crypto.createHash('sha256')
         .update(JSON.stringify(calls.map((c) => ({ key: c.key, method: c.method, path: c.path, input: c.input, output: c.output }))))
         .digest('hex');
 
+    // Events are part of the gate, not the shape: they change what a site may receive, not how a
+    // call is made. Appended only when present, so an api with no events keeps the exposure hash
+    // every client generated before events existed was built against.
     const exposure = crypto.createHash('sha256')
         .update(JSON.stringify(calls.map((c) => ({ key: c.key, gate: c.gate }))))
+        .update(events.length > 0 ? JSON.stringify(events) : '')
         .digest('hex');
 
-    return { host, base: API_BASE, exposure, shapeHash, calls };
+    return { host, base: API_BASE, exposure, shapeHash, calls, events };
+}
+
+/** Whether an event is defined here and narrowable to somebody -- see core/EventScope in mesh. */
+export function streamableFrom(name: string): boolean {
+    const scope = eventScope(name);
+    return scope !== undefined && (scope === 'global' || !('refusal' in scope));
 }

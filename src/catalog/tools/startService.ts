@@ -4,7 +4,7 @@ import path from 'node:path';
 import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
-import type { PartStartInput, PartStartOutput } from '../contracts/part.contract.js';
+import type { Part, PartStartInput, PartStartOutput } from '../contracts/part.contract.js';
 import { artifactAssetPath } from '../methods/artifacts.js';
 import { artifactToRun, type RunnableArtifact } from '../methods/partArtifact.js';
 import { ensureArtifactNodeModules } from '../methods/build.js';
@@ -24,9 +24,33 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
         throw new MeshError({ message: `"${part.key}" is already running on this node.`, code: 'BAD_REQUEST', status: 400 });
     }
 
+    // Told as it happens -- started, or failed and why -- so starting a part can be watched over the
+    // api instead of read out of the node's journal.
+    const lifecycle = { tenantId: part.tenantId, partId: part.id, key: part.key, nodeID: ctx.nodeID };
+    let artifactId: string | undefined;
+    try {
+        const started = await loadPart(ctx, part, (id) => { artifactId = id; });
+        ctx.emit('serve.part.started', { ...lifecycle, ...(artifactId !== undefined ? { artifactId } : {}) });
+        return started;
+    } catch (err) {
+        ctx.emit('serve.part.failed', {
+            ...lifecycle,
+            ...(artifactId !== undefined ? { artifactId } : {}),
+            error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+    }
+}
+
+async function loadPart(
+    ctx: IServiceContext,
+    part: Part,
+    onArtifact: (artifactId: string) => void,
+): Promise<PartStartOutput> {
     const meta = { tenant_id: part.tenantId };
     const runnable = await artifactToRun(ctx, part, meta);
     const { artifact, hash } = runnable;
+    onArtifact(artifact.id);
 
     const jsAsset = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
     if (jsAsset === undefined) {

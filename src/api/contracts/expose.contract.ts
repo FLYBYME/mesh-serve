@@ -20,7 +20,8 @@ export type Expose = z.infer<typeof exposeCrud.outputSchema>;
 
 export const addInputSchema = z.object({
     apiId: z.string().min(1).describe('The serve.api to expose this contract on'),
-    contract: z.string().min(1).describe('The domain.action key to expose, e.g. "identity.whoami"'),
+    kind: z.enum(['contract', 'event']).default('contract').describe('"event" streams an event over /events instead of exposing a contract'),
+    contract: z.string().min(1).describe('The domain.action key to expose, e.g. "identity.whoami" -- or, for kind "event", the event name'),
     role: z.string().optional().describe('An identity.role key required to call this; at most one of role or permission is set'),
     permission: z.string().optional().describe('Triggers an identity.permits check against the caller\'s resolved role permissions; at most one of role or permission is set'),
 }).describe('Expose a contract on an api, gated by role, permission, or neither for public');
@@ -39,7 +40,7 @@ export const exposeAddContract = defineContract({
     // Decides what is reachable over an api at all. Reaching this anonymously would mean being
     // able to publish anything, including this.
     filePath: 'src/api/tools/add.ts', concurrency: 'on-demand', permissions: ['operator'],
-    print: (o) => `${o.contract} on ${o.apiId}`,
+    print: (o) => `${o.kind === 'event' ? 'event ' : ''}${o.contract} on ${o.apiId}`,
 });
 
 export type AddInput = z.infer<typeof exposeAddContract.inputSchema>;

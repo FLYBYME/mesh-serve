@@ -1,4 +1,4 @@
-import { defineContract, defineCrud, MeshError, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, defineEvent, MeshError, z } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { partSchema } from '../schema/part.js';
@@ -92,6 +92,41 @@ export const partStartOutputSchema = z.object({
  * this framework already uses; duplicating that as a contract field would be a second way to say
  * the same thing and a way for the two to disagree.
  */
+/**
+ * A service part's lifecycle on one node, as it happens -- what an operator used to learn only by
+ * SSHing into the node and reading its journal. Scoped by the part's own tenant; an operator's
+ * subscription sees every tenant's (see api/methods/delivery.ts).
+ */
+const partLifecycleFields = {
+    tenantId: z.string().describe('The organization that owns the part'),
+    partId: z.string(),
+    key: z.string().describe('The part key, e.g. "platform/certs"'),
+    nodeID: z.string().describe('The node this happened on'),
+    artifactId: z.string().optional().describe('The build it was running, when known'),
+};
+
+export const partStartedEvent = defineEvent(
+    'serve.part.started',
+    z.object(partLifecycleFields).describe('A service part started on a node'),
+    { scopedBy: 'tenantId' },
+);
+
+export const partStoppedEvent = defineEvent(
+    'serve.part.stopped',
+    z.object(partLifecycleFields).describe('A service part was stopped on a node'),
+    { scopedBy: 'tenantId' },
+);
+
+export const partFailedEvent = defineEvent(
+    'serve.part.failed',
+    z.object({ ...partLifecycleFields, error: z.string().describe('Why it failed') })
+        .describe('A service part failed to start on a node'),
+    { scopedBy: 'tenantId' },
+);
+
+export type PartLifecycleEvent = z.infer<typeof partStartedEvent.schema>;
+export type PartFailedEvent = z.infer<typeof partFailedEvent.schema>;
+
 export const partStartContract = defineContract({
     domain: 'serve.part',
     action: 'start',
