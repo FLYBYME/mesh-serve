@@ -417,6 +417,9 @@ function sameGate(a: ExposeSpec['gate'], b: ExposeSpec['gate']): boolean {
  */
 const BOOTSTRAP_OWNED = new Set(BOOTSTRAP_EXPOSED_CONTRACTS.map((c) => c.contract));
 
+/** Expose rows read per call; the loop reads until a short page. */
+const EXPOSE_PAGE = 500;
+
 interface ExposeRow {
     readonly contract: string;
     readonly role?: string;
@@ -424,7 +427,14 @@ interface ExposeRow {
 }
 
 async function syncExposed(client: Client, consoleApi: Api): Promise<void> {
-    const current = await call<ExposeRow[]>(client, 'serve.expose.find', { query: { apiId: consoleApi.id } });
+    // Every row, page by page: `find` returns 100 unless told otherwise, and a row past those would
+    // look missing here and be exposed a second time.
+    const current: ExposeRow[] = [];
+    for (let offset = 0; ; offset += EXPOSE_PAGE) {
+        const page = await call<ExposeRow[]>(client, 'serve.expose.find', { query: { apiId: consoleApi.id }, limit: EXPOSE_PAGE, offset });
+        current.push(...page);
+        if (page.length < EXPOSE_PAGE) break;
+    }
     const currentByContract = new Map(current.map((row) => [row.contract, row]));
     const desired = new Map(site.api.expose.map((spec) => [spec.contract, spec]));
 

@@ -32,6 +32,9 @@ async function resolveDrivers(broker: IServiceBroker, artifact: Artifact): Promi
     return resolved;
 }
 
+/** Parts read per call when listing a tenant's parts; the loop reads until a short page. */
+const PART_PAGE = 500;
+
 /**
  * Every other part's declared `imports` specifier, so a non-kernel build externalizes whatever
  * it actually references instead of inlining a second copy of code the page loads separately.
@@ -39,9 +42,18 @@ async function resolveDrivers(broker: IServiceBroker, artifact: Artifact): Promi
  * listed, since esbuild only externalizes what a build's own module graph actually references.
  */
 async function resolveExternals(broker: IServiceBroker, part: Part): Promise<string[]> {
-    const others = await broker.call('serve.part.find', {
-        query: { tenantId: part.tenantId },
-    }, { meta: { tenant_id: part.tenantId } });
+    // Every part, page by page: `find` returns 100 unless told otherwise, and a part past those would
+    // quietly be bundled into its importers instead of kept external.
+    const others: Part[] = [];
+    for (let offset = 0; ; offset += PART_PAGE) {
+        const page = await broker.call('serve.part.find', {
+            query: { tenantId: part.tenantId },
+            limit: PART_PAGE,
+            offset,
+        }, { meta: { tenant_id: part.tenantId } });
+        others.push(...page);
+        if (page.length < PART_PAGE) break;
+    }
     return others
         .filter((other) => other.id !== part.id && other.imports !== undefined)
         .map((other) => other.imports as string);

@@ -9,6 +9,9 @@ import { EventHub, openStream, type Omitted, type Subscriber } from './methods/e
 import { matchPath } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
 
+/** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
+const EXPOSE_PAGE = 500;
+
 interface Caller {
     readonly userId: string;
     /** True when auth came from an api token rather than a person's ticket -- see resolveCaller. */
@@ -182,7 +185,15 @@ export class ApiGateway {
      * caller required, just the tenant context this request is already known to be serving.
      */
     private async resolveExposeRows(apiId: string, tenantId: string): Promise<Expose[]> {
-        return this.broker.call('serve.expose.find', { query: { apiId } }, { meta: { tenant_id: tenantId } });
+        // Every row, page by page. `find` returns 100 rows unless told otherwise, and reading only
+        // those silently unexposed whatever sorted after them: the 101st row exposed on
+        // api.surfdns.net took serve.part.update and serve.repo.* off the api, with no error anywhere.
+        const rows: Expose[] = [];
+        for (let offset = 0; ; offset += EXPOSE_PAGE) {
+            const page = await this.broker.call('serve.expose.find', { query: { apiId }, limit: EXPOSE_PAGE, offset }, { meta: { tenant_id: tenantId } });
+            rows.push(...page);
+            if (page.length < EXPOSE_PAGE) return rows;
+        }
     }
 
     private async resolveTarget(hostname: string): Promise<Target> {

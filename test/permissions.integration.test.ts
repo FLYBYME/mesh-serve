@@ -15,7 +15,7 @@ import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
-import type { IServiceBroker } from '@flybyme/mesh';
+import type { Database, IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
@@ -183,5 +183,29 @@ describe('a contract permission floor an expose row cannot lower', () => {
         expect(gateOf('identity.role.upsert')).toBe('operator');
         // Genuinely ungated, and now distinguishable from "the row just didn't name a role".
         expect(gateOf('identity.ticket.issue')).toBe('public');
+    });
+
+    /**
+     * `find` returns 100 rows unless told otherwise, and the gateway once read only those: the 101st
+     * row exposed on api.surfdns.net took serve.part.update and serve.repo.* off the api -- 404 on
+     * call, gone from the descriptor -- with no error anywhere. Runs last: it leaves 150 extra rows.
+     */
+    it('routes and describes a row past the hundredth', async () => {
+        const exposes = broker.getProvider<Database>('database').collection('serve.expose').rawCollection;
+        const whoamiRow = await exposes.findOne({ apiId, contract: 'identity.whoami' });
+        if (whoamiRow === null) throw new Error('identity.whoami is not exposed');
+
+        // Filler rows naming contracts that do not exist: skipped by the gateway, but they count.
+        await exposes.insertMany(Array.from({ length: 150 }, (_, i) => ({ tenantId: whoamiRow.tenantId, apiId, kind: 'contract', contract: `filler.nothing${i}`, createdAt: new Date(), updatedAt: new Date() })));
+        // Re-expose whoami after them, so it sorts past the first hundred.
+        await exposes.deleteOne({ apiId, contract: 'identity.whoami' });
+        await exposes.insertOne({ tenantId: whoamiRow.tenantId, apiId, kind: 'contract', contract: 'identity.whoami', createdAt: new Date(), updatedAt: new Date() });
+        expect(await exposes.countDocuments({ apiId })).toBeGreaterThan(150);
+
+        const called = await fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${memberToken}` } });
+        expect(called.status).toBe(200);
+
+        const descriptor = await json(await fetch(`${ORIGIN}/api/_describe`)) as { calls: { key: string }[] };
+        expect(descriptor.calls.map((c) => c.key)).toContain('identity.whoami');
     });
 });
