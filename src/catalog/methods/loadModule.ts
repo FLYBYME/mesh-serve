@@ -30,9 +30,8 @@ const require = createRequire(import.meta.url);
  *   the load records exactly which contracts it mounted, unloading can reverse precisely that.
  * - `register` -- a plain function handed the broker, which mounts whatever it owns
  *   (`registerCrud`/`registerContract`/`registerCrudHook`/`registerEventHandler`) and returns the
- *   domain it registered under. Still supported for a part that wants full control of its own
- *   registration, with one real cost: it tells nobody what it mounted, so unloading one can run
- *   its `stop` and evict its module but cannot unmount its contracts.
+ *   domain it registered under. It tells nobody what it mounted, so it runs inside a
+ *   `broker.withOwner` scope, and unloading reverses the whole scope (`unregisterOwner`).
  *
  * `domains` is checked first, so a bundle exporting both is unambiguous.
  */
@@ -78,12 +77,23 @@ interface LoadedPartRecord {
     readonly domains: readonly string[];
     /** Tool keys `loadDomain` actually mounted, which is what unregisterContract needs. */
     readonly contracts: readonly string[];
+    /**
+     * The `broker.withOwner` scope the load ran in. Contracts are listed above, but a part also
+     * registers things no list shows -- event handlers, CRUD hooks -- and `unregisterOwner(owner)`
+     * is what takes those back. Before it, a part reloaded in place (a re-pin) left its old event
+     * handlers subscribed beside the new module's, so every event ran both builds' code.
+     */
+    readonly owner: string;
 }
 
 const loadedParts = new Map<string, LoadedPartRecord>();
 
 function partKey(nodeID: string, absolutePath: string): string {
     return `${nodeID}\u0000${absolutePath}`;
+}
+
+function ownerOf(nodeID: string, absolutePath: string): string {
+    return `part:${absolutePath}@${nodeID}`;
 }
 
 /**
@@ -125,6 +135,9 @@ export async function unloadAndEvictModule(ctx: IServiceContext, absolutePath: s
     for (const toolKey of record.contracts) {
         ctx.broker.unregisterContract(toolKey);
     }
+    // Everything else the load registered -- event handlers, CRUD hooks -- and any contract the
+    // list above missed. Only what is still this load's own is removed.
+    ctx.broker.unregisterOwner(record.owner);
 
     // `require.resolve` rather than the raw path: the cache is keyed by the resolved filename, and
     // a caller could hand us a path that differs by a symlink or a trailing segment.
@@ -183,17 +196,20 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         // `identity` alongside `identity.role` would mount identity.role twice -- which
         // registerContract correctly refuses. The list stays complete (it describes the part);
         // deciding which of those calls is redundant belongs here, where that rule lives.
+        const owner = ownerOf(ctx.nodeID, absolutePath);
         const mounted: string[] = [];
-        for (const domain of rootDomains(imported.domains)) {
-            // `resolve` as well as the map: a bundle's map covers everything it bundled, but a part
-            // loaded from real files on disk has no map at all, and the two share this one path
-            // rather than diverging.
-            const { contracts } = await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
-            mounted.push(...contracts);
-        }
+        await ctx.broker.withOwner(owner, async () => {
+            for (const domain of rootDomains(imported.domains ?? [])) {
+                // `resolve` as well as the map: a bundle's map covers everything it bundled, but a
+                // part loaded from real files on disk has no map at all, and the two share this one
+                // path rather than diverging.
+                const { contracts } = await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
+                mounted.push(...contracts);
+            }
+        });
         // Recorded so unloadAndEvictModule can reverse exactly this, rather than re-deriving it
         // from a manifest that may since have been evicted.
-        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [...imported.domains], contracts: mounted });
+        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [...imported.domains], contracts: mounted, owner });
         return { domain: primary, nodeID: ctx.nodeID };
     }
 
@@ -208,7 +224,11 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         // real broker state, not something the part has to opt into reporting.
         const before = new Set(ctx.broker.listContracts().map((contract) => toolKey(contract)));
 
-        const registration = await imported.register(ctx.broker);
+        // Inside an owner scope, so whatever `register` subscribes -- which the contract snapshot
+        // below cannot see -- is taken back on unload too.
+        const owner = ownerOf(ctx.nodeID, absolutePath);
+        const register = imported.register;
+        const registration = await ctx.broker.withOwner(owner, () => register(ctx.broker));
         const domain = typeof registration === 'string' ? registration : registration.domain;
         if (typeof registration !== 'string' && registration.stop) {
             partTeardown.set(domain, registration.stop);
@@ -218,7 +238,7 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
             .map((contract) => toolKey(contract))
             .filter((key) => !before.has(key));
 
-        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [domain], contracts: mounted });
+        loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [domain], contracts: mounted, owner });
         return { domain, nodeID: ctx.nodeID };
     }
 
