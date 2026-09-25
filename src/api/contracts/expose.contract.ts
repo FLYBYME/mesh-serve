@@ -24,7 +24,8 @@ export const addInputSchema = z.object({
     contract: z.string().min(1).describe('The domain.action key to expose, e.g. "identity.whoami" -- or, for kind "event", the event name'),
     role: z.string().optional().describe('An identity.role key required to call this; at most one of role or permission is set'),
     permission: z.string().optional().describe('Triggers an identity.permits check against the caller\'s resolved role permissions; at most one of role or permission is set'),
-}).describe('Expose a contract on an api, gated by role, permission, or neither for public');
+    public: z.boolean().optional().describe('Say so to expose with no gate at all, when the contract itself demands no role either: anyone may then call it, acting as the api\'s own tenant. Refused without it'),
+}).describe('Expose a contract on an api, gated by role, permission, or -- explicitly -- public');
 
 export const addOutputSchema = exposeCrud.get.outputSchema;
 

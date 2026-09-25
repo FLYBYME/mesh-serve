@@ -109,7 +109,8 @@ describe('a contract permission floor an expose row cannot lower', () => {
         // Deliberately no `role` on any of these rows -- the mistake the floor exists to survive.
         for (const contract of ['identity.user.grantRole', 'identity.role.upsert', 'identity.whoami', 'identity.ticket.issue']) {
             const existing = await broker.call('serve.expose.find_one', { query: { apiId, contract } }, meta);
-            if (existing === undefined) await broker.call('serve.expose.add', { apiId, contract }, meta);
+            // public: true -- deliberately ungated rows, the mistake the floor exists to survive.
+            if (existing === undefined) await broker.call('serve.expose.add', { apiId, contract, public: true }, meta);
         }
 
         for (const [email, target] of [['op@perm.invalid', 'operator'], ['member@perm.invalid', 'member']] as const) {
@@ -183,6 +184,35 @@ describe('a contract permission floor an expose row cannot lower', () => {
         expect(gateOf('identity.role.upsert')).toBe('operator');
         // Genuinely ungated, and now distinguishable from "the row just didn't name a role".
         expect(gateOf('identity.ticket.issue')).toBe('public');
+    });
+
+    /**
+     * Stored mail on api.surfdns.net became readable without signing in (2026-09-25): rows for
+     * emailMessage.get/find were added with the role left off, and an anonymous caller acts as the
+     * api's own tenant. A row that would make a contract callable by anyone must now say so.
+     */
+    describe('refusing an accidentally public row', () => {
+        const meta = async () => ({ meta: { tenant_id: (await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' }))?.tenantId ?? '' } });
+
+        it('refuses a row with no gate, on a contract that demands none, unless public is said', async () => {
+            const m = await meta();
+            await broker.call('serve.expose.remove', { apiId, contract: 'identity.organization.get' }, m).catch(() => undefined);
+
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get' }, m)).rejects.toThrow(/callable by anyone.*public: true/);
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', public: true }, m)).resolves.toMatchObject({ contract: 'identity.organization.get' });
+        });
+
+        it('allows a row with no gate when the contract has its own floor', async () => {
+            const m = await meta();
+            await broker.call('serve.expose.remove', { apiId, contract: 'identity.user.grantRole' }, m).catch(() => undefined);
+
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.user.grantRole' }, m)).resolves.toMatchObject({ contract: 'identity.user.grantRole' });
+        });
+
+        it('refuses an ungated event unless public is said', async () => {
+            const m = await meta();
+            await expect(broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.stopped' }, m)).rejects.toThrow(/callable by anyone/);
+        });
     });
 
     /**

@@ -95,7 +95,8 @@ async function ensureExposed(origin: string, token: string, apiId: string, contr
     const res = await fetch(`${origin}/api/expose`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-        body: JSON.stringify({ apiId, contract, ...(role !== undefined ? { role } : {}) }),
+        // No role here means a deliberately public row, which serve.expose.add now requires be said.
+        body: JSON.stringify({ apiId, contract, ...(role !== undefined ? { role } : { public: true }) }),
     });
     if (res.status === 200 || res.status === 409) return;
     throw new Error(`exposing ${contract}: expected 200 or 409, got ${String(res.status)} (${String(await res.text())})`);
@@ -349,7 +350,7 @@ describe('a fresh install, booted for real', () => {
         const exposeRes = await fetch(`${API_ORIGIN}/api/expose`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
-            body: JSON.stringify({ apiId: flowApiId, contract: 'identity.whoami' }),
+            body: JSON.stringify({ apiId: flowApiId, contract: 'identity.whoami', public: true }),
         });
         expect(exposeRes.status).toBe(200);
         const row = await json(exposeRes) as { tenantId: string; apiId: string };

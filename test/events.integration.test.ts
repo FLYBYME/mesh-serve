@@ -151,7 +151,7 @@ describe('/api/events', () => {
 
         const meta = { meta: { tenant_id: org.id } };
         await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.failed', role: 'operator' }, meta);
-        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.started' }, meta);
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.started', public: true }, meta);
 
         for (const [email, target] of [['op@events.invalid', 'operator'], ['member@events.invalid', 'member']] as const) {
             const res = await fetch(`${ORIGIN}/api/identity/ticket`, {

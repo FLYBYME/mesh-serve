@@ -3,6 +3,21 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { AddInput, AddOutput } from '../contracts/expose.contract.js';
 
+/**
+ * A row with no role, on a contract that demands none, is callable by anyone -- and an anonymous
+ * caller acts as the api's own tenant, so a tenant-scoped read then publishes that tenant's data.
+ * That is how stored mail on api.surfdns.net became readable without signing in (2026-09-25): two
+ * rows added with the role left off. Public is allowed; it just has to be said.
+ */
+function refuseAccidentallyPublic(input: AddInput, why: string): void {
+    if (input.public === true) return;
+    throw new MeshError({
+        message: `"${input.contract}" would be callable by anyone, acting as this api's own tenant (${why}). Give it a role (e.g. role: "operator"), or pass public: true if that is really intended.`,
+        code: 'BAD_REQUEST',
+        status: 400,
+    });
+}
+
 export async function add(
     input: AddInput,
     ctx: IServiceContext
@@ -11,8 +26,10 @@ export async function add(
         throw new MeshError({ message: 'At most one of role or permission may be set.', code: 'BAD_REQUEST', status: 400 });
     }
 
+    const ungated = input.role === undefined && input.permission === undefined;
     if (input.kind === 'event') {
         refuseUnstreamableEvent(input);
+        if (ungated) refuseAccidentallyPublic(input, 'an event has no role of its own');
     } else {
         // This node's definition, or what the node that runs it advertises: the api publishes
         // contracts that run elsewhere (smtp.capture_list runs on surf, the api on edge1).
@@ -20,6 +37,7 @@ export async function add(
         if (contract === undefined || contract.visibility !== 'public') {
             throw new MeshError({ message: `"${input.contract}" is not a public contract.`, code: 'BAD_REQUEST', status: 400 });
         }
+        if (ungated && contract.permissions.length === 0) refuseAccidentallyPublic(input, 'the contract demands no role itself');
     }
 
     // The target api can belong to any tenant, unrelated to the caller's own, so its tenant isn't

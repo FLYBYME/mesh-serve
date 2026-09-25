@@ -442,9 +442,10 @@ async function syncExposed(client: Client, consoleApi: Api): Promise<void> {
         const existing = currentByContract.get(contract);
 
         if (existing === undefined) {
+            // A site spec's `public` is already an explicit decision; say it to add as one.
             await call(client, 'serve.expose.add', {
                 apiId: consoleApi.id, contract,
-                ...(spec.gate !== 'public' ? spec.gate : {}),
+                ...(spec.gate !== 'public' ? spec.gate : { public: true }),
             });
             console.log('Exposed', contract, gateLabel(spec.gate));
             continue;
@@ -457,7 +458,7 @@ async function syncExposed(client: Client, consoleApi: Api): Promise<void> {
             await call(client, 'serve.expose.remove', { apiId: consoleApi.id, contract });
             await call(client, 'serve.expose.add', {
                 apiId: consoleApi.id, contract,
-                ...(spec.gate !== 'public' ? spec.gate : {}),
+                ...(spec.gate !== 'public' ? spec.gate : { public: true }),
             });
             console.log('Regated', contract, gateLabel(spec.gate));
         }
