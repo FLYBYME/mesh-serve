@@ -65,6 +65,18 @@ export const apiOrigin = (host: string): string => {
     return `${publicScheme()}://${host}${port ? `:${port}` : ''}`;
 };
 
+/**
+ * The host a client asked for. Through the edge proxy, Host is this node's own upstream address
+ * (10.42.0.4:3123) and the name the client typed arrives as x-forwarded-host -- the api gateway
+ * already read it; this one did not, so every proxied page answered "No site for 10.42.0.4"
+ * (found serving surfdns.net, the first site behind a route). Host is the fallback for a direct,
+ * unproxied hit.
+ */
+export const requestHost = (headers: http.IncomingHttpHeaders): string | undefined => {
+    const forwarded = headers['x-forwarded-host'];
+    return (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? headers.host;
+};
+
 /** Determine client IP address from an incoming HTTP request (forwarded-first, then socket remote). */
 const getClientIp = (req: http.IncomingMessage): string => {
     const forwarded = req.headers['x-forwarded-for'];
@@ -204,7 +216,7 @@ export class CdnGateway {
     }
 
     private async resolveHostname(req: http.IncomingMessage): Promise<string> {
-        const host = req.headers.host;
+        const host = requestHost(req.headers);
         if (host === undefined) {
             throw new MeshError({
                 code: 'Bad Request',
