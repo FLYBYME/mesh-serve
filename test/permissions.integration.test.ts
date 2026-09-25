@@ -186,6 +186,48 @@ describe('a contract permission floor an expose row cannot lower', () => {
     });
 
     /**
+     * The api publishes contracts that run on other nodes. It used to consult only this node's own
+     * definitions, so smtp.capture_list -- which runs on surf, while the api runs on edge1 -- was
+     * refused as "not a public contract". A peer's presence now carries the declaration.
+     */
+    it('exposes and describes a contract only a peer runs, from what that peer advertises', async () => {
+        const meta = { meta: { tenant_id: (await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' }))?.tenantId ?? '' } };
+        broker.registry.registerNode({
+            nodeID: 'peer-surf',
+            type: 'node',
+            namespace: 'default',
+            addresses: ['ws://127.0.0.1:16599'],
+            available: true,
+            timestamp: Date.now(),
+            nodeSeq: 1,
+            services: [{
+                name: 'remotesvc',
+                tools: {
+                    'remotesvc.capture_list': {
+                        name: 'remotesvc.capture_list',
+                        description: 'Runs only on the peer.',
+                        visibility: 'public',
+                        rest: { method: 'GET', path: '/remotesvc/captures' },
+                        roles: ['operator'],
+                        metadata: { domain: 'remotesvc', action: 'capture_list', isCrud: false, destructive: false },
+                        params: { type: 'object', properties: { limit: { type: 'number' } } },
+                        returns: { type: 'object' },
+                    },
+                },
+            }],
+        });
+
+        await broker.call('serve.expose.add', { apiId, contract: 'remotesvc.capture_list' }, meta);
+
+        const descriptor = await json(await fetch(`${ORIGIN}/api/_describe`)) as { calls: { key: string; path: string; gate: string }[] };
+        expect(descriptor.calls.find((c) => c.key === 'remotesvc.capture_list')).toMatchObject({ path: '/remotesvc/captures', gate: 'operator' });
+
+        // Gated like any other: the peer's permissions are the floor.
+        const anonymous = await fetch(`${ORIGIN}/api/remotesvc/captures`);
+        expect(anonymous.status).toBe(401);
+    });
+
+    /**
      * `find` returns 100 rows unless told otherwise, and the gateway once read only those: the 101st
      * row exposed on api.surfdns.net took serve.part.update and serve.repo.* off the api -- 404 on
      * call, gone from the descriptor -- with no error anywhere. Runs last: it leaves 150 extra rows.

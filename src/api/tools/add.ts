@@ -1,4 +1,4 @@
-import { eventScope, globalContractRegistry, isPublicContract, MeshError } from '@flybyme/mesh';
+import { eventScope, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { AddInput, AddOutput } from '../contracts/expose.contract.js';
@@ -14,8 +14,10 @@ export async function add(
     if (input.kind === 'event') {
         refuseUnstreamableEvent(input);
     } else {
-        const contract = globalContractRegistry.get(input.contract);
-        if (contract === undefined || !isPublicContract(contract)) {
+        // This node's definition, or what the node that runs it advertises: the api publishes
+        // contracts that run elsewhere (smtp.capture_list runs on surf, the api on edge1).
+        const contract = ctx.broker.contractDeclaration(input.contract);
+        if (contract === undefined || contract.visibility !== 'public') {
             throw new MeshError({ message: `"${input.contract}" is not a public contract.`, code: 'BAD_REQUEST', status: 400 });
         }
     }

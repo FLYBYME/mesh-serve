@@ -1,10 +1,15 @@
 import crypto from 'node:crypto';
 
-import { eventScope, globalContractRegistry, isPublicContract } from '@flybyme/mesh';
-import type { ToolContract } from '@flybyme/mesh';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { eventScope } from '@flybyme/mesh';
+import type { ContractDeclaration } from '@flybyme/mesh';
 
 import type { Expose } from '../contracts/expose.contract.js';
+
+/**
+ * How a contract is called and who may call it, whether it runs on this node or another --
+ * `broker.contractDeclaration`. The api runs on one node and publishes contracts that run on others.
+ */
+export type DeclarationLookup = (key: string) => ContractDeclaration | undefined;
 
 /** Every contract path is routed under this prefix -- api.service.ts strips it before matching. */
 export const API_BASE = '/api';
@@ -45,7 +50,7 @@ export interface ExposureDescriptor {
  * `public` now means genuinely ungated. Before the contract floor existed it meant only "this row
  * names no role", which was the same string for a contract nobody should reach anonymously.
  */
-function gateOf(row: Expose, contract: ToolContract): string {
+function gateOf(row: Expose, contract: ContractDeclaration): string {
     const parts: string[] = [...contract.permissions];
     if (row.role !== undefined && !parts.includes(row.role)) parts.push(row.role);
     if (row.permission !== undefined) parts.push(`permission:${row.permission}`);
@@ -58,7 +63,7 @@ function gateOf(row: Expose, contract: ToolContract): string {
  * depth: describeExposure's own write path already refuses to expose an internal contract, but a
  * stale row is checked again here rather than trusted.
  */
-export function buildDescriptor(host: string, rows: readonly Expose[]): ExposureDescriptor {
+export function buildDescriptor(host: string, rows: readonly Expose[], declare: DeclarationLookup): ExposureDescriptor {
     const calls: DescribedCall[] = [];
     const events: DescribedEvent[] = [];
 
@@ -71,8 +76,8 @@ export function buildDescriptor(host: string, rows: readonly Expose[]): Exposure
             }
             continue;
         }
-        const contract = globalContractRegistry.get(row.contract);
-        if (contract === undefined || !isPublicContract(contract)) {
+        const contract = declare(row.contract);
+        if (contract === undefined || contract.visibility !== 'public') {
             continue;
         }
 
@@ -84,8 +89,8 @@ export function buildDescriptor(host: string, rows: readonly Expose[]): Exposure
             method: contract.rest.method,
             path: contract.rest.path,
             gate: gateOf(row, contract),
-            input: zodToJsonSchema(contract.inputSchema),
-            output: zodToJsonSchema(contract.outputSchema),
+            input: contract.input,
+            output: contract.output,
             destructive: contract.destructive,
             stream: contract.rest.isStream,
         });

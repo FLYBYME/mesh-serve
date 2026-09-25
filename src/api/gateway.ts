@@ -1,7 +1,7 @@
 import http from 'node:http';
 
-import { globalContractRegistry, isMeshError, isPublicContract, MeshError } from '@flybyme/mesh';
-import type { IServiceBroker, IServiceToolRegistry, ToolContract } from '@flybyme/mesh';
+import { isMeshError, MeshError } from '@flybyme/mesh';
+import type { ContractDeclaration, IServiceBroker, IServiceToolRegistry } from '@flybyme/mesh';
 
 import { type Expose } from './contracts/expose.contract.js';
 import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
@@ -25,7 +25,7 @@ interface Caller {
 
 interface Route {
     readonly row: Expose;
-    readonly contract: ToolContract;
+    readonly contract: ContractDeclaration;
     readonly params: Record<string, string>;
 }
 
@@ -254,18 +254,16 @@ export class ApiGateway {
 
         for (const row of rows) {
             if (row.kind === 'event') continue; // Streamed over /events, never called.
-            const contract = globalContractRegistry.get(row.contract);
+            // This node's definition, or the one the node running it advertises: routing needs the
+            // declaration (method, path, who may call), not the implementation.
+            const contract = this.broker.contractDeclaration(row.contract);
             if (contract === undefined) {
-                // An exposed contract this node has never seen the *declaration* of. It may well be
-                // implemented on a peer and perfectly callable -- routing needs the declaration
-                // (method and path), not the implementation. Skipping silently turns that into a
-                // bare 404 that looks identical to a wrong URL, which is exactly how a two-node
-                // cluster came to have one node answering 200 and the other 404 for the same
-                // request against the same expose rows.
-                this.broker.logger.warn(`serve.api: "${row.contract}" is exposed on ${row.apiId} but its contract is not registered on this node, so nothing can route to it here.`);
+                // Neither defined here nor advertised by any available peer. Skipping silently turns
+                // that into a bare 404 that looks identical to a wrong URL, so say so.
+                this.broker.logger.warn(`serve.api: "${row.contract}" is exposed on ${row.apiId} but no node declares it, so nothing can route to it.`);
                 continue;
             }
-            if (!isPublicContract(contract)) continue;
+            if (contract.visibility !== 'public') continue;
             if (contract.rest.method !== method) continue;
 
             const params = matchPath(contract.rest.path, urlPath);
@@ -286,7 +284,7 @@ export class ApiGateway {
      */
     private async checkGate(
         row: Expose,
-        contract: ToolContract,
+        contract: ContractDeclaration,
         caller: Caller | undefined,
         tenantId: string,
     ): Promise<void> {
@@ -533,7 +531,7 @@ export class ApiGateway {
     }
 
     private async handleDescribe(target: Target, res: http.ServerResponse): Promise<void> {
-        const descriptor = buildDescriptor(target.host, target.rows);
+        const descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
 
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 200;
@@ -596,12 +594,12 @@ export class ApiGateway {
         }
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already
-        // confirmed globalContractRegistry has a matching public contract for it) -- the broker's
+        // confirmed a public declaration for it, here or advertised) -- the broker's
         // own generic can't know that statically, so this crosses the boundary the same way mesh's
         // own generated CLI does for identical dynamic dispatch.
         const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta });
 
-        const descriptor = buildDescriptor(target.host, target.rows);
+        const descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
         res.setHeader('x-exposure-shape', descriptor.shapeHash);
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 200;

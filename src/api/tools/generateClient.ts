@@ -2,6 +2,9 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { GenerateClientInput, GenerateClientOutput } from '../contracts/generateClient.contract.js';
 import { generateClient as render } from '../methods/generateClient.js';
+import type { Expose } from '../contracts/expose.contract.js';
+
+const EXPOSE_PAGE = 500;
 
 /**
  * The server-side half of "generate a browser-safe client": the caller (mesh-serve's own CLI, run
@@ -16,7 +19,13 @@ export async function generateClient(
 ): Promise<GenerateClientOutput> {
     const api = await ctx.call('serve.api.resolveById', { id: input.apiId });
     const meta = { tenant_id: api.tenantId };
-    const allRows = await ctx.db('serve.expose', meta).find({ query: { apiId: input.apiId } });
+    // Every row, page by page -- `find` stops at 100 unless told otherwise (see gateway.ts).
+    const allRows: Expose[] = [];
+    for (let offset = 0; ; offset += EXPOSE_PAGE) {
+        const page = await ctx.db('serve.expose', meta).find({ query: { apiId: input.apiId }, limit: EXPOSE_PAGE, offset });
+        allRows.push(...page);
+        if (page.length < EXPOSE_PAGE) break;
+    }
 
     // A wanted-but-unexposed contract is silently dropped, same as buildDescriptor already does for
     // a stale row -- the caller asked for what it calls, not for a guarantee everything it calls is
@@ -25,5 +34,5 @@ export async function generateClient(
         ? allRows
         : allRows.filter((row) => input.contracts?.includes(row.contract) === true);
 
-    return { source: await render(api.apiHost, api.apiHost, rows) };
+    return { source: await render(api.apiHost, api.apiHost, rows, (key) => ctx.broker.contractDeclaration(key)) };
 }

@@ -1,6 +1,6 @@
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 
-import { buildDescriptor } from './descriptor.js';
+import { buildDescriptor, type DeclarationLookup } from './descriptor.js';
 import type { Expose } from '../contracts/expose.contract.js';
 
 /**
@@ -51,8 +51,8 @@ function gateLiteral(row: Expose | undefined): string {
     return 'undefined';
 }
 
-export async function generateClient(id: string, host: string, rows: readonly Expose[]): Promise<string> {
-    const descriptor = buildDescriptor(host, rows);
+export async function generateClient(id: string, host: string, rows: readonly Expose[], declare: DeclarationLookup): Promise<string> {
+    const descriptor = buildDescriptor(host, rows, declare);
     const rowByKey = new Map(rows.map((r) => [r.contract, r]));
 
     const schemas: string[] = [];
