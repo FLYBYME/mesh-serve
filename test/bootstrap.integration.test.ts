@@ -273,7 +273,7 @@ describe('a fresh install, booted for real', () => {
             await ensureExposed(API_ORIGIN, operatorToken, apiId, contract, 'operator');
         }
 
-        const createRepoRes = await fetch(`${API_ORIGIN}/api/repos`, {
+        const createRepoRes = await fetch(`${API_ORIGIN}/api/sourceRepos`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
             body: JSON.stringify({ tenantId: organizationId, name: 'repo', url: 'https://example.invalid/repo.git' }),
@@ -439,7 +439,7 @@ describe('a fresh install, booted for real', () => {
         // reads would be a different api entirely.
         await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.repo.count');
 
-        const anonRes = await fetch(`${API_ORIGIN}/api/repos/count`);
+        const anonRes = await fetch(`${API_ORIGIN}/api/sourceRepos/count`);
         expect(anonRes.status).toBe(200);
         // Reached the database and resolved a scope rather than 401ing for having no caller. The
         // count itself is whatever earlier tests left behind; that it answered at all is the point.

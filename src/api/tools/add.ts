@@ -2,6 +2,7 @@ import { eventScope, MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { AddInput, AddOutput } from '../contracts/expose.contract.js';
+import { routeShape } from '../methods/route.js';
 
 /**
  * A row with no role, on a contract that demands none, is callable by anyone -- and an anonymous
@@ -61,6 +62,7 @@ export async function add(
     if (existing !== undefined) {
         throw new MeshError({ message: `"${input.contract}" is already exposed on this api.`, code: 'CONFLICT', status: 409 });
     }
+    if (input.kind !== 'event') await refuseRouteCollision(input, meta, ctx);
 
     // Passing role/permission: undefined explicitly (rather than omitting the key) stores null,
     // which the schema's z.string().optional() fields then reject on the next read.
@@ -76,6 +78,34 @@ export async function add(
     ctx.logger.debug(`exposed "${input.contract}" on api "${input.apiId}"`, { role: input.role, permission: input.permission });
 
     return row;
+}
+
+/**
+ * Two contracts on one route shape cannot both be reached: the gateway answers the request with
+ * one of them and the other is silently unreachable. serve.repo and the gitserver's repo CRUD
+ * were both `/repos` on api.surfdns.net, and `serve.repo.find` returned gitserver repos for days.
+ */
+async function refuseRouteCollision(
+    input: AddInput,
+    meta: { user: { id: string; tenant_id: string } },
+    ctx: IServiceContext,
+): Promise<void> {
+    const contract = ctx.broker.contractDeclaration(input.contract);
+    if (contract === undefined) return; // refused above; kept for the type
+    const shape = routeShape(contract.rest.method, contract.rest.path);
+    const rows = await ctx.db('serve.expose', meta).find({ query: { apiId: input.apiId } });
+    for (const row of rows) {
+        if (row.kind === 'event') continue;
+        const other = ctx.broker.contractDeclaration(row.contract);
+        if (other === undefined) continue;
+        if (routeShape(other.rest.method, other.rest.path) === shape) {
+            throw new MeshError({
+                message: `"${input.contract}" and "${row.contract}" are both ${shape}; only one of them could ever be reached on this api. Give one of them a different path.`,
+                code: 'CONFLICT',
+                status: 409,
+            });
+        }
+    }
 }
 
 /**

@@ -216,6 +216,87 @@ describe('a contract permission floor an expose row cannot lower', () => {
     });
 
     /**
+     * serve.repo and the gitserver's repo CRUD were both `/repos` on api.surfdns.net: whichever row
+     * matched first answered for both, so serve.repo.find returned gitserver repos and
+     * serve.repo.find_one (GET /repos/one) was answered by a `get` that read "one" as an id.
+     */
+    describe('route collisions', () => {
+        const meta = async () => ({ meta: { tenant_id: (await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' }))?.tenantId ?? '' } });
+
+        it('refuses exposing a second contract on a route shape already exposed', async () => {
+            broker.registry.registerNode({
+                nodeID: 'peer-dup',
+                type: 'node',
+                namespace: 'default',
+                addresses: ['ws://127.0.0.1:16598'],
+                available: true,
+                timestamp: Date.now(),
+                nodeSeq: 1,
+                services: [{
+                    name: 'dupsvc',
+                    tools: Object.fromEntries(['first', 'second'].map((action) => [`dupsvc.${action}`, {
+                        name: `dupsvc.${action}`,
+                        description: 'Same route as its sibling.',
+                        visibility: 'public',
+                        rest: { method: 'GET', path: action === 'first' ? '/dup/:id' : '/dup/:itemId' },
+                        roles: ['operator'],
+                        metadata: { domain: 'dupsvc', action, isCrud: false, destructive: false },
+                        params: { type: 'object', properties: {} },
+                        returns: { type: 'object' },
+                    }])),
+                }],
+            });
+            const m = await meta();
+
+            await broker.call('serve.expose.add', { apiId, contract: 'dupsvc.first' }, m);
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'dupsvc.second' }, m))
+                .rejects.toThrow(/"dupsvc.second" and "dupsvc.first" are both GET \/dup\/:/);
+        });
+
+        it('answers a literal path with the contract that names it, not a parameter route listed first', async () => {
+            // Rows come back ordered by contract name, and the live case crossed domains: the
+            // gitserver's repo.get (/repos/:id) sorts before serve.repo.find_one (/repos/one).
+            // aaspec.byid sorts first the same way; only it is gated, so which one answered shows
+            // in the status alone.
+            broker.registry.registerNode({
+                nodeID: 'peer-spec',
+                type: 'node',
+                namespace: 'default',
+                addresses: ['ws://127.0.0.1:16597'],
+                available: true,
+                timestamp: Date.now(),
+                nodeSeq: 1,
+                services: [{
+                    name: 'spec',
+                    tools: {
+                        'aaspec.byid': {
+                            name: 'aaspec.byid', description: 'One by id.', visibility: 'public',
+                            rest: { method: 'GET', path: '/spec/:id' }, roles: ['operator'],
+                            metadata: { domain: 'aaspec', action: 'byid', isCrud: false, destructive: false },
+                            params: { type: 'object', properties: {} }, returns: { type: 'object' },
+                        },
+                        'zzspec.one': {
+                            name: 'zzspec.one', description: 'The literal route.', visibility: 'public',
+                            rest: { method: 'GET', path: '/spec/one' }, roles: [],
+                            metadata: { domain: 'zzspec', action: 'one', isCrud: false, destructive: false },
+                            params: { type: 'object', properties: {} }, returns: { type: 'object' },
+                        },
+                    },
+                }],
+            });
+            const m = await meta();
+            await broker.call('serve.expose.add', { apiId, contract: 'aaspec.byid' }, m);
+            await broker.call('serve.expose.add', { apiId, contract: 'zzspec.one', public: true }, m);
+
+            // The peer is not really there, so the call itself fails -- but not with the 401 that
+            // aaspec.byid's gate would have given an anonymous caller.
+            const res = await fetch(`${ORIGIN}/api/spec/one`);
+            expect(res.status).not.toBe(401);
+            expect((await fetch(`${ORIGIN}/api/spec/abc`)).status).toBe(401);
+        }, 30_000);
+    });
+
+    /**
      * The api publishes contracts that run on other nodes. It used to consult only this node's own
      * definitions, so smtp.capture_list -- which runs on surf, while the api runs on edge1 -- was
      * refused as "not a public contract". A peer's presence now carries the declaration.

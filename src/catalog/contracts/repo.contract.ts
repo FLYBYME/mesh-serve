@@ -3,7 +3,10 @@ import { defineCrud, z } from '@flybyme/mesh';
 import { repoSchema } from '../schema/repo.js';
 
 export const repoCrud = defineCrud('serve.repo', repoSchema, {
-    pluralPath: 'repos',
+    // Not `repos`: that is the gitserver's repo CRUD (surfdns-repo), exposed on the same apis, and
+    // the two collided -- GET /api/repos answered with gitserver repos. These are the git remotes
+    // parts are built from.
+    pluralPath: 'sourceRepos',
     scopedBy: 'tenantId',
     unique: [{ fields: 'url', scope: 'scoped' }],
     // update: `mesh-serve init -c` reconciles a repo's declared defaultBranch against what's

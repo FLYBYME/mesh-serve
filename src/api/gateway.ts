@@ -6,7 +6,7 @@ import type { ContractDeclaration, IServiceBroker, IServiceToolRegistry } from '
 import { type Expose } from './contracts/expose.contract.js';
 import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
 import { EventHub, openStream, type Omitted, type Subscriber } from './methods/events.js';
-import { matchPath } from './methods/route.js';
+import { matchPath, specificity } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
@@ -252,6 +252,9 @@ export class ApiGateway {
         if (!fullPath.startsWith(API_BASE)) return undefined;
         const urlPath = fullPath.slice(API_BASE.length) || '/';
 
+        // The most specific match, not the first: /repos/one must reach find_one even when the
+        // row for get (/repos/:id) was added earlier.
+        let best: Route | undefined;
         for (const row of rows) {
             if (row.kind === 'event') continue; // Streamed over /events, never called.
             // This node's definition, or the one the node running it advertises: routing needs the
@@ -267,11 +270,11 @@ export class ApiGateway {
             if (contract.rest.method !== method) continue;
 
             const params = matchPath(contract.rest.path, urlPath);
-            if (params !== undefined) {
-                return { row, contract, params };
+            if (params !== undefined && (best === undefined || specificity(contract.rest.path) > specificity(best.contract.rest.path))) {
+                best = { row, contract, params };
             }
         }
-        return undefined;
+        return best;
     }
 
     /**
