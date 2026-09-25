@@ -63,6 +63,18 @@ function gateOf(row: Expose, contract: ContractDeclaration): string {
  * depth: describeExposure's own write path already refuses to expose an internal contract, but a
  * stale row is checked again here rather than trusted.
  */
+/**
+ * A JSON Schema with every `default` removed, for hashing. A default does not change how a call is
+ * made, and one computed from the clock (surfdns-repo's `grantedAt: () => new Date()`) is written
+ * in as the time the schema was converted -- a new value on every request, so the shape hash never
+ * matched twice and clients fetched /api/_describe before every call.
+ */
+function withoutDefaults(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(withoutDefaults);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'default').map(([key, v]) => [key, withoutDefaults(v)]));
+}
+
 export function buildDescriptor(host: string, rows: readonly Expose[], declare: DeclarationLookup): ExposureDescriptor {
     const calls: DescribedCall[] = [];
     const events: DescribedEvent[] = [];
@@ -100,7 +112,7 @@ export function buildDescriptor(host: string, rows: readonly Expose[], declare: 
     events.sort((a, b) => a.name.localeCompare(b.name));
 
     const shapeHash = crypto.createHash('sha256')
-        .update(JSON.stringify(calls.map((c) => ({ key: c.key, method: c.method, path: c.path, input: c.input, output: c.output }))))
+        .update(JSON.stringify(calls.map((c) => ({ key: c.key, method: c.method, path: c.path, input: withoutDefaults(c.input), output: withoutDefaults(c.output) }))))
         .digest('hex');
 
     // Events are part of the gate, not the shape: they change what a site may receive, not how a
