@@ -21,7 +21,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
+    defaultPrint, defineContract, z,
 } from '@flybyme/mesh';
+
+/** Takes 11 s and says it may take 15: past the broker's 10 s default, inside its own declaration. */
+const slowContract = defineContract({
+    domain: 'slowsvc', action: 'wait', description: 'Takes 11 seconds.',
+    inputSchema: z.object({}), outputSchema: z.object({ waited: z.boolean() }),
+    rest: { method: 'POST', path: '/slowsvc/wait' }, visibility: 'public', destructive: false,
+    filePath: 'test/twoNode.integration.test.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: defaultPrint, timeout: 15_000,
+});
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
@@ -97,6 +107,11 @@ describe('two nodes, one serving a domain it does not hold', () => {
         // A runs identity and an api. B runs only an api -- it holds no identity contracts at all.
         appA = await bootNode('two-node-a', A, ['identity', 'api']);
         brokerA = appA.getProvider<IServiceBroker>('broker');
+        // Only A runs it; B learns its declaration from A's presence, as edge1 does surf's.
+        brokerA.registerContract(slowContract, async () => {
+            await new Promise((resolve) => setTimeout(resolve, 11_000));
+            return { waited: true };
+        });
 
         appB = await bootNode('two-node-b', B, ['api'], `ws://127.0.0.1:${A.ws}`);
         brokerB = appB.getProvider<IServiceBroker>('broker');
@@ -116,7 +131,7 @@ describe('two nodes, one serving a domain it does not hold', () => {
         const api = await brokerA.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
         if (api === undefined) throw new Error('bootstrap api missing');
         const meta = { meta: { tenant_id: org.id } };
-        for (const contract of ['identity.user.grantRole']) {
+        for (const contract of ['identity.user.grantRole', 'slowsvc.wait']) {
             const existing = await brokerA.call('serve.expose.find_one', { query: { apiId: api.id, contract } }, meta);
             if (existing === undefined) await brokerA.call('serve.expose.add', { apiId: api.id, contract }, meta);
         }
@@ -189,6 +204,25 @@ describe('two nodes, one serving a domain it does not hold', () => {
         expect(onB.status).toBe(onA.status);
         expect((await json(onB)).error).toBe((await json(onA)).error);
     });
+
+    /**
+     * machine.import (declared 30 minutes, running on surf) answered 500 through edge1's api after
+     * 10 s -- the broker's default -- while the import carried on. The contract's timeout now
+     * travels with its declaration and the gateway calls with it.
+     *
+     * Limit: both nodes share one process here, and mesh keeps local contract timeouts in a
+     * process-wide registry, so B's broker would find A's timeout even without the gateway passing
+     * it. The declaration assertion is the part this test proves (it fails on mesh v4.6.0); the
+     * gateway half was verified live, through edge1's api to surf.
+     */
+    it('lets a call to another node run as long as its contract declares', async () => {
+        expect(brokerB.contractDeclaration('slowsvc.wait')?.timeout).toBe(15_000);
+        const res = await fetch(`${originB}/api/slowsvc/wait`, {
+            method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: '{}',
+        });
+        expect(res.status).toBe(200);
+        expect(await json(res)).toEqual({ waited: true });
+    }, 30_000);
 
     it('applies the contract permission floor on the node that does not implement it', async () => {
         // The expose row names no role. The floor comes from the contract, which node B knows the

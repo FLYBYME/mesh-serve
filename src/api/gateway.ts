@@ -600,7 +600,10 @@ export class ApiGateway {
         // confirmed a public declaration for it, here or advertised) -- the broker's
         // own generic can't know that statically, so this crosses the boundary the same way mesh's
         // own generated CLI does for identical dynamic dispatch.
-        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta });
+        // The contract's own timeout, not the broker's 10 s default: machine.import (declared 30
+        // minutes, running on surf) answered 500 here while the import carried on.
+        const timeout = route.contract.timeout;
+        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta, ...(timeout !== undefined ? { timeout } : {}) });
 
         const descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
         res.setHeader('x-exposure-shape', descriptor.shapeHash);
