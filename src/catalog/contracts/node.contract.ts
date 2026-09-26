@@ -149,3 +149,65 @@ export const nodeLogsContract = defineContract({
 });
 
 export type NodeLogsOutput = z.infer<typeof nodeLogsOutputSchema>;
+
+export const nodeVersionOutputSchema = z.object({
+    nodeID: z.string(),
+    running: z.string().describe('The mesh-serve release this node runs, e.g. v0.8.16'),
+    agentInstalled: z.boolean().describe('Whether this node\'s host can upgrade it (deploy/node-upgrade/install.sh)'),
+    requested: z.string().optional().describe('The release just requested, on serve.node.upgrade'),
+    last: z.object({
+        requested: z.string(), from: z.string(),
+        status: z.enum(['refused', 'unchanged', 'failed', 'restarting', 'done', 'rolled-back']),
+        message: z.string(), at: z.string(),
+    }).optional().describe('What the host last did with a request'),
+}).describe('A node\'s release, and its last upgrade');
+
+const nodeOnly = z.object({ nodeID: z.string().min(1).describe('Which node (see serve.node.find)') });
+const releaseVersion = z.string().regex(/^v\d{1,3}\.\d{1,3}\.\d{1,4}$/).describe('A mesh-serve release, e.g. v0.8.17');
+
+/** Answered by the node itself -- serve.node.version/upgrade ask it by nodeID. */
+export const nodeVersionHereContract = defineContract({
+    domain: 'serve.node', action: 'versionHere',
+    description: 'This node\'s release and its last upgrade.',
+    inputSchema: z.object({}), outputSchema: nodeVersionOutputSchema,
+    rest: { method: 'GET', path: '/nodes/version/here' },
+    visibility: 'internal', filePath: 'src/catalog/tools/nodeUpgrade.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${o.running}`,
+});
+
+export const nodeUpgradeHereContract = defineContract({
+    domain: 'serve.node', action: 'upgradeHere',
+    description: 'Ask this node\'s host to move it to a release.',
+    inputSchema: z.object({ version: releaseVersion }), outputSchema: nodeVersionOutputSchema,
+    rest: { method: 'POST', path: '/nodes/upgrade/here' },
+    visibility: 'internal', destructive: true, filePath: 'src/catalog/tools/nodeUpgrade.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${o.running} -> ${o.requested ?? '?'} requested`,
+});
+
+/** Which release a node runs, and what its host last did with an upgrade request. */
+export const nodeVersionContract = defineContract({
+    domain: 'serve.node', action: 'version',
+    description: 'A node\'s mesh-serve release, whether it can be upgraded through the api, and its last upgrade.',
+    inputSchema: nodeOnly, outputSchema: nodeVersionOutputSchema,
+    rest: { method: 'GET', path: '/nodes/version' },
+    visibility: 'public', filePath: 'src/catalog/tools/nodeUpgrade.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${o.running}${o.last !== undefined ? ` (last upgrade: ${o.last.status}, ${o.last.message})` : ''}`,
+    timeout: 15_000,
+});
+
+/**
+ * Moves a node to another mesh-serve release through the api -- what used to be `docker pull`, a
+ * `sed` on the unit and `systemctl restart` over SSH on each box. The node asks its host (see
+ * methods/upgrade.ts); the host restarts mesh-node, so this node's parts are gone for ~20-40 s and
+ * this call returns before that. Watch it come back with serve.node.version. Roll one node at a
+ * time, and never both nameservers together.
+ */
+export const nodeUpgradeContract = defineContract({
+    domain: 'serve.node', action: 'upgrade',
+    description: 'Move a node to a mesh-serve release: its host pulls the image and restarts mesh-node (~20-40 s), rolling back if it does not come up.',
+    inputSchema: nodeOnly.extend({ version: releaseVersion }), outputSchema: nodeVersionOutputSchema,
+    rest: { method: 'POST', path: '/nodes/upgrade' },
+    visibility: 'public', destructive: true, filePath: 'src/catalog/tools/nodeUpgrade.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${o.running} -> ${o.requested ?? '?'} requested`,
+    timeout: 15_000,
+});

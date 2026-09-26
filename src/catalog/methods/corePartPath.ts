@@ -15,7 +15,7 @@ import type { CorePartName } from '../contracts/corePart.contract.js';
  * The bundles themselves always live in `dist/parts` either way -- they're build output
  * (`cli/core/buildCoreParts.ts`), never source.
  */
-function findPackageRoot(startDir: string): string {
+export function findPackageRoot(startDir: string): string {
     let dir = startDir;
     for (;;) {
         if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
