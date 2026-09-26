@@ -34,6 +34,16 @@ describe('the node side of serve.node.upgrade', () => {
         expect(await readUpgradeResult()).toBeUndefined();
     });
 
+    it('reports a result that crossed the mesh -- its time revived as a Date -- as the ISO string', async () => {
+        const { nodeVersionOutputSchema } = await import('../../../src/catalog/contracts/node.contract.js');
+        const at = new Date('2026-09-26T19:35:50Z');
+        const parsed = nodeVersionOutputSchema.parse({
+            nodeID: 'ns1', running: 'v0.8.17', agentInstalled: true,
+            last: { requested: 'v0.8.17', from: 'v0.8.10', status: 'done', message: 'v0.8.10 -> v0.8.17', at },
+        });
+        expect(parsed.last?.at).toBe('2026-09-26T19:35:50.000Z');
+    });
+
     it('says whether its host can upgrade it', async () => {
         expect(await hostAgentInstalled()).toBe(false);
         await fs.writeFile(path.join(UPGRADE_DIR, 'agent-installed'), '');

@@ -158,7 +158,9 @@ export const nodeVersionOutputSchema = z.object({
     last: z.object({
         requested: z.string(), from: z.string(),
         status: z.enum(['refused', 'unchanged', 'failed', 'restarting', 'done', 'rolled-back']),
-        message: z.string(), at: z.string(),
+        // A Date as well as a string: crossing the mesh from another node, an ISO-looking string
+        // arrives revived as a Date -- a plain string schema 500'd every remote serve.node.version.
+        message: z.string(), at: z.union([z.string(), z.date()]).transform((v) => (v instanceof Date ? v.toISOString() : v)),
     }).optional().describe('What the host last did with a request'),
 }).describe('A node\'s release, and its last upgrade');
 
