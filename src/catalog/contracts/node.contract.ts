@@ -103,7 +103,8 @@ export const nodeMeshContract = defineContract({
 export type NodeMeshOutput = z.infer<typeof nodeMeshContract.outputSchema>;
 
 const logsQuerySchema = z.object({
-    lines: z.number().int().min(1).max(5000).default(200).describe('How many of the newest lines (at most 5000)'),
+    // coerce: over GET it arrives as query text ("5"), and a plain number schema refused it.
+    lines: z.coerce.number().int().min(1).max(5000).default(200).describe('How many of the newest lines (at most 5000)'),
     grep: z.string().max(200).optional().describe('Only lines containing this text -- plain text, not a pattern'),
 });
 
