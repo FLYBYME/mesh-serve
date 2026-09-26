@@ -11,7 +11,7 @@ import type { Expose } from '../../../src/api/contracts/expose.contract.js';
  */
 const row: Expose = {
     id: 'row-1', tenantId: 't', apiId: 'api', kind: 'contract', contract: 'grant.get',
-    createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+    createdAt: new Date(0), updatedAt: new Date(0),
 };
 
 function declarationAt(now: string, extra: Record<string, unknown> = {}): ContractDeclaration {

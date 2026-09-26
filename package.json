@@ -34,7 +34,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "github:FLYBYME/mesh#v4.6.1",
+        "@flybyme/mesh": "github:FLYBYME/mesh#v4.6.2",
         "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.19.4",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
