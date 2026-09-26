@@ -232,7 +232,7 @@ export const artifactWatchReleaseContract = defineContract({
     dependencies: ['serve.artifact', 'serve.queue'],
     filePath: 'src/catalog/tools/watchRelease.ts',
     concurrency: 'interval',
-    intervalMs: 60_000,
+    intervalMs: 15_000,
     permissions: ['operator'],
     print: (o) => `enqueued ${o.enqueued}`,
 });
