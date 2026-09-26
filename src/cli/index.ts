@@ -10,7 +10,7 @@ import { SwitchCommand } from './commands/switch.js';
 import { ApisCommand } from './commands/apis.js';
 import { WatchCommand } from './commands/watch.js';
 import { registerDiscoveredCommands } from './core/dynamicCommands.js';
-import { patchSession, readSession, toCachedDescriptor } from './core/session.js';
+import { patchSession, readSession, toCachedDescriptor, type Session } from './core/session.js';
 import { describeApi } from './core/apiClient.js';
 
 /**
@@ -34,11 +34,12 @@ import { describeApi } from './core/apiClient.js';
  * being one. That is deliberate: it makes an incomplete api impossible not to notice, because these
  * commands cannot route around it either.
  */
-async function main(): Promise<void> {
+function buildProgram(session: Session, writeErr: (text: string) => void): Command {
     const program = new Command();
     program
         .name('mesh-serve')
         .description('mesh-serve -- start a node, claim a fresh one, or work against an api.')
+        .configureOutput({ writeErr })
         .exitOverride();
 
     new StartCommand().register(program);
@@ -49,32 +50,68 @@ async function main(): Promise<void> {
     new SwitchCommand().register(program);
     new ApisCommand().register(program);
     new WatchCommand().register(program);
+    // Last: a discovered command must never shadow a built-in.
+    registerDiscoveredCommands(program, session);
+    return program;
+}
 
-    // Last, and from cache: a discovered command must never shadow a built-in, and `--help` has to
-    // render without a cluster to ask.
+function commanderCode(err: unknown): string | undefined {
+    return typeof err === 'object' && err !== null && 'code' in err && typeof (err as { code: unknown }).code === 'string'
+        ? (err as { code: string }).code
+        : undefined;
+}
+
+async function refreshed(session: Session): Promise<Session | undefined> {
+    if (session.apiUrl === undefined) return undefined;
+    try {
+        return await patchSession({ descriptor: toCachedDescriptor(await describeApi(session.apiUrl)) });
+    } catch {
+        return undefined; // offline or unreachable: the cache stands
+    }
+}
+
+async function main(): Promise<void> {
     let session = await readSession();
     const wanted = process.argv[2];
-    const known = (name: string): boolean => program.commands.some((c) => c.name() === name)
-        || (session.descriptor?.calls.some((c) => c.key === name) ?? false);
-    // A command the cache has never heard of may simply be newer than the cache: contracts exposed
-    // since the last `switch` failed as "unknown command" until one was run by hand (found live,
-    // storagePool.create). Read the api's surface once, then decide.
-    if (wanted !== undefined && wanted.includes('.') && !known(wanted) && session.apiUrl !== undefined) {
-        try {
-            session = await patchSession({ descriptor: toCachedDescriptor(await describeApi(session.apiUrl)) });
-        } catch {
-            // Offline or unreachable: the cache stands, and commander says "unknown command" as before.
+    const isApiCommand = (s: Session): boolean => wanted !== undefined && (s.descriptor?.calls.some((c) => c.key === wanted) ?? false);
+
+    // The cached surface can be older than the api in two ways, and each read as a user error until
+    // `switch` was run by hand: a command exposed since (storagePool.create -> "unknown command"),
+    // and a field added to a known one (certProvider.update --default -> "unknown option").
+    // The first is caught before parsing, the second on the way out; either way the api's surface
+    // is read once, and the command runs against it.
+    if (wanted !== undefined && wanted.includes('.') && !isApiCommand(session)) {
+        session = (await refreshed(session)) ?? session;
+    }
+
+    let errors = '';
+    try {
+        await buildProgram(session, (text) => { errors += text; }).parseAsync(process.argv.slice(2), { from: 'user' });
+        process.stderr.write(errors);
+        return;
+    } catch (err) {
+        const code = commanderCode(err);
+        if (code === 'commander.unknownOption' && isApiCommand(session)) {
+            const fresh = await refreshed(session);
+            if (fresh !== undefined) {
+                process.exitCode = undefined;
+                return run(buildProgram(fresh, (text) => process.stderr.write(text)));
+            }
+        }
+        process.stderr.write(errors);
+        if (code === undefined || !code.startsWith('commander.')) {
+            console.error(err instanceof Error ? err.message : String(err));
+            process.exitCode = 1;
         }
     }
-    registerDiscoveredCommands(program, session);
+}
 
+async function run(program: Command): Promise<void> {
     try {
         await program.parseAsync(process.argv.slice(2), { from: 'user' });
     } catch (err) {
-        const isCommanderExit = typeof err === 'object' && err !== null && 'code' in err
-            && typeof (err as { code: unknown }).code === 'string'
-            && (err as { code: string }).code.startsWith('commander.');
-        if (!isCommanderExit) {
+        const code = commanderCode(err);
+        if (code === undefined || !code.startsWith('commander.')) {
             console.error(err instanceof Error ? err.message : String(err));
             process.exitCode = 1;
         }
