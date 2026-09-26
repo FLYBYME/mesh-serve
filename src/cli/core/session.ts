@@ -2,7 +2,19 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { DescribedCall } from '../../api/methods/descriptor.js';
+import type { DescribedCall, ExposureDescriptor } from '../../api/methods/descriptor.js';
+
+/** What the session keeps of an api's `_describe`: its surface, and when it was read. */
+export function toCachedDescriptor(descriptor: ExposureDescriptor): CachedDescriptor {
+    return {
+        host: descriptor.host,
+        base: descriptor.base,
+        shapeHash: descriptor.shapeHash,
+        exposure: descriptor.exposure,
+        calls: descriptor.calls,
+        fetchedAt: Date.now(),
+    };
+}
 
 /**
  * The CLI's own state: which api it is pointed at, and the ticket it holds.

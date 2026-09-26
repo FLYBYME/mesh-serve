@@ -2,7 +2,7 @@ import type { Command as CommanderCommand } from 'commander';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { describeApi } from '../core/apiClient.js';
-import { isLive, patchSession, readSession, sessionPath } from '../core/session.js';
+import { isLive, patchSession, readSession, sessionPath, toCachedDescriptor } from '../core/session.js';
 
 /**
  * Points the CLI at an api, and re-reads what that api offers.
@@ -60,17 +60,7 @@ export class SwitchCommand extends BaseCommand {
         const previous = session.descriptor;
         const unchanged = previous !== undefined && previous.shapeHash === descriptor.shapeHash;
 
-        await patchSession({
-            apiUrl: url,
-            descriptor: {
-                host: descriptor.host,
-                base: descriptor.base,
-                shapeHash: descriptor.shapeHash,
-                exposure: descriptor.exposure,
-                calls: descriptor.calls,
-                fetchedAt: Date.now(),
-            },
-        });
+        await patchSession({ apiUrl: url, descriptor: toCachedDescriptor(descriptor) });
 
         const gated = descriptor.calls.filter((call) => call.gate !== 'public').length;
         this.logger.info(`${descriptor.host}: ${String(descriptor.calls.length)} call(s), ${String(gated)} gated.`);

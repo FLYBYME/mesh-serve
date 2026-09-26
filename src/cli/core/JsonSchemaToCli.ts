@@ -123,6 +123,33 @@ export class JsonSchemaToCli {
         return out;
     }
 
+    /**
+     * An input with no fields to make flags from -- a union at the top (`dns.record_create`, whose
+     * fields differ per record type) produced a command with no options at all, and creating a DNS
+     * record meant hand-writing a curl call. Such a command takes its input whole, with `--json`.
+     */
+    public static takesOnlyJson(schema: JsonSchema): boolean {
+        return !hasNamedFields(schema) && ((schema.anyOf?.length ?? 0) > 0 || (schema.oneOf?.length ?? 0) > 0);
+    }
+
+    /**
+     * `--json`: the whole input as one JSON object, sent as-is. Anything a flag cannot say goes here:
+     * arrays of objects, values starting with `-` (commander reads those as options), unions.
+     * Refused before any request when it is not a JSON object.
+     */
+    public static parseJsonInput(text: string): Record<string, unknown> {
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(text);
+        } catch (err) {
+            throw new Error(`--json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('--json must be a JSON object: the call\'s whole input, e.g. --json \'{"name":"x"}\'');
+        }
+        return parsed as Record<string, unknown>;
+    }
+
     /** Which fields a caller left out. Reported before the request, naming all of them at once. */
     public static missingRequired(input: Record<string, unknown>, schema: JsonSchema): string[] {
         return (schema.required ?? []).filter((key) => input[key] === undefined);

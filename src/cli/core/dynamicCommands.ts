@@ -55,9 +55,32 @@ export function registerDiscoveredCommands(program: Command, session: Session): 
             .addHelpText('after', `\n  ${call.method} ${descriptor.base}${call.path}  on ${descriptor.host}`);
 
         JsonSchemaToCli.applyOptions(sub, input);
+        sub.option('--json <object>', 'The whole input as one JSON object, instead of the flags');
+        if (JsonSchemaToCli.takesOnlyJson(input)) {
+            sub.addHelpText('after', '\n  This call\'s input has more than one shape: pass it whole with --json \'{...}\'.');
+        }
 
         sub.action(async (opts: Record<string, unknown>) => {
-            const params = JsonSchemaToCli.parseOptions(opts, input);
+            const { json, ...flags } = opts;
+            let params: Record<string, unknown>;
+            if (typeof json === 'string') {
+                // Not merged with flags: which one would win is a guess, and a wrong guess is a wrong call.
+                const others = Object.keys(flags).filter((key) => flags[key] !== undefined);
+                if (others.length > 0) {
+                    console.error(`--json is the whole input; drop ${others.map((key) => `--${key}`).join(', ')} or put them inside it.`);
+                    process.exitCode = 1;
+                    return;
+                }
+                try {
+                    params = JsonSchemaToCli.parseJsonInput(json);
+                } catch (err) {
+                    console.error(err instanceof Error ? err.message : String(err));
+                    process.exitCode = 1;
+                    return;
+                }
+            } else {
+                params = JsonSchemaToCli.parseOptions(flags, input);
+            }
 
             // Checked here so all of them are named at once, before a round trip. The server
             // validates too and owns the real schema -- this is about the message, not the rule.

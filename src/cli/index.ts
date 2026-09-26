@@ -10,7 +10,8 @@ import { SwitchCommand } from './commands/switch.js';
 import { ApisCommand } from './commands/apis.js';
 import { WatchCommand } from './commands/watch.js';
 import { registerDiscoveredCommands } from './core/dynamicCommands.js';
-import { readSession } from './core/session.js';
+import { patchSession, readSession, toCachedDescriptor } from './core/session.js';
+import { describeApi } from './core/apiClient.js';
 
 /**
  * The one entry point behind the `mesh-serve` binary.
@@ -51,7 +52,21 @@ async function main(): Promise<void> {
 
     // Last, and from cache: a discovered command must never shadow a built-in, and `--help` has to
     // render without a cluster to ask.
-    registerDiscoveredCommands(program, await readSession());
+    let session = await readSession();
+    const wanted = process.argv[2];
+    const known = (name: string): boolean => program.commands.some((c) => c.name() === name)
+        || (session.descriptor?.calls.some((c) => c.key === name) ?? false);
+    // A command the cache has never heard of may simply be newer than the cache: contracts exposed
+    // since the last `switch` failed as "unknown command" until one was run by hand (found live,
+    // storagePool.create). Read the api's surface once, then decide.
+    if (wanted !== undefined && wanted.includes('.') && !known(wanted) && session.apiUrl !== undefined) {
+        try {
+            session = await patchSession({ descriptor: toCachedDescriptor(await describeApi(session.apiUrl)) });
+        } catch {
+            // Offline or unreachable: the cache stands, and commander says "unknown command" as before.
+        }
+    }
+    registerDiscoveredCommands(program, session);
 
     try {
         await program.parseAsync(process.argv.slice(2), { from: 'user' });
