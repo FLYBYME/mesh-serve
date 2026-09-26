@@ -5,6 +5,7 @@ import type { ContractDeclaration, IServiceBroker, IServiceToolRegistry } from '
 
 import { type Expose } from './contracts/expose.contract.js';
 import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
+import { firstOperator } from './methods/queryRule.js';
 import { EventHub, openStream, type Omitted, type Subscriber } from './methods/events.js';
 import { matchPath, specificity } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
@@ -422,6 +423,19 @@ export class ApiGateway {
     }
 
     private async parseInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
+        const input = await this.readInput(req, params);
+        // Equality only from the outside -- see methods/queryRule.ts.
+        const operator = firstOperator(input['query']);
+        if (operator !== undefined) {
+            throw new MeshError({
+                message: `Query operators are not accepted over the api (${operator}): a query is field equality only.`,
+                code: 'BAD_REQUEST', status: 400,
+            });
+        }
+        return input;
+    }
+
+    private async readInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
         const method = (req.method ?? 'GET').toUpperCase();
 
         if (method === 'GET' || method === 'DELETE') {

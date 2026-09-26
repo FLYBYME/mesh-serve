@@ -445,4 +445,34 @@ describe('a fresh install, booted for real', () => {
         // count itself is whatever earlier tests left behind; that it answered at all is the point.
         expect(typeof await json(anonRes)).not.toBe('undefined');
     });
+
+    // 2026-09-26: `?query={"slug":{"$ne":"platform"}}` walked every organization on api.surfdns.net,
+    // with no ticket. Organization reads now need operator, and no query over HTTP takes operators.
+    it('needs a ticket to read an organization at all', async () => {
+        const res = await fetch(`${API_ORIGIN}/api/organizations/one?query=${encodeURIComponent(JSON.stringify({ slug: 'platform' }))}`);
+        expect(res.status).toBe(401);
+    });
+
+    it('refuses a query operator over HTTP, even from an operator', async () => {
+        const enumerate = encodeURIComponent(JSON.stringify({ slug: { $ne: 'platform' } }));
+        const res = await fetch(`${API_ORIGIN}/api/organizations/one?query=${enumerate}`, { headers: { authorization: `Bearer ${operatorToken}` } });
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain('query.slug.$ne');
+
+        const plain = await fetch(`${API_ORIGIN}/api/organizations/one?query=${encodeURIComponent(JSON.stringify({ slug: 'platform' }))}`, { headers: { authorization: `Bearer ${operatorToken}` } });
+        expect(plain.status).toBe(200);
+    });
+
+    it('asks for the current password before replacing it -- a ticket alone is not enough', async () => {
+        const set = async (body: Record<string, string>) => fetch(`${API_ORIGIN}/api/identity/password`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${operatorToken}` },
+            body: JSON.stringify(body),
+        });
+        expect((await set({ password: 'a-new-password-1234' })).status).toBe(401);
+        expect((await set({ password: 'a-new-password-1234', currentPassword: 'not-the-password' })).status).toBe(401);
+        expect((await set({ password: 'a-new-password-1234', currentPassword: BOOTSTRAP_PASSWORD })).status).toBe(200);
+        // And back, for whatever runs after.
+        expect((await set({ password: BOOTSTRAP_PASSWORD, currentPassword: 'a-new-password-1234' })).status).toBe(200);
+    });
 });

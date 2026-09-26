@@ -55,6 +55,7 @@ export type RegisterOutput = z.infer<typeof userRegisterContract.outputSchema>;
 
 export const setPasswordInputSchema = z.object({
     password: z.string().min(12).describe('At least twelve characters. Yours to choose'),
+    currentPassword: z.string().optional().describe('Your password now -- required unless the account is provisional (still being claimed)'),
 }).describe('Set your own password');
 
 export const setPasswordOutputSchema = z.object({

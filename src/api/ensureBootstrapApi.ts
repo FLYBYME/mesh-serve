@@ -34,13 +34,12 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     // the one they're logged into) needs that api's own hostname back -- every call self-exposed on
     // it has to be sent there, not to the login host.
     { contract: 'serve.api.resolveById' },
-    // Public for the same reason as resolveByHost above: constructing a valid serve.part key
-    // ("<slug>/<name>") needs a tenant's slug, and an organization's name/slug is routing metadata,
-    // not a secret.
-    { contract: 'identity.organization.get' },
-    // Looks an organization up by slug before having an id to `.get` with at all -- same public
-    // reasoning as `.get` above.
-    { contract: 'identity.organization.find_one' },
+    // Operator, not public. They were public as "routing metadata" -- but find_one took any query, so
+    // `?query={"slug":{"$ne":"platform"}}` walked every organization, name, slug and owner's user id,
+    // with no ticket at all (2026-09-26). A member learns their own organizations' slugs from
+    // identity.whoami; nothing over HTTP needs anyone else's.
+    { contract: 'identity.organization.get', role: 'operator' },
+    { contract: 'identity.organization.find_one', role: 'operator' },
     // A second tenant is otherwise unreachable through the api at all -- found live, needing one
     // to prove real cross-tenant isolation for a site rather than just asserting it from the
     // schema. Operator-gated: onboarding a new organization is a platform decision, not something
