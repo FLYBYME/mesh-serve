@@ -20,6 +20,8 @@ import { WSTransport } from '@flybyme/mesh/node';
 import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
 import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
 import { markServiceRunning, clearServiceRunning } from '../src/catalog/methods/services.js';
+import { partRunningHereContract } from '../src/catalog/contracts/supervisor.contract.js';
+import { runningHere } from '../src/catalog/tools/runningHere.js';
 // serve.part's own create hook validates that the key is namespaced by a real organization's slug,
 // so identity has to be here -- see catalog/methods/partKey.ts.
 import '../src/identity/contracts/organization.contract.js';
@@ -162,6 +164,24 @@ describe('desired state, observed state, and the loop between them', () => {
         expect(result.started).toEqual([]);      // still unbuildable
         expect(result.failed).toHaveLength(1);   // but it *tried*, which is the point
     }, 20000);
+
+    it('starts nothing unseen while a node does not answer -- it may already be running it', async () => {
+        // B holds the part but cannot say so. Its silence is not "running nothing": before, the
+        // missing report read as a reason to start the part again -- on B itself (surf piled starts
+        // onto a struggling edge1, 2026-09-26) or on another node, as a second copy.
+        markServiceRunning('sup-b', partId, 'worker.domain', '/tmp/worker.cjs');
+        brokerB.unregisterContract('serve.part.runningHere');
+        try {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            expect(result.started).toEqual([]);
+            expect(result.failed).toHaveLength(1);
+            // Refused for B's silence -- not attempted and refused for having no build.
+            expect(result.failed[0]?.error).toMatch(/sup-b did not answer/);
+        } finally {
+            brokerB.registerContract(partRunningHereContract, runningHere);
+            clearServiceRunning('sup-b', partId);
+        }
+    }, 40000);
 
     it('stops a service that is running but no longer desired', async () => {
         await brokerA.call('serve.part.update', { id: partId, desired: 'stopped' }, meta());

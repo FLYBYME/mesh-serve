@@ -28,6 +28,7 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
     // record of it claiming to still host anything.
     const nodes = ctx.broker.registry.getNodes();
     const observed = new Map<string, { nodeID: string; artifactId?: string | undefined }>(); // by partId
+    const unanswered: string[] = [];
 
     for (const node of nodes) {
         try {
@@ -36,10 +37,11 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
                 observed.set(service.partId, { nodeID: report.nodeID, artifactId: service.artifactId });
             }
         } catch (err) {
-            // A node that cannot answer is one we cannot reason about. Treating it as "running
-            // nothing" would start a second copy of everything it holds, so skip it instead and
-            // let the next pass try again.
-            ctx.logger.warn(`serve.part.reconcile: ${node.nodeID} did not report what it is running; skipping it this pass`, err);
+            // A node that cannot answer is one we cannot reason about -- it may be running anything.
+            // Its report is missing, so every part it holds looks "not running" below; `unanswered`
+            // is what stops that from reading as a reason to start them (see the start branch).
+            unanswered.push(node.nodeID);
+            ctx.logger.warn(`serve.part.reconcile: ${node.nodeID} did not report what it is running; nothing unseen is started this pass`, err);
         }
     }
 
@@ -77,6 +79,15 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
                 const error = err instanceof Error ? err.message : String(err);
                 failed.push({ partId: part.id, key: part.key, error });
             }
+            continue;
+        }
+
+        if (part.desired === 'running' && runningOn === undefined && unanswered.length > 0) {
+            // Not seen running -- but a node that did not answer may be running it. Starting it
+            // would load a second copy (elsewhere) or pile a start onto a node already struggling
+            // (on it): skipping it was the intent, and a report with a missing node used to be read
+            // as "running nothing" (surf tried to start edge1's parts on edge1, 2026-09-26).
+            failed.push({ partId: part.id, key: part.key, error: `not started: ${unanswered.join(', ')} did not answer, and may already be running it` });
             continue;
         }
 
