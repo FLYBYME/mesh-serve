@@ -45,6 +45,25 @@ export function clearServiceRunning(nodeID: string, partId: string): void {
 }
 
 /**
+ * Starts in progress. A start is only marked running once it has loaded -- tens of seconds for a
+ * large part -- and before that a reconcile pass that saw it "not running" would start it again,
+ * loading a second copy into the same process.
+ */
+const starting = new Set<string>();
+
+/** Claims the start of `partId` on this node; false when one is already under way. */
+export function claimStart(nodeID: string, partId: string): boolean {
+    const k = key(nodeID, partId);
+    if (starting.has(k)) return false;
+    starting.add(k);
+    return true;
+}
+
+export function releaseStart(nodeID: string, partId: string): void {
+    starting.delete(key(nodeID, partId));
+}
+
+/**
  * Everything one node is running, for `serve.part.runningHere`.
  *
  * Core parts are excluded: they are keyed `core:<name>` and are not `serve.part` rows, so they

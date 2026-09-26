@@ -85,6 +85,9 @@ export const partReconcileContract = defineContract({
     intervalMs: Number(process.env.SUPERVISOR_INTERVAL_MS ?? 30_000),
     permissions: ['operator'],
     print: (o) => `started ${o.started.length}, stopped ${o.stopped.length}, failed ${o.failed.length}`,
+    // A pass waits on every stop and start it makes (each up to serve.part.start's 2 minutes); at the
+    // 10 s default the pass itself "threw" mid-redeploy while its work carried on.
+    timeout: 10 * 60_000,
 });
 
 export type PartReconcileOutput = z.infer<typeof partReconcileContract.outputSchema>;

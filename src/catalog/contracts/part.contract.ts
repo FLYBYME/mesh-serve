@@ -139,6 +139,10 @@ export const partStartContract = defineContract({
     // Runs code on a node. There is no larger blast radius in the system.
     filePath: 'src/catalog/tools/startService.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: (o) => `${o.domain} started on ${o.nodeID}`,
+    // A real start is fetch + load + register + onStart: surfdns-compute took ~40 s. At the 10 s
+    // default the start succeeded but reconcile had already logged it failed -- every redeploy of a
+    // large part reported a failure that never happened.
+    timeout: 2 * 60_000,
 });
 
 export type PartStartInput = z.infer<typeof partStartContract.inputSchema>;
@@ -163,6 +167,8 @@ export const partStopContract = defineContract({
     destructive: true,
     filePath: 'src/catalog/tools/stopService.ts', concurrency: 'on-demand', permissions: ['operator'],
     print: () => 'stopped',
+    // Unloading ~200 contracts took 8 s before presence broadcasts were coalesced (mesh v4.7.2).
+    timeout: 60_000,
 });
 
 export type PartStopInput = z.infer<typeof partStopContract.inputSchema>;

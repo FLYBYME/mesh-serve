@@ -8,7 +8,7 @@ import type { Part, PartStartInput, PartStartOutput } from '../contracts/part.co
 import { artifactAssetPath } from '../methods/artifacts.js';
 import { artifactToRun, type RunnableArtifact } from '../methods/partArtifact.js';
 import { ensureArtifactNodeModules } from '../methods/build.js';
-import { getRunningService, markServiceRunning } from '../methods/services.js';
+import { claimStart, getRunningService, markServiceRunning, releaseStart } from '../methods/services.js';
 import { loadAndRegisterModule } from '../methods/loadModule.js';
 import { runOnStart } from '../methods/onStart.js';
 
@@ -23,6 +23,17 @@ export async function startService(input: PartStartInput, ctx: IServiceContext):
     if (getRunningService(ctx.nodeID, part.id) !== undefined) {
         throw new MeshError({ message: `"${part.key}" is already running on this node.`, code: 'BAD_REQUEST', status: 400 });
     }
+    if (!claimStart(ctx.nodeID, part.id)) {
+        throw new MeshError({ message: `"${part.key}" is already starting on this node.`, code: 'CONFLICT', status: 409 });
+    }
+    try {
+        return await startClaimed(ctx, part);
+    } finally {
+        releaseStart(ctx.nodeID, part.id);
+    }
+}
+
+async function startClaimed(ctx: IServiceContext, part: Part): Promise<PartStartOutput> {
 
     // Told as it happens -- started, or failed and why -- so starting a part can be watched over the
     // api instead of read out of the node's journal.
