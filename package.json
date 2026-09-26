@@ -1,6 +1,6 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.8.17",
+    "version": "0.8.18",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
     "private": true,
