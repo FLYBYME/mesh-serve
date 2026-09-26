@@ -15,6 +15,7 @@ import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
 import { recordLog } from '../../catalog/methods/logBuffer.js';
+import { readSavedLabels } from '../../catalog/methods/labels.js';
 import { createCorePartPlacement } from '../../catalog/methods/corePartPlacement.js';
 import { CATALOG_DOMAINS } from '../../catalog/domains.js';
 // Importing a contract module is what registers its contracts, which is where loadDomain reads
@@ -77,7 +78,8 @@ export class StartCommand extends BaseCommand {
             recordLog(level, formatted, rest);
         });
         const serializer = new JSONSerializer();
-        const labels = this.parseLabels(args.labels);
+        // Boot flags, then whatever serve.node.label saved on top (methods/labels.ts).
+        const labels = { ...this.parseLabels(args.labels), ...readSavedLabels() };
 
         // Checked before anything binds, like parseParts/parseLabels. From a wildcard bind with no
         // advertised address a joining node tells the cluster to dial "0.0.0.0", which every peer

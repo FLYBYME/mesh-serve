@@ -150,6 +150,40 @@ export const nodeLogsContract = defineContract({
 
 export type NodeLogsOutput = z.infer<typeof nodeLogsOutputSchema>;
 
+const labelChange = z.object({
+    set: z.record(z.string(), z.string()).default({}).describe('Labels to set, e.g. { "role": "dns,control-plane" } -- a comma list carries several values'),
+    remove: z.array(z.string()).default([]).describe('Label keys to remove'),
+});
+export const nodeLabelOutputSchema = z.object({
+    nodeID: z.string(),
+    labels: z.record(z.string(), z.string()).describe('The node\'s labels now'),
+}).describe('A node\'s labels after a change');
+
+export const nodeLabelHereContract = defineContract({
+    domain: 'serve.node', action: 'labelHere',
+    description: 'Change this node\'s labels, live and saved.',
+    inputSchema: labelChange, outputSchema: nodeLabelOutputSchema,
+    rest: { method: 'POST', path: '/nodes/label/here' },
+    visibility: 'internal', destructive: true, filePath: 'src/catalog/tools/nodeLabel.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${JSON.stringify(o.labels)}`,
+});
+
+/**
+ * Gives a machine a role -- or takes one away -- through the api: its labels change live (every
+ * peer sees them on the next presence) and are saved in its ~/.mesh so a restart keeps them. A part
+ * pinned to a role (nodeSelector "role=control-plane") may then be placed on it; the reconciler
+ * never moves a part that is already running, only places one that is not.
+ */
+export const nodeLabelContract = defineContract({
+    domain: 'serve.node', action: 'label',
+    description: 'Change a node\'s labels (its roles), live and saved across restarts.',
+    inputSchema: labelChange.extend({ nodeID: z.string().min(1).describe('Which node') }), outputSchema: nodeLabelOutputSchema,
+    rest: { method: 'POST', path: '/nodes/label' },
+    visibility: 'public', destructive: true, filePath: 'src/catalog/tools/nodeLabel.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${JSON.stringify(o.labels)}`,
+    timeout: 15_000,
+});
+
 export const nodeVersionOutputSchema = z.object({
     nodeID: z.string(),
     running: z.string().describe('The mesh-serve release this node runs, e.g. v0.8.16'),

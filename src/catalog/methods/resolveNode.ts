@@ -15,8 +15,18 @@ export function nodesForLabel(registry: IServiceRegistry, label: string): NodeIn
     const key = label.slice(0, eq);
     const value = label.slice(eq + 1);
     return registry.getAvailableNodes()
-        .filter((node) => node.metadata?.[key] === value)
+        .filter((node) => labelHas(node.metadata?.[key], value))
         .sort((a, b) => a.nodeID.localeCompare(b.nodeID));
+}
+
+/**
+ * A label's value can list several, comma-separated: `role=dns,control-plane` carries both roles,
+ * so one machine can take on more than one -- the owner's "drop edge1 and ns2, and ns1 takes on
+ * every role" (design/machines-and-placement.md). A single value matches exactly as before.
+ */
+export function labelHas(held: unknown, value: string): boolean {
+    if (typeof held !== 'string') return false;
+    return held.split(',').map((v) => v.trim()).includes(value);
 }
 
 /**
