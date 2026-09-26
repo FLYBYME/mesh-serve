@@ -2,7 +2,9 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext, z } from '@flybyme/mesh';
 
 import type { nodeLabelOutputSchema } from '../contracts/node.contract.js';
-import { saveLabels, validLabel } from '../methods/labels.js';
+import { partsFromLabels, saveLabels, validLabel } from '../methods/labels.js';
+import { getRunningService } from '../methods/services.js';
+import { CORE_PART_NAMES } from '../contracts/corePart.contract.js';
 
 type Output = z.infer<typeof nodeLabelOutputSchema>;
 type Change = { set: Record<string, string>; remove: string[] };
@@ -26,7 +28,27 @@ export async function labelHere(input: Change, ctx: IServiceContext): Promise<Ou
     await saveLabels(labels);
     ctx.broker.registry.setLocalMetadata(labels);
     ctx.logger.info(`[serve.node] labels now ${JSON.stringify(labels)}`);
+    if ('parts' in input.set || input.remove.includes('parts')) await applyParts(labels, ctx);
     return { nodeID: ctx.nodeID, labels };
+}
+
+/**
+ * The `parts` label is what this node runs of mesh-serve's core parts: a change loads what is new
+ * first, then unloads what is gone -- the node never has less than it was asked for in between.
+ * Removing the label leaves what is running alone; the boot flags decide again at the next start.
+ */
+async function applyParts(labels: Record<string, string>, ctx: IServiceContext): Promise<void> {
+    const wanted = partsFromLabels(labels, CORE_PART_NAMES);
+    if (wanted === undefined) return;
+    const running = CORE_PART_NAMES.filter((name) => getRunningService(ctx.nodeID, `core:${name}`) !== undefined);
+    for (const name of wanted.filter((n) => !running.includes(n))) {
+        await ctx.call('serve.corePart.load', { name }, { nodeID: ctx.nodeID });
+        ctx.logger.info(`[serve.node] core part "${name}" loaded (parts label)`);
+    }
+    for (const name of running.filter((n) => !wanted.includes(n))) {
+        await ctx.call('serve.corePart.unload', { name }, { nodeID: ctx.nodeID });
+        ctx.logger.info(`[serve.node] core part "${name}" unloaded (parts label)`);
+    }
 }
 
 /** Pinned to the named node: only it can change its own labels. */

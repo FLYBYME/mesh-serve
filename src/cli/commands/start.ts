@@ -15,7 +15,7 @@ import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
 import { recordLog } from '../../catalog/methods/logBuffer.js';
-import { readSavedLabels } from '../../catalog/methods/labels.js';
+import { partsFromLabels, readSavedLabels } from '../../catalog/methods/labels.js';
 import { createCorePartPlacement } from '../../catalog/methods/corePartPlacement.js';
 import { CATALOG_DOMAINS } from '../../catalog/domains.js';
 // Importing a contract module is what registers its contracts, which is where loadDomain reads
@@ -154,7 +154,8 @@ export class StartCommand extends BaseCommand {
         // decision rather than a reaction, and `--parts` is where an operator makes it. This is the
         // same decision `bootstrap` makes implicitly when claiming a fresh cluster; a node joining
         // an existing one has no equivalent moment, which is exactly the gap this fills.
-        const parts = this.parseParts(args.parts);
+        // A `parts` label saved through serve.node.label replaces the flag (methods/labels.ts).
+        const parts = partsFromLabels(labels, CORE_PART_NAMES) ?? this.parseParts(args.parts);
         for (const name of parts) {
             const { domain } = await broker.call('serve.corePart.load', { name }, { nodeID: args.nodeID });
             this.logger.info(`Running "${domain}" on this node.`);

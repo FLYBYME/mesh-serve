@@ -35,6 +35,18 @@ describe('labels saved across restarts', () => {
     });
 });
 
+describe('the parts label: what a node runs of the core parts', () => {
+    const known = ['identity', 'cdn', 'hold', 'queue', 'api'] as const;
+
+    it('replaces the boot flag when present, drops what it does not know, absent means the flag', async () => {
+        const { partsFromLabels } = await import('../../../src/catalog/methods/labels.js');
+        expect(partsFromLabels({ parts: 'api,cdn' }, known)).toEqual(['api', 'cdn']);
+        expect(partsFromLabels({ parts: 'queue, bogus,queue' }, known)).toEqual(['queue']);
+        expect(partsFromLabels({ parts: '' }, known)).toEqual([]);
+        expect(partsFromLabels({ role: 'dns' }, known)).toBeUndefined();
+    });
+});
+
 describe('serve.node.label on the node itself', () => {
     const ctxWith = (metadata: Record<string, string>) => {
         const setLocalMetadata = vi.fn();
@@ -52,6 +64,21 @@ describe('serve.node.label on the node itself', () => {
         expect(out).toEqual({ nodeID: 'ns1', labels: { role: 'dns,control-plane', region: 'bhs' } });
         expect(setLocalMetadata).toHaveBeenCalledWith({ role: 'dns,control-plane', region: 'bhs' });
         expect(readSavedLabels()).toEqual({ role: 'dns,control-plane', region: 'bhs' });
+    });
+
+    it('a parts change loads what is new before unloading what is gone', async () => {
+        const { markServiceRunning, clearServiceRunning } = await import('../../../src/catalog/methods/services.js');
+        markServiceRunning('ns1', 'core:queue', 'serve.queue');
+        const calls: string[] = [];
+        const ctx = {
+            nodeID: 'ns1',
+            broker: { registry: { getNode: () => ({ metadata: { role: 'dns', parts: 'queue' } }), setLocalMetadata: vi.fn() } },
+            logger: { info: vi.fn() },
+            call: vi.fn(async (action: string, input: { name: string }) => { calls.push(`${action} ${input.name}`); return {}; }),
+        } as unknown as IServiceContext;
+        await labelHere({ set: { parts: 'api,cdn' }, remove: [] }, ctx);
+        expect(calls).toEqual(['serve.corePart.load api', 'serve.corePart.load cdn', 'serve.corePart.unload queue']);
+        clearServiceRunning('ns1', 'core:queue');
     });
 
     it('refuses a label that is not one', async () => {

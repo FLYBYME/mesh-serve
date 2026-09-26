@@ -37,6 +37,20 @@ export function readSavedLabels(): Record<string, string> {
     }
 }
 
+/**
+ * The `parts` label: which of mesh-serve's core parts this node runs (the listeners and timers
+ * nothing calls into existence -- api, cdn, the build queue...). When present it *replaces* the
+ * `--parts` a node boots with, so what a node is for -- a builder is a node running `queue` -- is
+ * decided through the api (serve.node.label), not in its unit file. Absent: `--parts` as before.
+ * Unknown names are dropped, never guessed at.
+ */
+export function partsFromLabels<T extends string>(labels: Record<string, string>, known: readonly T[]): T[] | undefined {
+    const raw = labels['parts'];
+    if (raw === undefined) return undefined;
+    const names = raw.split(',').map((p) => p.trim()).filter((p) => p !== '');
+    return [...new Set(names.filter((p): p is T => (known as readonly string[]).includes(p)))];
+}
+
 export async function saveLabels(labels: Record<string, string>): Promise<void> {
     await fs.mkdir(path.dirname(LABELS_FILE), { recursive: true });
     const tmp = `${LABELS_FILE}.tmp`;
