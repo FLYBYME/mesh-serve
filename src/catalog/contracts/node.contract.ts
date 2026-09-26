@@ -101,3 +101,50 @@ export const nodeMeshContract = defineContract({
 });
 
 export type NodeMeshOutput = z.infer<typeof nodeMeshContract.outputSchema>;
+
+const logsQuerySchema = z.object({
+    lines: z.number().int().min(1).max(5000).default(200).describe('How many of the newest lines (at most 5000)'),
+    grep: z.string().max(200).optional().describe('Only lines containing this text -- plain text, not a pattern'),
+});
+
+export const nodeLogsOutputSchema = z.object({
+    nodeID: z.string(),
+    lines: z.array(z.string()).describe('Oldest first'),
+    matched: z.number().int().describe('How many buffered lines matched, before `lines` cut it down'),
+}).describe('A node\'s recent log lines');
+
+/** One node's own buffer, answered by that node -- `serve.node.logs` asks it by nodeID. */
+export const nodeLogsHereContract = defineContract({
+    domain: 'serve.node',
+    action: 'logsHere',
+    description: 'This node\'s recent log lines, from its in-memory buffer.',
+    inputSchema: logsQuerySchema,
+    outputSchema: nodeLogsOutputSchema,
+    rest: { method: 'GET', path: '/nodes/logs/here' },
+    visibility: 'internal',
+    filePath: 'src/catalog/tools/nodeLogs.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => o.lines.join('\n'),
+});
+
+/**
+ * A node's recent log lines, through the api: what took `journalctl` over SSH on each box. The node
+ * keeps its newest 5000 lines in memory; the journal remains the full record.
+ */
+export const nodeLogsContract = defineContract({
+    domain: 'serve.node',
+    action: 'logs',
+    description: 'A node\'s recent log lines (its newest 5000, in memory), optionally only those containing some text.',
+    inputSchema: logsQuerySchema.extend({ nodeID: z.string().min(1).describe('Which node, e.g. surf or edge1 (see serve.node.find)') }),
+    outputSchema: nodeLogsOutputSchema,
+    rest: { method: 'GET', path: '/nodes/logs' },
+    visibility: 'public',
+    filePath: 'src/catalog/tools/nodeLogs.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => o.lines.join('\n'),
+    timeout: 15_000,
+});
+
+export type NodeLogsOutput = z.infer<typeof nodeLogsOutputSchema>;

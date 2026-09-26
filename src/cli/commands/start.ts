@@ -14,6 +14,7 @@ import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
+import { recordLog } from '../../catalog/methods/logBuffer.js';
 import { createCorePartPlacement } from '../../catalog/methods/corePartPlacement.js';
 import { CATALOG_DOMAINS } from '../../catalog/domains.js';
 // Importing a contract module is what registers its contracts, which is where loadDomain reads
@@ -68,7 +69,13 @@ export class StartCommand extends BaseCommand {
     }
 
     protected async execute(args: z.infer<typeof startInputSchema>): Promise<void> {
-        const logger = new Logger(LogLevelMap[args.logLevel]);
+        // Printed exactly as before (the journal is the record), and also kept in memory for
+        // serve.node.logs -- reading a node's logs without SSH.
+        const console$ = { [LogLevel.DEBUG]: console.debug, [LogLevel.INFO]: console.info, [LogLevel.WARN]: console.warn, [LogLevel.ERROR]: console.error };
+        const logger = new Logger(LogLevelMap[args.logLevel], {}, (level, formatted, _original, ...rest) => {
+            (console$[level] ?? console.log)(formatted, ...rest);
+            recordLog(level, formatted, rest);
+        });
         const serializer = new JSONSerializer();
         const labels = this.parseLabels(args.labels);
 
