@@ -199,6 +199,21 @@ describe('desired state, observed state, and the loop between them', () => {
         }
     }, 40000);
 
+    it('does not wait on a silent node the part cannot be on -- only its nodeSelector\'s match holds it back', async () => {
+        // A dead pod node held back every part in the cluster, pinned elsewhere or not (2026-09-27).
+        await brokerA.call('serve.part.update', { id: partId, desired: 'running', nodeSelector: 'sup-a' }, meta());
+        brokerB.unregisterContract('serve.part.runningHere');
+        try {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            const mine = result.failed.filter((f) => f.partId === partId);
+            // Attempted (and refused for having no build), not held back for B's silence.
+            expect(mine).toHaveLength(1);
+            expect(mine[0]?.error).not.toMatch(/did not answer/);
+        } finally {
+            brokerB.registerContract(partRunningHereContract, runningHere);
+        }
+    }, 40000);
+
     it('moves a running service when its nodeSelector names another node: stops it where it is', async () => {
         // Running on B, pinned to A: the pin moved (nameserver-ns2 to its pod node, 2026-09-27).
         await brokerA.call('serve.part.update', { id: partId, desired: 'running', nodeSelector: 'sup-a' }, meta());

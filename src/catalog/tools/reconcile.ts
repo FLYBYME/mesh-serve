@@ -130,12 +130,20 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
             continue;
         }
 
-        if (part.desired === 'running' && runningOn === undefined && unanswered.length > 0) {
+        // Only a silent node the part could be on holds it back: its nodeSelector's match, or any
+        // node for a part placed automatically. One dead pod node held back every part in the
+        // cluster (2026-09-27). A pinned part runs only where its selector matches -- the move
+        // branch above stops it elsewhere, and only once its new node answers.
+        const selector = part.nodeSelector;
+        const couldHold = selector === undefined
+            ? unanswered
+            : unanswered.filter((nodeID) => nodeMatchesSelector(ctx.broker.registry, nodeID, selector));
+        if (part.desired === 'running' && runningOn === undefined && couldHold.length > 0) {
             // Not seen running -- but a node that did not answer may be running it. Starting it
             // would load a second copy (elsewhere) or pile a start onto a node already struggling
             // (on it): skipping it was the intent, and a report with a missing node used to be read
             // as "running nothing" (surf tried to start edge1's parts on edge1, 2026-09-26).
-            failed.push({ partId: part.id, key: part.key, error: `not started: ${unanswered.join(', ')} did not answer, and may already be running it` });
+            failed.push({ partId: part.id, key: part.key, error: `not started: ${couldHold.join(', ')} did not answer, and may already be running it` });
             continue;
         }
 
