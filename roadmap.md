@@ -1281,6 +1281,17 @@ never stopping the running build before the new one is present locally.
 
 ---
 
+## Open — the website serves builds only from its own disk (2026-09-27)
+
+`serve.cdn` answers `/assets/<artifactHash>/<path>` straight from the local artifact folder
+(`artifactAssetPath`, `src/cdn/gateway.ts`); it never fetches a build it does not have. A second
+website copy in a pod (`mesh-web`) served the page but 404 for every script and style until
+edge1's builds (594 MB) were copied into the pod's folder by hand -- which worked only because the
+pod ran on edge1's disk. Wanted: a missing build fetched on first request (from the durable build
+store, "a finished build lives only on its builder"), then served locally.
+
+---
+
 ## Open — pushes to our gitserver authenticate with a session ticket (2026-09-27)
 
 `git push surf ...` (mesh, mesh-serve; `company/architecture/log/2026-09-27/git-through-our-server.md`)
