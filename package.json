@@ -23,7 +23,7 @@
         "README.md"
     ],
     "scripts": {
-        "prepare": "npm run build",
+        "prepare": "node scripts/prepare.mjs",
         "generate": "tsx src/cli/core/generate-cli.ts",
         "build": "npm run generate && tsc -p tsconfig.json && npm run build:parts",
         "build:parts": "tsx src/cli/core/buildCoreParts.ts",
