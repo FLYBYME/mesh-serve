@@ -38,6 +38,12 @@ export function labelHas(held: unknown, value: string): boolean {
  * Shared by `serve.part.reconcile` (pinned placement) and `serve.node.find` (the "what's online
  * under this label" lookup an operator makes before pinning something to it).
  */
+/** Whether a node satisfies a selector: its exact nodeID, or it carries the "key=value" label. */
+export function nodeMatchesSelector(registry: IServiceRegistry, nodeID: string, selector: string): boolean {
+    if (!selector.includes('=')) return nodeID === selector;
+    return nodesForLabel(registry, selector).some((n) => n.nodeID === nodeID);
+}
+
 export function resolveNodeSelector(registry: IServiceRegistry, selector: string): NodeInfo | undefined {
     if (!selector.includes('=')) {
         return registry.getNode(selector);

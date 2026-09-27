@@ -3,7 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { partCrud } from '../contracts/part.contract.js';
 import type { PartReconcileOutput } from '../contracts/supervisor.contract.js';
-import { resolveNodeSelector } from '../methods/resolveNode.js';
+import { nodeMatchesSelector, resolveNodeSelector } from '../methods/resolveNode.js';
 
 /**
  * One pass of desired-vs-observed.
@@ -53,6 +53,26 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
     for (const part of services) {
         const observedRun = observed.get(part.id);
         const runningOn = observedRun?.nodeID;
+
+        // Running on a node its nodeSelector no longer names: the pin moved (a part moved to a pod
+        // node, a role moved to another machine). Stop it there; the next pass starts it where it
+        // now belongs. Only when that place is online -- otherwise a stop would leave it running
+        // nowhere. Before this, a changed selector was ignored while the part kept running
+        // (nameserver-ns2, moving to its pod node, 2026-09-27).
+        if (
+            part.desired === 'running' && runningOn !== undefined && part.nodeSelector !== undefined
+            && !nodeMatchesSelector(ctx.broker.registry, runningOn, part.nodeSelector)
+            && resolveNodeSelector(ctx.broker.registry, part.nodeSelector) !== undefined
+        ) {
+            try {
+                await ctx.call('serve.part.stop', { id: part.id }, { nodeID: runningOn, meta: { tenant_id: part.tenantId } });
+                stopped.push({ partId: part.id, key: part.key, nodeID: runningOn });
+                ctx.logger.info(`serve.part.reconcile: stopped "${part.key}" on ${runningOn}: its nodeSelector "${part.nodeSelector}" now names another node`);
+            } catch (err) {
+                failed.push({ partId: part.id, key: part.key, error: err instanceof Error ? err.message : String(err) });
+            }
+            continue;
+        }
 
         // Running, but not the build it is pinned to: the pin moved (a deploy or a rollback). Restart
         // it in place, on the node it already runs on -- placement is not what changed. Only a pinned

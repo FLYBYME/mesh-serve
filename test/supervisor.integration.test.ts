@@ -183,6 +183,34 @@ describe('desired state, observed state, and the loop between them', () => {
         }
     }, 40000);
 
+    it('moves a running service when its nodeSelector names another node: stops it where it is', async () => {
+        // Running on B, pinned to A: the pin moved (nameserver-ns2 to its pod node, 2026-09-27).
+        await brokerA.call('serve.part.update', { id: partId, desired: 'running', nodeSelector: 'sup-a' }, meta());
+        markServiceRunning('sup-b', partId, 'worker.domain', '/tmp/worker.cjs');
+        try {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            // The stop on B was attempted (it may fail -- nothing was really loaded); what matters
+            // is that the part was taken off the node its selector no longer names.
+            const touched = [...result.stopped, ...result.failed].filter((r) => r.partId === partId);
+            expect(touched.length).toBe(1);
+            expect(result.started.map((s) => s.partId)).not.toContain(partId);
+        } finally {
+            clearServiceRunning('sup-b', partId);
+        }
+    }, 20000);
+
+    it('leaves a moved service running where it is while its new node is offline', async () => {
+        await brokerA.call('serve.part.update', { id: partId, desired: 'running', nodeSelector: 'sup-nowhere' }, meta());
+        markServiceRunning('sup-b', partId, 'worker.domain', '/tmp/worker.cjs');
+        try {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            expect(result.stopped.map((s) => s.partId)).not.toContain(partId);
+        } finally {
+            clearServiceRunning('sup-b', partId);
+            await brokerA.call('serve.part.update', { id: partId, nodeSelector: 'sup-b' }, meta());
+        }
+    }, 20000);
+
     it('stops a service that is running but no longer desired', async () => {
         await brokerA.call('serve.part.update', { id: partId, desired: 'stopped' }, meta());
         markServiceRunning('sup-b', partId, 'worker.domain', '/tmp/worker.cjs');
