@@ -2,6 +2,7 @@ import { Database } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { partCrud } from '../contracts/part.contract.js';
+import { artifactCrud } from '../contracts/artifact.contract.js';
 import type { PartReconcileOutput } from '../contracts/supervisor.contract.js';
 import { nodeMatchesSelector, resolveNodeSelector } from '../methods/resolveNode.js';
 
@@ -21,6 +22,25 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         .map((raw) => partCrud.get.outputSchema.parse(raw));
     if (services.length === 0) {
         return { started: [], stopped: [], redeployed: [], failed: [] };
+    }
+
+    // A build asked to pin itself (`requestBuild --pin`) is pinned here too, not only by the
+    // builder: the builder marks the build successful before it pins, and on a flaky link the pin's
+    // calls could fail after that -- compute's build of 2026-09-27 stayed successful and unpinned.
+    // Only forward: never onto a build older than the one already pinned.
+    const artifacts = db.repo(artifactCrud.get.outputSchema, 'serve.artifact');
+    for (const part of services) {
+        const requested = (await artifacts.find({ query: { partId: part.id, status: 'success', pinOnSuccess: true } }))
+            .map((raw) => artifactCrud.get.outputSchema.parse(raw))
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        if (requested === undefined || requested.id === part.artifactId) continue;
+        const pinned = part.artifactId !== undefined
+            ? (await artifacts.find({ query: { id: part.artifactId } })).map((raw) => artifactCrud.get.outputSchema.parse(raw))[0]
+            : undefined;
+        if (pinned !== undefined && new Date(pinned.createdAt).getTime() >= new Date(requested.createdAt).getTime()) continue;
+        await ctx.call('serve.part.update', { id: part.id, artifactId: requested.id }, { meta: { tenant_id: part.tenantId } });
+        part.artifactId = requested.id;
+        ctx.logger.info(`serve.part.reconcile: pinned "${part.key}" to ${requested.id}, the build requested with --pin`);
     }
 
     // Observed: ask every node what it is running. A node that has died is absent from the
@@ -52,13 +72,14 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
 
     for (const part of services) {
         const observedRun = observed.get(part.id);
-        const runningOn = observedRun?.nodeID;
+        let runningOn = observedRun?.nodeID;
 
         // Running on a node its nodeSelector no longer names: the pin moved (a part moved to a pod
-        // node, a role moved to another machine). Stop it there; the next pass starts it where it
-        // now belongs. Only when that place is online -- otherwise a stop would leave it running
-        // nowhere. Before this, a changed selector was ignored while the part kept running
-        // (nameserver-ns2, moving to its pod node, 2026-09-27).
+        // node, a role moved to another machine). Stop it there, then fall through and start it
+        // where it now belongs in this same pass -- a pass apart, ns2 answered no DNS for 33 s.
+        // Only when that place is online -- otherwise a stop would leave it running nowhere.
+        // Before this, a changed selector was ignored while the part kept running (nameserver-ns2,
+        // moving to its pod node, 2026-09-27).
         if (
             part.desired === 'running' && runningOn !== undefined && part.nodeSelector !== undefined
             && !nodeMatchesSelector(ctx.broker.registry, runningOn, part.nodeSelector)
@@ -70,15 +91,16 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
                 ctx.logger.info(`serve.part.reconcile: stopped "${part.key}" on ${runningOn}: its nodeSelector "${part.nodeSelector}" now names another node`);
             } catch (err) {
                 failed.push({ partId: part.id, key: part.key, error: err instanceof Error ? err.message : String(err) });
+                continue;
             }
-            continue;
+            runningOn = undefined;
         }
 
         // Running, but not the build it is pinned to: the pin moved (a deploy or a rollback). Restart
         // it in place, on the node it already runs on -- placement is not what changed. Only a pinned
         // part is compared; an unpinned one has no declared build to be out of date against.
         if (
-            part.desired === 'running' && observedRun !== undefined
+            part.desired === 'running' && runningOn !== undefined && observedRun !== undefined
             && part.artifactId !== undefined && observedRun.artifactId !== part.artifactId
         ) {
             const scoped = { nodeID: observedRun.nodeID, meta: { tenant_id: part.tenantId } };

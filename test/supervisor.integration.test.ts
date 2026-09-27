@@ -189,14 +189,42 @@ describe('desired state, observed state, and the loop between them', () => {
         markServiceRunning('sup-b', partId, 'worker.domain', '/tmp/worker.cjs');
         try {
             const result = await brokerA.call('serve.part.reconcile', {});
-            // The stop on B was attempted (it may fail -- nothing was really loaded); what matters
-            // is that the part was taken off the node its selector no longer names.
+            // Taken off B, the node its selector no longer names. (The stop itself fails here --
+            // nothing was really loaded -- and a failed stop starts nothing elsewhere, so no second copy.)
             const touched = [...result.stopped, ...result.failed].filter((r) => r.partId === partId);
             expect(touched.length).toBe(1);
             expect(result.started.map((s) => s.partId)).not.toContain(partId);
         } finally {
             clearServiceRunning('sup-b', partId);
         }
+    }, 20000);
+
+    it('pins a successful build that asked to be pinned, even if the builder never did -- only forward', async () => {
+        // The builder marks a build successful before it pins; on a flaky link the pin's calls could
+        // fail after that (compute, 2026-09-27). The reconciler catches it up.
+        // Its own part, stopped, so nothing is started and no other test sees these pins.
+        const [repo] = await brokerA.call('serve.repo.find', { query: { name: 'sup-repo' } }, meta());
+        const pinPart = await brokerA.call('serve.part.create', {
+            tenantId, repoId: repo!.id, key: `${ORG_SLUG}/pinned`, kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [], desired: 'stopped',
+        }, meta());
+        const build = async (pin: boolean) => brokerA.call('serve.artifact.create', {
+            tenantId, partId: pinPart.id, ref: 'master', status: 'success', hash: `h${Date.now()}`, ...(pin ? { pinOnSuccess: true } : {}),
+        }, meta());
+        const older = await build(true);
+        await new Promise((r) => { setTimeout(r, 20); });
+        const newer = await build(true);
+        await brokerA.call('serve.part.update', { id: pinPart.id, artifactId: older.id }, meta());
+        await brokerA.call('serve.part.reconcile', {});
+        const [after] = await brokerA.call('serve.part.find', { query: { id: pinPart.id } }, meta());
+        expect(after?.artifactId).toBe(newer.id);
+
+        // Pinned by hand to something newer still: the requested build is not pinned backwards.
+        await new Promise((r) => { setTimeout(r, 20); });
+        const handPinned = await build(false);
+        await brokerA.call('serve.part.update', { id: pinPart.id, artifactId: handPinned.id }, meta());
+        await brokerA.call('serve.part.reconcile', {});
+        const [still] = await brokerA.call('serve.part.find', { query: { id: pinPart.id } }, meta());
+        expect(still?.artifactId).toBe(handPinned.id);
     }, 20000);
 
     it('leaves a moved service running where it is while its new node is offline', async () => {
