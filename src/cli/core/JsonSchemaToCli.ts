@@ -44,6 +44,15 @@ function primaryType(schema: JsonSchema): string | undefined {
 }
 
 /** An object with declared fields is walked; a free-form record is not (its keys are unknowable). */
+function parseJsonArray(text: string): unknown[] | undefined {
+    try {
+        const parsed: unknown = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function hasNamedFields(schema: JsonSchema): boolean {
     return schema.properties !== undefined && Object.keys(schema.properties).length > 0;
 }
@@ -168,6 +177,13 @@ export class JsonSchemaToCli {
         const type = primaryType(schema);
 
         if (Array.isArray(value)) {
+            // `--containers '[{...}]'` arrives as one variadic entry holding the whole array. Taken
+            // entry by entry it became [[{...}]], which the server stored and then could not read
+            // back (a DNS pod's process group, 2026-09-27).
+            const whole = value.length === 1 && typeof value[0] === 'string' && value[0].trim().startsWith('[')
+                ? parseJsonArray(value[0])
+                : undefined;
+            if (whole !== undefined) return this.coerce(whole, schema);
             const items = schema.items;
             return items === undefined ? value : value.map((entry) => this.coerce(entry, items));
         }
