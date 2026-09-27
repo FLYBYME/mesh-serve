@@ -21,9 +21,16 @@ mkdir -p "$DIR" && chmod 700 "$DIR"
 PUB=$(wg pubkey < "$DIR/fleet.key")
 
 # --- 2. on the fleet, as a device ---
-OUT=$($CLI machine.device_add --name "$NAME" --publicKey "$PUB" --description "operator laptop, the builder during dev periods")
-ADDR=$(jq -r .tunnelIp <<< "$OUT")
-PREFIX=$(jq -r .prefix <<< "$OUT")
+# The CLI can print an error and still exit 0 (an unknown command): judge by what came back. A run
+# that went on with an empty address wrote a useless fleet.conf and had wg-quick fail on "/".
+OUT=$($CLI machine.device_add --name "$NAME" --publicKey "$PUB" --description "operator laptop, the builder during dev periods" 2>&1) || true
+ADDR=$(jq -r '.tunnelIp // empty' <<< "$OUT" 2>/dev/null || true)
+PREFIX=$(jq -r '.prefix // empty' <<< "$OUT" 2>/dev/null || true)
+if [ -z "$ADDR" ] || [ -z "$PREFIX" ]; then
+    echo "machine.device_add did not give this laptop a fleet address; nothing changed here:" >&2
+    echo "$OUT" >&2
+    exit 1
+fi
 echo "fleet address: $ADDR/$PREFIX"
 jq -r '.notUpdated[]? | "WARNING: not updated yet: \(.)"' <<< "$OUT"
 
