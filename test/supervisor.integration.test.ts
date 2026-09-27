@@ -183,6 +183,22 @@ describe('desired state, observed state, and the loop between them', () => {
         }
     }, 40000);
 
+    it('does not wait on a silent builder -- a builder hosts no parts', async () => {
+        // The laptop builder on a flaky link held back every unseen part's start (2026-09-27).
+        const registryB = appB.getProvider<{ setLocalMetadata: (m: Record<string, string>) => void }>('registry');
+        registryB.setLocalMetadata({ role: 'builder' });
+        await new Promise((r) => { setTimeout(r, 800); });
+        brokerB.unregisterContract('serve.part.runningHere');
+        try {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            expect(result.failed.map((f) => f.error).join(' ')).not.toMatch(/sup-b did not answer/);
+        } finally {
+            brokerB.registerContract(partRunningHereContract, runningHere);
+            registryB.setLocalMetadata({ role: 'worker' });
+            await new Promise((r) => { setTimeout(r, 800); });
+        }
+    }, 40000);
+
     it('moves a running service when its nodeSelector names another node: stops it where it is', async () => {
         // Running on B, pinned to A: the pin moved (nameserver-ns2 to its pod node, 2026-09-27).
         await brokerA.call('serve.part.update', { id: partId, desired: 'running', nodeSelector: 'sup-a' }, meta());

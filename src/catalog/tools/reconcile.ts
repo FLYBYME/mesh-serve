@@ -4,7 +4,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import { partCrud } from '../contracts/part.contract.js';
 import { artifactCrud } from '../contracts/artifact.contract.js';
 import type { PartReconcileOutput } from '../contracts/supervisor.contract.js';
-import { nodeMatchesSelector, resolveNodeSelector } from '../methods/resolveNode.js';
+import { labelHas, nodeMatchesSelector, resolveNodeSelector } from '../methods/resolveNode.js';
 
 /**
  * One pass of desired-vs-observed.
@@ -57,6 +57,12 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
                 observed.set(service.partId, { nodeID: report.nodeID, artifactId: service.artifactId });
             }
         } catch (err) {
+            // A builder hosts no parts, so its silence cannot mean it runs one: counted, a laptop
+            // builder on a flaky link held back every unseen part's start (2026-09-27).
+            if (labelHas(node.metadata?.role, 'builder')) {
+                ctx.logger.debug(`serve.part.reconcile: builder ${node.nodeID} did not report; it hosts no parts`);
+                continue;
+            }
             // A node that cannot answer is one we cannot reason about -- it may be running anything.
             // Its report is missing, so every part it holds looks "not running" below; `unanswered`
             // is what stops that from reading as a reason to start them (see the start branch).
