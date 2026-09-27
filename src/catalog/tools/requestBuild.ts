@@ -39,5 +39,6 @@ export async function requestBuild(
         partId: part.id,
         ref: input.ref,
         ...(input.drivers !== undefined ? { drivers: input.drivers } : {}),
+        ...(input.pin !== undefined ? { pinOnSuccess: input.pin } : {}),
     });
 }

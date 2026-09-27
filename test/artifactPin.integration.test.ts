@@ -203,4 +203,22 @@ describe('serve.part.artifactId: which build a service runs', () => {
             await broker.call('serve.part.update', { id: partId, desired: 'stopped' }, meta());
         }
     }, 20000);
+
+    it('requestBuild sets pinOnSuccess from pin input', async () => {
+        const partId = await newPart();
+        const unpinned = await broker.call('serve.artifact.requestBuild', {
+            partId, ref: 'master',
+        }, meta());
+        expect(unpinned.pinOnSuccess).toBeFalsy();
+
+        const pinned = await broker.call('serve.artifact.requestBuild', {
+            partId, ref: 'master', pin: true,
+        }, meta());
+        expect(pinned.pinOnSuccess).toBe(true);
+
+        const explicitFalse = await broker.call('serve.artifact.requestBuild', {
+            partId, ref: 'master', pin: false,
+        }, meta());
+        expect(explicitFalse.pinOnSuccess).toBe(false);
+    });
 });

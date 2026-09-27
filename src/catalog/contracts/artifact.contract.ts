@@ -142,6 +142,7 @@ export const requestBuildInputSchema = z.object({
     partId: z.string().min(1).describe('The serve.part to build -- kernel, driver, application, extension, and theme are all queued the same way'),
     ref: z.string().min(1).describe('The git ref to build at'),
     drivers: z.array(z.string()).optional().describe('serve.part (kind: driver) keys to bake in; only valid when partId names a kind: kernel part'),
+    pin: z.boolean().default(false).describe('Automatically pin the part to this artifact when the build succeeds'),
 }).describe('Queue a build of one part at one ref');
 
 export const requestBuildOutputSchema = artifactCrud.get.outputSchema;

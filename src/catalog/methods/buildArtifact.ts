@@ -109,6 +109,29 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
         // hash/assets do on the artifact.
         await broker.call('serve.part.update', { id: part.id, wants }, { meta });
 
+        // Auto-pin the part on success if requested, but never move a pin backwards if a newer
+        // successful build was already pinned while this build was in flight.
+        if (artifact.pinOnSuccess || updatedArtifact.pinOnSuccess) {
+            const currentPart = await broker.call('serve.part.resolve', { id: part.id }, { meta });
+            let canPin = true;
+            if (currentPart?.artifactId !== undefined) {
+                const pinned = await broker.call('serve.artifact.resolve', { id: currentPart.artifactId }, { meta });
+                if (pinned !== undefined && pinned.status === 'success') {
+                    const thisCreated = updatedArtifact.createdAt ?? artifact.createdAt;
+                    const thisTime = thisCreated ? new Date(thisCreated).getTime() : 0;
+                    const pinnedTime = pinned.createdAt ? new Date(pinned.createdAt).getTime() : 0;
+                    if (pinnedTime > thisTime) {
+                        canPin = false;
+                        broker.logger.info(`Part "${part.key}" (${part.id}) already pinned to newer artifact ${pinned.id}; leaving pin unchanged`);
+                    }
+                }
+            }
+            if (canPin) {
+                await broker.call('serve.part.update', { id: part.id, artifactId: artifact.id }, { meta });
+                broker.logger.info(`Pinned part "${part.key}" (${part.id}) to artifact ${artifact.id}`);
+            }
+        }
+
         broker.emit('serve.artifact.built', {
             tenantId: artifact.tenantId,
             artifact: updatedArtifact,

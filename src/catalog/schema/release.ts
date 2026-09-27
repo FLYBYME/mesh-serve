@@ -25,6 +25,7 @@ export const releaseArtifactSchema = z.object({
   assets: z.array(artifactAssetSchema).optional().describe('Every file this artifact serves; set once status is success'),
   error: z.string().optional().describe('What went wrong; set once status is failed'),
   duration: z.number().optional().describe('How long this build took in seconds'),
+  pinOnSuccess: z.boolean().optional().describe('Whether to automatically pin the part to this artifact when the build succeeds'),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 }).describe('One already-built serve.artifact, pinned into this release');
