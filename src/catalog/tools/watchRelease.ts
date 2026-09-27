@@ -6,6 +6,8 @@ import type { WatchReleaseOutput } from '../contracts/artifact.contract.js';
 
 /** Bound on both the real build's ctx.call timeout and serve.queue's own lease for it. */
 export const BUILD_TIMEOUT_MS = 5 * 60_000;
+/** The queue lane every build runs in: at most one at a time, cluster-wide. */
+export const BUILD_QUEUE_GROUP = 'serve.artifact.build';
 
 /**
  * Scans for pending artifacts across every tenant and enqueues a build for each.
@@ -45,6 +47,10 @@ export async function watchRelease(_params: Record<string, never>, ctx: IService
             payload: { id: artifact.id },
             timeoutMs: BUILD_TIMEOUT_MS,
             maxAttempts: 1,
+            // One build at a time, cluster-wide. Ungrouped, a node ran up to QUEUE_MAX_CONCURRENCY (5)
+            // builds at once: on 2026-09-27 eight parts were requested together, ns2 (3.8 GB) ran
+            // their npm installs side by side, ran out of memory and had to be rebooted by hand.
+            group: BUILD_QUEUE_GROUP,
         }, { meta });
     }
 
