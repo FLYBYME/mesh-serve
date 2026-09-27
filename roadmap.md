@@ -1246,3 +1246,58 @@ mock broker's `email.address_resolve` response fixed to match the real contract'
 `null`), and a new `surfdns-imapserver` test that goes through the real `ImapGateway` instead of a
 mocked `ImapRouterDependencies`, asserting AUTH calls `email.address_resolve` and the resolved
 tenant reaches `emailMessage.find` as real `meta`.
+
+---
+
+## Open — a node's own settings live in hand-edited files, not the records (2026-09-27)
+
+A host node's mesh address (`--host`/`--advertise`), its bootstrap list, and its environment
+(`SERVER_HOST`, `MONGODB_URI`, `MESH_KEY`, ...) are the arguments of its systemd unit and
+`/etc/mesh/node.env`, written by hand over SSH. `serve.node.upgrade`'s agent can only swap the image
+tag. Moving the mesh to the fleet network meant editing every host's unit by hand, and one of those
+edits caused an outage: edge1's `node.env` was replaced root-owned, the unit runs docker as
+`ubuntu`, and the node restart-looped for five minutes -- api, sites and edge1's proxy down
+(`company/architecture/design/fleet.md`, step 3).
+
+Wanted: a node's settings as a record (address, bootstrap peers from the fleet records, labels,
+env with secrets from the vault like a pod's `secretEnv`), and the node agent rendering the unit and
+env from it -- the same way the fleet WireGuard config is rendered from records -- with the unit's
+owner and mode fixed by the renderer, a check that the node came back, and a rollback if not.
+
+---
+
+## Open — a finished build lives only on its builder (2026-09-27)
+
+An artifact's files stay in the builder's `~/.mesh/artifacts`; every node that runs it fetches
+them from `builtOn` through `serve.artifact.fetchAssetBytes` (base64, 10 s). With the laptop as
+builder on a lossy hotspot link, compute's finished, pinned build (9.5 MB) could not reach surf;
+compute had already stopped its old build, and was down 18:19-18:38 UTC until it was rebuilt on a
+server (ns2). The same happens whenever a builder is unreachable or gone -- a laptop closed, a
+builder machine released.
+
+Wanted: a successful build copied off the builder at once to storage the servers hold (the
+registry's blob store is content-addressed already), nodes fetching from there, and a redeploy
+never stopping the running build before the new one is present locally.
+
+---
+
+## Open — pushes to our gitserver authenticate with a session ticket (2026-09-27)
+
+`git push surf ...` (mesh, mesh-serve; `company/architecture/log/2026-09-27/git-through-our-server.md`)
+sends the CLI session's ticket as an `http.extraHeader` on every push. It expires with the session,
+and it is an operator's whole session, not a push right.
+
+Wanted: a long-lived token scoped to push (per repo or per namespace), stored hashed like registry
+tokens, and a git credential helper (`mesh-serve git-credential`) so a plain `git push surf` works.
+
+---
+
+## Later — a release tag builds and publishes the package (2026-09-27)
+
+Deferred by the owner. Designed in `company/architecture/design/package-registry.md` ("Publishing:
+a tag becomes a package"); not built. What it needs: the gitserver reporting every pushed ref (one
+`push_received` per push reports only the last ref today, `receive_pack.ts`), a publishable-repo
+record, `registry.publish_from_build`, and a package-build job on the build queue (clone from our
+gitserver at the tag, `npm ci`, build, `npm pack`, version must equal the tag, publish with
+provenance). Then the repos move from `github:` dependencies to semver from npm.surfdns.net --
+which also ends the git-dependency `prepare` builds that ran ns2 out of memory.
