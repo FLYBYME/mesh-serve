@@ -5,12 +5,16 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { artifactAssetPath } from './artifacts.js';
+import { restoreArtifact } from './artifactStore.js';
 
 /** What pulling needs to know of one build record: who built it, and which files it has. */
 export interface PullSource {
     readonly builtOn?: string | undefined;
-    readonly assets?: ReadonlyArray<{ readonly url: string }> | undefined;
+    readonly assets?: ReadonlyArray<{ readonly url: string; readonly integrity?: string | undefined }> | undefined;
 }
+
+/** What `pullArtifact` returns when the build came from the database, not from a node. */
+export const FROM_DATABASE = 'database';
 
 /** One pull per build at a time: a page asks for many files of the same build at once. */
 const inFlight = new Map<string, Promise<string>>();
@@ -65,10 +69,23 @@ async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly
             failures.push(`${from}: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
+
+    // No node could give it: the copy every build keeps in the database (methods/artifactStore.ts),
+    // checked against the record's integrity file by file.
+    const withAssets = sources.find((s) => (s.assets ?? []).length > 0);
+    if (withAssets?.assets !== undefined) {
+        try {
+            await restoreArtifact(ctx.broker, hash, withAssets.assets, ctx.nodeID);
+            return FROM_DATABASE;
+        } catch (err) {
+            failures.push(`database: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+    const where = tried.size === 0
+        ? `has no local copy on this node and no other node is recorded as having built it`
+        : `could not be copied here from any node that built it`;
     throw new MeshError({
-        message: tried.size === 0
-            ? `Artifact ${hash} has no local copy on this node and no other node is recorded as having built it. Rebuild with serve.artifact.requestBuild.`
-            : `Artifact ${hash} could not be copied here from any node that built it (${failures.join('; ')}).`,
+        message: `Artifact ${hash} ${where}${failures.length > 0 ? ` (${failures.join('; ')})` : ''}. Rebuild with serve.artifact.requestBuild.`,
         code: 'NOT_FOUND',
         status: 404,
     });

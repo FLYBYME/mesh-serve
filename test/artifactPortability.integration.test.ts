@@ -14,11 +14,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MongoClient } from 'mongodb';
+import { GridFSBucket, MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
-import type { IServiceBroker } from '@flybyme/mesh';
+import type { Database, IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
@@ -237,6 +237,55 @@ describe('a service part started on a node that never built it', () => {
             expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
                 .toEqual({ artifactHash: hash, from: 'port-a' });
         }, 20000);
+
+        describe('kept in the database as well as on disk', () => {
+            const bucket = (): GridFSBucket => {
+                const db = brokerA.getProvider<Database>('database').getDb();
+                if (!db) throw new Error('no database');
+                return new GridFSBucket(db, { bucketName: 'artifactFiles' });
+            };
+            const importOn = async (name: string, f: Record<string, string>): Promise<string> => {
+                const partId = await newPart(name);
+                const hash = await hashOf(f);
+                await brokerA.call('serve.artifact.importBuild', { partId, ref: 'master', commit, hash, files: asInput(f) },
+                    { nodeID: 'port-a', meta: { tenant_id: tenantId } });
+                return hash;
+            };
+
+            it('keeps every file of an imported build in the database', async () => {
+                const f = { 'kept.js': 'export default "kept";\n', 'kept.css': '.k{}' };
+                const hash = await importOn('kept', f);
+                const names = (await bucket().find({ 'metadata.hash': hash }).toArray()).map((x) => x.filename).sort();
+                expect(names).toEqual([`${hash}/kept.css`, `${hash}/kept.js`]);
+            }, 20000);
+
+            it('still gets a build to another node when the disk that had it is gone', async () => {
+                const f = { 'lost.js': 'export default "lost disk";\n' };
+                const hash = await importOn('lostdisk', f);
+                await fs.rm(path.join(dirA, hash), { recursive: true, force: true });
+
+                expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
+                    .toEqual({ artifactHash: hash, from: 'database' });
+                expect(await fs.readFile(path.join(dirB, hash, 'lost.js'), 'utf8')).toBe(f['lost.js']);
+            }, 20000);
+
+            it('refuses a copy in the database that does not match the build\'s record', async () => {
+                const f = { 'tamper.js': 'export default "original";\n' };
+                const hash = await importOn('tamperdb', f);
+                await fs.rm(path.join(dirA, hash), { recursive: true, force: true });
+                const b = bucket();
+                for (const file of await b.find({ filename: `${hash}/tamper.js` }).toArray()) await b.delete(file._id);
+                await new Promise<void>((resolve, reject) => {
+                    const up = b.openUploadStream(`${hash}/tamper.js`, { metadata: { hash, path: 'tamper.js' } });
+                    up.once('finish', () => resolve()).once('error', reject);
+                    up.end(Buffer.from('export default "changed";\n'));
+                });
+
+                await expect(brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
+                    .rejects.toThrow(/does not match the build's record/);
+                await expect(fs.access(path.join(dirB, hash))).rejects.toThrow();
+            }, 20000);
+        });
 
         it('refuses files that do not hash to what it claims', async () => {
             const partId = await newPart('tampered');

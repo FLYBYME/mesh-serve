@@ -4,6 +4,7 @@ import type { Repo } from '../contracts/repo.contract.js';
 import type { Part } from '../contracts/part.contract.js';
 import type { Artifact } from '../contracts/artifact.contract.js';
 import { buildPart, buildKernel, buildService } from './build.js';
+import { storeArtifact } from './artifactStore.js';
 
 /**
  * Building one artifact, and the two lookups it needs.
@@ -93,6 +94,13 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
                 : await buildPart(part, repo, artifact.ref, await resolveExternals(broker, part));
 
         const duration = (Date.now() - startedAt) / 1000;
+
+        // Kept in the database too, so the build outlives this node's disk (methods/artifactStore.ts).
+        // A failure here is loud but does not fail a build that did succeed: the files are on this
+        // disk, and the next pull or rebuild can store them.
+        await storeArtifact(broker, hash, assets.map((a) => a.url)).catch((err: unknown) => {
+            broker.logger.error(`Build ${artifact.id} (${hash.slice(0, 12)}) is NOT kept in the database: ${err instanceof Error ? err.message : String(err)}`);
+        });
 
         const updatedArtifact = await broker.call('serve.artifact.update', {
             id: artifact.id,

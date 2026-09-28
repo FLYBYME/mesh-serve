@@ -8,6 +8,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { ImportArtifactInput, RequestBuildOutput } from '../contracts/artifact.contract.js';
 import { artifactFolder } from '../methods/artifacts.js';
 import { hashOutput } from '../methods/build.js';
+import { storeArtifact } from '../methods/artifactStore.js';
 
 /** A path inside a build: relative, forward slashes, no way out of the build's folder. */
 function safeRelative(p: string): boolean {
@@ -62,6 +63,9 @@ export async function importBuild(input: ImportArtifactInput, ctx: IServiceConte
             await fs.rm(staging, { recursive: true, force: true });
         }
     }
+
+    // Kept in the database too, like a queue build (methods/artifactStore.ts).
+    await storeArtifact(ctx.broker, hash, assets.map((a) => a.url), ctx.nodeID);
 
     const artifact = await ctx.db('serve.artifact').create({
         tenantId: part.tenantId,
