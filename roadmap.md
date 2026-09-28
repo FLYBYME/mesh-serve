@@ -1266,7 +1266,12 @@ owner and mode fixed by the renderer, a check that the node came back, and a rol
 
 ---
 
-## Open — a finished build lives only on its builder (2026-09-27)
+## Done (2026-09-28) — a finished build lives only on its builder
+
+Fixed: every build is also kept in the database (GridFS, e935077); a node that no node can give a
+build restores it from there, integrity-checked; and a build lost everywhere is rebuilt from its
+recorded commit, accepted only with the same hash (dd35fac) -- which needed builds to be
+reproducible: source maps no longer carry machine paths. The original note:
 
 An artifact's files stay in the builder's `~/.mesh/artifacts`; every node that runs it fetches
 them from `builtOn` through `serve.artifact.fetchAssetBytes` (base64, 10 s). With the laptop as
