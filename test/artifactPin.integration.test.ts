@@ -19,7 +19,7 @@ import { WSTransport } from '@flybyme/mesh/node';
 
 import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
 import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
-import { clearServiceRunning, markServiceRunning } from '../src/catalog/methods/services.js';
+import { clearServiceRunning, getRunningService, markServiceRunning } from '../src/catalog/methods/services.js';
 import '../src/identity/contracts/organization.contract.js';
 import '../src/identity/contracts/user.contract.js';
 import '../src/identity/contracts/membership.contract.js';
@@ -181,23 +181,22 @@ describe('serve.part.artifactId: which build a service runs', () => {
         }
     }, 20000);
 
-    it('reconcile restarts a service whose pin moved off the build it is running', async () => {
+    it('reconcile acts on a pin that moved -- and never stops the old build before the new one is there', async () => {
         const partId = await newPart();
-        const oldBuild = await build(partId, 'old');
-        const newBuild = await build(partId, 'new');
+        const oldBuild = await build(partId, 'a'.repeat(64));
+        // A build no node, no database copy and no rebuild can produce (no commit recorded).
+        const newBuild = await build(partId, 'b'.repeat(64));
         await broker.call('serve.part.update', { id: partId, artifactId: newBuild, desired: 'running' }, meta());
         // Running the old build, as it would be right after the pin was changed.
         markServiceRunning(NODE, partId, 'svc.domain', '/tmp/svc.cjs', oldBuild);
         try {
             const result = await broker.call('serve.part.reconcile', {});
-            // The stop runs for real and fails (nothing was actually loaded -- see supervisor's
-            // "stops a service that is running but no longer desired"), so it lands in `failed`.
-            // What is under test is that reconcile saw the drift on this part and acted on it,
-            // rather than leaving a stale build running because the part "is running".
+            // Reconcile saw the drift and acted on it -- and since the new build cannot be had,
+            // it says so and leaves the old one running instead of stopping it into an outage.
             const failure = result.failed.find((f) => f.partId === partId);
-            const redeploy = result.redeployed.find((r) => r.partId === partId);
-            expect(failure ?? redeploy).toBeDefined();
-            expect(failure?.error ?? '').toMatch(/nothing is loaded for it/);
+            expect(failure?.error ?? '').toMatch(/new build is not available.*the old build keeps running/);
+            expect(result.redeployed.find((r) => r.partId === partId)).toBeUndefined();
+            expect(getRunningService(NODE, partId)?.artifactId).toBe(oldBuild);
         } finally {
             clearServiceRunning(NODE, partId);
             await broker.call('serve.part.update', { id: partId, desired: 'stopped' }, meta());

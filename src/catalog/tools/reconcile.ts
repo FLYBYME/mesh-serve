@@ -111,6 +111,14 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         ) {
             const scoped = { nodeID: observedRun.nodeID, meta: { tenant_id: part.tenantId } };
             try {
+                // The new build onto that node first (from a node, the database, or rebuilt): a
+                // redeploy never stops the old build before the new one is there. It used to stop
+                // first and fetch in the start -- a build nothing could give left the part down.
+                const pinned = await ctx.call('serve.artifact.get', { id: part.artifactId }, { meta: scoped.meta });
+                if (pinned.hash === undefined) throw new Error(`pinned build ${part.artifactId} has no hash (status ${pinned.status}); the old build keeps running`);
+                await ctx.call('serve.artifact.pull', { artifactHash: pinned.hash }, scoped).catch((err: unknown) => {
+                    throw new Error(`the new build is not available on ${observedRun.nodeID} (${err instanceof Error ? err.message : String(err)}); the old build keeps running`);
+                });
                 await ctx.call('serve.part.stop', { id: part.id }, scoped);
                 // If this start fails the part is now simply not running, and the next pass's
                 // not-running branch retries it like any other missing service.
