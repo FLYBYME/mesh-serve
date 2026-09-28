@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Namespace
+metadata: { name: pextest }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mongo, namespace: pextest }
+spec:
+  selector: { pex: mongo }
+  ports: [{ port: 27017, targetPort: 27017 }]
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: mongo, namespace: pextest, labels: { pex: mongo } }
+spec:
+  containers:
+    - name: mongo
+      image: mongo:7
+      readinessProbe: { tcpSocket: { port: 27017 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pex-a, namespace: pextest }
+spec:
+  selector: { pex: a }
+  ports: [{ port: 6541, targetPort: 6541 }]
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: pex-a, namespace: pextest, labels: { pex: a } }
+spec:
+  containers:
+    - name: mesh
+      image: mesh-serve:pextest
+      imagePullPolicy: Never
+      env: [{ name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }, { name: MONGODB_URI, value: "mongodb://mongo:27017" }]
+      args: [start, --nodeID, pex-a, --host, 0.0.0.0, --wsPort, "6541", --advertise, $(POD_IP), --sharedKey, pextest-key, --parts, hold, --db, pextest, --logLevel, info]
+      volumeMounts: [{ name: home, mountPath: /home/node }]
+  volumes: [{ name: home, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: pex-b, namespace: pextest, labels: { pex: spoke } }
+spec:
+  containers:
+    - name: mesh
+      image: mesh-serve:pextest
+      imagePullPolicy: Never
+      env: [{ name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }, { name: MONGODB_URI, value: "mongodb://mongo:27017" }]
+      args: [start, --nodeID, pex-b, --host, 0.0.0.0, --wsPort, "6541", --advertise, $(POD_IP), --sharedKey, pextest-key, --bootstrapNode, "ws://pex-a:6541", --parts, hold, --db, pextest, --logLevel, info]
+      volumeMounts: [{ name: home, mountPath: /home/node }]
+  volumes: [{ name: home, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Pod
+metadata: { name: pex-c, namespace: pextest, labels: { pex: spoke } }
+spec:
+  containers:
+    - name: mesh
+      image: mesh-serve:pextest
+      imagePullPolicy: Never
+      env: [{ name: POD_IP, valueFrom: { fieldRef: { fieldPath: status.podIP } } }, { name: MONGODB_URI, value: "mongodb://mongo:27017" }]
+      args: [start, --nodeID, pex-c, --host, 0.0.0.0, --wsPort, "6541", --advertise, $(POD_IP), --sharedKey, pextest-key, --bootstrapNode, "ws://pex-a:6541", --parts, hold, --db, pextest, --logLevel, info]
+      volumeMounts: [{ name: home, mountPath: /home/node }]
+  volumes: [{ name: home, emptyDir: {} }]

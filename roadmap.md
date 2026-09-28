@@ -1290,6 +1290,20 @@ edge1's builds (594 MB) were copied into the pod's folder by hand -- which worke
 pod ran on edge1's disk. Wanted: a missing build fetched on first request (from the durable build
 store, "a finished build lives only on its builder"), then served locally.
 
+Hit again the same night: with the website back on edge1's host and ns2 the builder, every console
+build 404'd (`No asset at "index.js"`). Worked around by making edge1 the only builder
+(`parts=api,cdn,queue`, ns2 `parts=none`) -- which holds only while the builder is the cdn node.
+
+---
+
+## Open — the image build fails now and then on `ETXTBSY` in `npm ci` (2026-09-27)
+
+`RUN npm ci` in the Dockerfile failed once: npm's preparation of a git dependency ran esbuild's
+`install.js`, which spawned the esbuild binary while it was still being written (`spawnSync ...
+esbuild ETXTBSY`). A retry passed. It shows up when the cache misses at `COPY . .` -- any change in
+the repo -- so it can hit a real release build too. Worth a retry in the build, or `npm ci
+--ignore-scripts` plus an explicit `npm rebuild esbuild`.
+
 ---
 
 ## Open — pushes to our gitserver authenticate with a session ticket (2026-09-27)
