@@ -9,6 +9,7 @@ import { firstOperator } from './methods/queryRule.js';
 import { EventHub, openStream, type Omitted, type Subscriber } from './methods/events.js';
 import { matchPath, specificity } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
+import { answerHealth } from './health.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -93,6 +94,7 @@ export class ApiGateway {
 
             try {
                 this.broker.logger.debug(`${req.method} ${req.url}`);
+                if (await answerHealth(this.broker, req, res)) return;
                 await this.handleRequest(req, res);
             } catch (err) {
                 // isMeshError, not instanceof: this gateway runs from a precompiled .cjs part,
@@ -128,14 +130,15 @@ export class ApiGateway {
         });
 
         await new Promise<void>((resolve, reject) => {
-            this.server?.listen(SERVER_PORT, SERVER_HOST, () => {
-                this.broker?.logger.info(`Api server running at ${SERVER_HOST}:${SERVER_PORT}`);
-                resolve();
-            });
+            this.server?.listen(SERVER_PORT, SERVER_HOST, () => resolve());
             this.server?.once('error', reject);
         });
 
-        return `${SERVER_HOST}:${SERVER_PORT}`;
+        // The port actually bound -- SERVER_PORT is only what was asked for (0 means "any").
+        const bound = this.server.address();
+        const boundPort = bound !== null && typeof bound === 'object' ? bound.port : SERVER_PORT;
+        this.broker?.logger.info(`Api server running at ${SERVER_HOST}:${boundPort}`);
+        return `${SERVER_HOST}:${boundPort}`;
     }
 
     /** Called from `serve.api.listen`'s abort handler -- nothing else stops this. */

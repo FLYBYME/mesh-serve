@@ -11,6 +11,7 @@ import { type Site } from './contracts/site.contract.js';
 import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
 import type { GetAssetOutput } from '../catalog/contracts/artifact.contract.js';
+import { answerHealth } from '../api/health.js';
 
 /** A "that file is not here" -- the only failure worth fetching the build for. */
 function isNotFound(err: unknown): boolean {
@@ -178,6 +179,7 @@ export class CdnGateway {
             const startedAt = Date.now();
             try {
                 this.broker.logger.debug(`${req.method} ${req.url} ${JSON.stringify(req.headers)}`);
+                if (await answerHealth(this.broker, req, res)) return;
                 await this.handleRequest(req, res);
             } catch (err) {
                 // isMeshError, not instanceof -- see api/gateway.ts and MESH_ERROR_BRAND.
