@@ -284,7 +284,8 @@ async function walk(dir: string, base: string = dir): Promise<string[]> {
  * content-addressed home under artifactDir. A hash that already exists there is left as-is --
  * identical content from a prior build, nothing to overwrite.
  */
-async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
+async function hashAndStoreOutput(outDir: string, checkoutDir: string): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
+    await normalizeSourceMaps(outDir, checkoutDir);
     // Read once per file, reused for both the overall content hash and each file's own SRI digest.
     const contents = new Map<string, Buffer>();
     for (const relPath of await walk(outDir)) contents.set(relPath, await fs.readFile(path.join(outDir, relPath)));
@@ -296,6 +297,27 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
         await fs.cp(outDir, finalDir, { recursive: true });
     }
     return { hash, assets };
+}
+
+/**
+ * Makes each source map's `sources` relative to the part's checkout (`src/register.ts`). esbuild
+ * writes them relative to its temporary output folder, so they carried the machine's home and
+ * temp folders and the checkout's folder name: the same commit built on two machines -- or once on
+ * a builder, once with `artifact-build` -- got two hashes, and rebuilding a lost build could never
+ * match it (found by test/buildReproducible, 2026-09-28). The JavaScript itself is minified and
+ * carries no paths.
+ */
+async function normalizeSourceMaps(outDir: string, checkoutDir: string): Promise<void> {
+    for (const relPath of await walk(outDir)) {
+        if (!relPath.endsWith('.map')) continue;
+        const file = path.join(outDir, relPath);
+        const map: unknown = JSON.parse(await fs.readFile(file, 'utf8'));
+        if (typeof map !== 'object' || map === null || !('sources' in map) || !Array.isArray(map.sources)) continue;
+        const mapDir = path.dirname(file);
+        const sources = map.sources.map((s: unknown) =>
+            (typeof s === 'string' ? path.relative(checkoutDir, path.resolve(mapDir, s)).split(path.sep).join('/') : s));
+        await fs.writeFile(file, JSON.stringify({ ...map, sources }));
+    }
 }
 
 /**
@@ -342,7 +364,7 @@ export async function buildPart(part: BuildablePart, repo: BuildableRepo, ref: s
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
             await runEsbuild([entry], buildTmpDir, external);
-            return { ...await hashAndStoreOutput(buildTmpDir), wants, commit };
+            return { ...await hashAndStoreOutput(buildTmpDir, repoDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
         }
@@ -414,7 +436,7 @@ export async function buildService(part: BuildablePart, repo: BuildableRepo, ref
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
             await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
-            return { ...await hashAndStoreOutput(buildTmpDir), wants, commit };
+            return { ...await hashAndStoreOutput(buildTmpDir, repoDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
         }
@@ -484,7 +506,7 @@ export async function buildKernel(
         // externalized specifier resolves against on the page, so it has to carry mesh-web and every
         // baked-in driver itself, not a bare import of them.
         await runEsbuild([synthEntry], buildTmpDir, []);
-        return { ...await hashAndStoreOutput(buildTmpDir), wants: [...wants], commit };
+        return { ...await hashAndStoreOutput(buildTmpDir, kernelDir), wants: [...wants], commit };
     } finally {
         await fs.rm(synthDir, { recursive: true, force: true });
         await fs.rm(buildTmpDir, { recursive: true, force: true });

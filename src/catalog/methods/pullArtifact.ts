@@ -11,7 +11,14 @@ import { restoreArtifact } from './artifactStore.js';
 export interface PullSource {
     readonly builtOn?: string | undefined;
     readonly assets?: ReadonlyArray<{ readonly url: string; readonly integrity?: string | undefined }> | undefined;
+    /** What a rebuild needs: the part, the exact commit it was built from, and a kernel's drivers. */
+    readonly partId?: string | undefined;
+    readonly commit?: string | undefined;
+    readonly drivers?: readonly string[] | undefined;
 }
+
+/** How long a pull waits for a rebuild of a build nothing else can give (a build takes 5-60 s). */
+const REBUILD_WAIT_MS = 5 * 60 * 1000;
 
 /** What `pullArtifact` returns when the build came from the database, not from a node. */
 export const FROM_DATABASE = 'database';
@@ -81,6 +88,21 @@ async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly
             failures.push(`database: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
+    // Last: build it again, from the exact commit it was built from (owner, 2026-09-28: "both" --
+    // the database copy and a rebuild). Accepted only if it comes out byte for byte the same: a
+    // release names its builds by hash, so a different build under the old name would be wrong.
+    const buildable = sources.find((s) => s.partId !== undefined && s.commit !== undefined);
+    if (buildable?.partId !== undefined && buildable.commit !== undefined) {
+        try {
+            const rebuilt = await rebuild(ctx, hash, buildable.partId, buildable.commit, buildable.drivers, meta);
+            ctx.logger.warn(`[serve.artifact] ${hash.slice(0, 12)} was lost everywhere and rebuilt from ${buildable.commit.slice(0, 7)} on ${rebuilt.builtOn ?? '?'}`);
+            // Only where it is and its files: no part/commit, so this cannot rebuild again.
+            return await pullFromAny(ctx, hash, [{ builtOn: rebuilt.builtOn, assets: rebuilt.assets }], meta);
+        } catch (err) {
+            failures.push(`rebuild: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
     const where = tried.size === 0
         ? `has no local copy on this node and no other node is recorded as having built it`
         : `could not be copied here from any node that built it`;
@@ -89,6 +111,36 @@ async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly
         code: 'NOT_FOUND',
         status: 404,
     });
+}
+
+/**
+ * Asks the builder for the same part at the same commit (and drivers), waits for it, and returns
+ * the new build's record -- only if its hash is the lost one's. Needs a node running the build queue.
+ */
+async function rebuild(
+    ctx: IServiceContext,
+    hash: string,
+    partId: string,
+    commit: string,
+    drivers: readonly string[] | undefined,
+    meta: Record<string, unknown>,
+): Promise<PullSource> {
+    const requested = await ctx.call('serve.artifact.requestBuild', {
+        partId, ref: commit, ...(drivers !== undefined && drivers.length > 0 ? { drivers: [...drivers] } : {}),
+    }, { meta });
+    const deadline = Date.now() + REBUILD_WAIT_MS;
+    for (;;) {
+        const build = await ctx.call('serve.artifact.get', { id: requested.id }, { meta });
+        if (build.status === 'failed') throw new Error(`the rebuild failed: ${build.error ?? 'no reason given'}`);
+        if (build.status === 'success') {
+            if (build.hash !== hash) {
+                throw new Error(`rebuilding ${commit.slice(0, 7)} produced ${build.hash ?? '?'}, not ${hash}: this build is not reproducible`);
+            }
+            return build;
+        }
+        if (Date.now() > deadline) throw new Error(`no builder finished the rebuild within ${REBUILD_WAIT_MS / 1000} s (is a node running the build queue?)`);
+        await new Promise((r) => setTimeout(r, 2000));
+    }
 }
 
 /** Whether every file of a build is on this node's disk already. */

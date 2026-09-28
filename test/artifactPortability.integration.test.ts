@@ -269,9 +269,11 @@ describe('a service part started on a node that never built it', () => {
                 expect(await fs.readFile(path.join(dirB, hash, 'lost.js'), 'utf8')).toBe(f['lost.js']);
             }, 20000);
 
-            it('refuses a copy in the database that does not match the build\'s record', async () => {
+            it('never uses a copy in the database that does not match the build\'s record -- it rebuilds instead', async () => {
                 const f = { 'tamper.js': 'export default "original";\n' };
                 const hash = await importOn('tamperdb', f);
+                const meta = { meta: { tenant_id: tenantId } };
+                const [record] = await brokerA.call('serve.artifact.find', { query: { hash } }, meta);
                 await fs.rm(path.join(dirA, hash), { recursive: true, force: true });
                 const b = bucket();
                 for (const file of await b.find({ filename: `${hash}/tamper.js` }).toArray()) await b.delete(file._id);
@@ -281,10 +283,67 @@ describe('a service part started on a node that never built it', () => {
                     up.end(Buffer.from('export default "changed";\n'));
                 });
 
-                await expect(brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
-                    .rejects.toThrow(/does not match the build's record/);
-                await expect(fs.access(path.join(dirB, hash))).rejects.toThrow();
-            }, 20000);
+                // Stand-in for the build queue: completes the rebuild with the original content.
+                const builder = setInterval(async () => {
+                    const [pending] = await brokerA.call('serve.artifact.find', { query: { partId: record!.partId, status: 'pending' } }, meta);
+                    if (pending === undefined) return;
+                    await fs.mkdir(path.join(dirA, hash), { recursive: true });
+                    await fs.writeFile(path.join(dirA, hash, 'tamper.js'), f['tamper.js']);
+                    await brokerA.call('serve.artifact.update', { id: pending.id, status: 'success', hash, assets: record!.assets, builtOn: 'port-a', commit }, meta);
+                }, 200);
+                try {
+                    expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
+                        .toEqual({ artifactHash: hash, from: 'port-a' });
+                    expect(await fs.readFile(path.join(dirB, hash, 'tamper.js'), 'utf8')).toBe(f['tamper.js']);
+                } finally { clearInterval(builder); }
+            }, 30000);
+        });
+
+        describe('lost everywhere: rebuilt from its commit', () => {
+            const onB = (): { nodeID: string; meta: { tenant_id: string } } => ({ nodeID: 'port-b', meta: { tenant_id: tenantId } });
+            /**
+             * A build that exists only as a record: no disk has it, the database does not. And a
+             * stand-in for the build queue, which this harness does not run: it completes the first
+             * pending build of the part by writing `produce` to port-a's disk, as a builder would.
+             */
+            const lostBuild = async (name: string, original: Record<string, string>, produce: Record<string, string>) => {
+                const partId = await newPart(name);
+                const meta = { meta: { tenant_id: tenantId } };
+                const { hashOutput } = await import('../src/catalog/methods/build.js');
+                const toMap = (f: Record<string, string>) => new Map(Object.entries(f).map(([p, c]) => [p, Buffer.from(c)]));
+                const lost = hashOutput(toMap(original));
+                await brokerA.call('serve.artifact.create', {
+                    tenantId, partId, ref: 'master', commit, status: 'success', hash: lost.hash, assets: lost.assets, builtOn: 'port-a',
+                }, meta);
+                const builder = setInterval(async () => {
+                    const [pending] = await brokerA.call('serve.artifact.find', { query: { partId, status: 'pending' } }, meta);
+                    if (pending === undefined) return;
+                    const made = hashOutput(toMap(produce));
+                    for (const [p, c] of Object.entries(produce)) {
+                        await fs.mkdir(path.join(dirA, made.hash), { recursive: true });
+                        await fs.writeFile(path.join(dirA, made.hash, p), c);
+                    }
+                    await brokerA.call('serve.artifact.update', { id: pending.id, status: 'success', hash: made.hash, assets: made.assets, builtOn: 'port-a', commit }, meta);
+                }, 200);
+                return { hash: lost.hash, stop: () => clearInterval(builder) };
+            };
+
+            it('rebuilds the same commit, checks the hash, and the node gets it', async () => {
+                const f = { 'again.js': 'export default "built again";\n' };
+                const { hash, stop } = await lostBuild('rebuilt', f, f);
+                try {
+                    expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB())).toEqual({ artifactHash: hash, from: 'port-a' });
+                    expect(await fs.readFile(path.join(dirB, hash, 'again.js'), 'utf8')).toBe(f['again.js']);
+                } finally { stop(); }
+            }, 30000);
+
+            it('refuses a rebuild that comes out different -- the build is not reproducible', async () => {
+                const { hash, stop } = await lostBuild('drifted', { 'd.js': 'export default 1;\n' }, { 'd.js': 'export default 2;\n' });
+                try {
+                    await expect(brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB())).rejects.toThrow(/not reproducible/);
+                    await expect(fs.access(path.join(dirB, hash))).rejects.toThrow();
+                } finally { stop(); }
+            }, 30000);
         });
 
         it('refuses files that do not hash to what it claims', async () => {
