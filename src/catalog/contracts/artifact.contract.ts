@@ -135,6 +135,28 @@ export const artifactFetchAssetBytesContract = defineContract({
     print: (o) => `${o.contentBase64.length} base64 chars`,
 });
 
+/**
+ * Internal, like fetchAssetBytes: the website's way to get a build it does not have. `cdn/gateway.ts`
+ * calls it on its own node, with the site's tenant, when a request names a file that is not on this
+ * node's disk; it copies the whole build from a node that built it (methods/pullArtifact.ts) and
+ * the request is answered from the local copy. A build already here returns at once.
+ */
+export const artifactPullContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'pull',
+    description: 'Copy a build onto this node\'s own disk from a node that built it, if it is not here already.',
+    inputSchema: z.object({ artifactHash: z.string().regex(/^[0-9a-f]{64}$/).describe('The build\'s content hash') }),
+    outputSchema: z.object({
+        artifactHash: z.string(),
+        from: z.string().describe('The node it was copied from, or "local" when it was already here'),
+    }),
+    rest: { method: 'POST', path: '/artifacts/:artifactHash/pull' },
+    filePath: 'src/catalog/tools/pull.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.artifactHash.slice(0, 12)} from ${o.from}`,
+});
+
 export type FetchAssetBytesInput = z.infer<typeof artifactFetchAssetBytesContract.inputSchema>;
 export type FetchAssetBytesOutput = z.infer<typeof artifactFetchAssetBytesContract.outputSchema>;
 

@@ -152,6 +152,55 @@ describe('a service part started on a node that never built it', () => {
         expect(fetched).toBe(original);
     }, 30000);
 
+    /** A build written only into port-a's folder, recorded as built by `builders` (newest first). */
+    async function buildOnA(name: string, builders: string[]): Promise<string> {
+        const meta = { meta: { tenant_id: tenantId } };
+        const repo = await brokerA.call('serve.repo.create', { tenantId, name: `${name}-repo`, url: `/tmp/${name}.git`, defaultBranch: 'master' }, meta);
+        const part = await brokerA.call('serve.part.create', {
+            tenantId, repoId: repo.id, key: `${ORG_SLUG}/${name}`, kind: 'application', path: '.', entryPoint: 'src/index.ts', wants: [],
+        }, meta);
+        const hash = (name.repeat(64).replace(/[^0-9a-f]/g, 'a') + 'f'.repeat(64)).slice(0, 64);
+        await fs.mkdir(path.join(dirA, hash, 'assets'), { recursive: true });
+        await fs.writeFile(path.join(dirA, hash, 'index.js'), `export default "${name}";\n`);
+        await fs.writeFile(path.join(dirA, hash, 'assets', 'style.css'), `.${name} { color: red }\n`);
+        for (const builtOn of [...builders].reverse()) {
+            await brokerA.call('serve.artifact.create', {
+                tenantId, partId: part.id, ref: 'test', status: 'success', hash, builtOn,
+                assets: [{ url: 'index.js', name: 'index.js', fileExtension: '.js' }, { url: 'assets/style.css', name: 'style.css', fileExtension: '.css' }],
+            }, meta);
+            await new Promise((r) => { setTimeout(r, 5); });
+        }
+        return hash;
+    }
+
+    it('pulls a whole build the website asks for onto the node that lacks it (serve.artifact.pull)', async () => {
+        const hash = await buildOnA('site', ['port-a']);
+        const onB = { nodeID: 'port-b', meta: { tenant_id: tenantId } };
+        await expect(brokerA.call('serve.artifact.getAsset', { artifactHash: hash, path: 'index.js' }, { nodeID: 'port-b' })).rejects.toThrow(/No asset/);
+
+        expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)).toEqual({ artifactHash: hash, from: 'port-a' });
+        expect(await fs.readFile(path.join(dirB, hash, 'assets', 'style.css'), 'utf8')).toBe('.site { color: red }\n');
+        expect((await brokerA.call('serve.artifact.getAsset', { artifactHash: hash, path: 'index.js' }, { nodeID: 'port-b' })).contentLength).toBeGreaterThan(0);
+        // Already here: nothing copied again.
+        expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)).toEqual({ artifactHash: hash, from: 'local' });
+    }, 20000);
+
+    it('copies a build once for many requests at the same moment, never leaving half a file', async () => {
+        const hash = await buildOnA('burst', ['port-a']);
+        const onB = { nodeID: 'port-b', meta: { tenant_id: tenantId } };
+        const results = await Promise.all(Array.from({ length: 5 }, () => brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)));
+        expect(results.every((r) => r.from === 'port-a' || r.from === 'local')).toBe(true);
+        const files = await fs.readdir(path.join(dirB, hash));
+        expect(files.filter((f) => f.endsWith('.pulling'))).toEqual([]);
+        expect(await fs.readFile(path.join(dirB, hash, 'index.js'), 'utf8')).toBe('export default "burst";\n');
+    }, 20000);
+
+    it('falls back to another node that built the same hash when the newest builder is gone', async () => {
+        const hash = await buildOnA('fallback', ['port-gone', 'port-a']);
+        const onB = { nodeID: 'port-b', meta: { tenant_id: tenantId } };
+        expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)).toEqual({ artifactHash: hash, from: 'port-a' });
+    }, 30000);
+
     it('refuses cleanly when no node is recorded as having built it', async () => {
         const meta = { meta: { tenant_id: tenantId } };
 

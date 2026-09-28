@@ -12,6 +12,11 @@ import { artifactAssetPath } from '../catalog/methods/artifacts.js';
 import type { Release } from '../catalog/contracts/release.contract.js';
 import type { GetAssetOutput } from '../catalog/contracts/artifact.contract.js';
 
+/** A "that file is not here" -- the only failure worth fetching the build for. */
+function isNotFound(err: unknown): boolean {
+    return isMeshError(err) && err.status === 404;
+}
+
 /** One servable file, with the digest a <script>/<link integrity=...> attribute checks against. */
 interface WebAsset {
     url: string;
@@ -493,7 +498,7 @@ export class CdnGateway {
             });
         }
 
-        const asset = await this.broker.call('serve.artifact.getAsset', { artifactHash, path: assetPath });
+        const asset = await this.localAsset(site, artifactHash, assetPath);
         const assetFilePath = artifactAssetPath(artifactHash, asset.path);
 
         if (this.streamAsset) {
@@ -501,6 +506,24 @@ export class CdnGateway {
         } else {
             await this.handleAssetReadRequest(req, res, asset, assetFilePath);
         }
+    }
+
+    /**
+     * A file of a build, from this node's own disk. A build is written only on the node that ran it,
+     * so a website on any other node used to answer 404 for every file of every new build (found
+     * live 2026-09-27: the console, built on ns2, served from edge1). On a miss the whole build is
+     * copied here once from a node that built it (serve.artifact.pull, on this node, as the site's
+     * tenant), and the file is answered from the copy. Still missing after that: a real 404.
+     */
+    private async localAsset(site: Site, artifactHash: string, assetPath: string): Promise<GetAssetOutput> {
+        const here = { nodeID: this.broker.nodeID };
+        try {
+            return await this.broker.call('serve.artifact.getAsset', { artifactHash, path: assetPath }, here);
+        } catch (err) {
+            if (!isNotFound(err) || !/^[0-9a-f]{64}$/.test(artifactHash)) throw err;
+        }
+        await this.broker.call('serve.artifact.pull', { artifactHash }, { ...here, meta: { tenant_id: site.tenantId } });
+        return this.broker.call('serve.artifact.getAsset', { artifactHash, path: assetPath }, here);
     }
 
     private async handleAssetStreamRequest(

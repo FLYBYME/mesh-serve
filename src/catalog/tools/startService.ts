@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
 import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
@@ -7,6 +6,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { Part, PartStartInput, PartStartOutput } from '../contracts/part.contract.js';
 import { artifactAssetPath } from '../methods/artifacts.js';
 import { artifactToRun, type RunnableArtifact } from '../methods/partArtifact.js';
+import { pullArtifact } from '../methods/pullArtifact.js';
 import { ensureArtifactNodeModules } from '../methods/build.js';
 import { claimStart, getRunningService, markServiceRunning, releaseStart } from '../methods/services.js';
 import { loadAndRegisterModule } from '../methods/loadModule.js';
@@ -110,25 +110,7 @@ async function ensureArtifactPresent(
     const alreadyLocal = await fs.access(localPath).then(() => true, () => false);
     if (alreadyLocal) return;
 
-    if (artifact.builtOn === undefined || artifact.builtOn === ctx.nodeID) {
-        // Missing, and either nobody recorded having built it (an artifact from before this field
-        // existed) or the node that supposedly did is this one -- fetching from ctx.nodeID would
-        // just fail the same way again. Only a rebuild can fix either case.
-        throw new MeshError({
-            message: `Artifact ${hash} has no local copy on this node and no other node is recorded as having built it. Rebuild with serve.artifact.requestBuild.`,
-            code: 'NOT_FOUND',
-            status: 404,
-        });
-    }
-
-    for (const asset of artifact.assets ?? []) {
-        const { contentBase64 } = await ctx.call('serve.artifact.fetchAssetBytes', {
-            artifactHash: hash,
-            path: asset.url,
-        }, { nodeID: artifact.builtOn, meta });
-
-        const destination = artifactAssetPath(hash, asset.url, ctx.nodeID);
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.writeFile(destination, Buffer.from(contentBase64, 'base64'));
-    }
+    // Missing here: copied from the node that built it. Nobody recorded as the builder, or the
+    // builder being this node, fails loudly -- only a rebuild fixes either.
+    await pullArtifact(ctx, hash, [artifact], meta);
 }
