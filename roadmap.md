@@ -1301,7 +1301,12 @@ build 404'd (`No asset at "index.js"`). Worked around by making edge1 the only b
 
 ---
 
-## Open — the api reads a request body of any size into memory (2026-09-28)
+## Done (2026-09-28) — the api reads a request body of any size into memory
+
+Fixed: 1 MiB per request body (32 MiB for serve.artifact.importBuild), refused on the declared
+length before reading, counted as it streams otherwise, 413 either way; the body is also decoded
+once, no longer chunk by chunk (a multi-byte character split across chunks came out mangled).
+The original note:
 
 `api/gateway.ts` `readBody` concatenates every chunk with no limit, so one large request can
 exhaust a node's memory. Found while adding `serve.artifact.importBuild` (a build is sent whole, ~7

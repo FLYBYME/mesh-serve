@@ -10,6 +10,7 @@
  * A contract's own `permissions` is now a floor the row cannot lower. These tests deliberately
  * expose gated contracts with *no* role, which is exactly the mistake the floor exists to survive.
  */
+import http from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
@@ -166,6 +167,25 @@ describe('a contract permission floor an expose row cannot lower', () => {
             body: JSON.stringify({ email: 'member@perm.invalid', password: PASSWORD }),
         });
         expect(res.status).toBe(200);
+    });
+
+    it('refuses an oversized body on a public call with 413, declared or streamed', async () => {
+        const big = JSON.stringify({ email: 'member@perm.invalid', password: 'x'.repeat(2 * 1024 * 1024) });
+        const declared = await fetch(`${ORIGIN}/api/identity/ticket`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: big,
+        });
+        expect(declared.status).toBe(413);
+
+        // No Content-Length: counted as it arrives, cut off past the limit.
+        const { hostname, port } = new URL(ORIGIN);
+        const streamed = await new Promise<number>((resolve, reject) => {
+            const req = http.request({ host: hostname, port, path: '/api/identity/ticket', method: 'POST',
+                headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+            req.on('error', reject);
+            for (let i = 0; i < 40; i++) req.write('x'.repeat(64 * 1024));
+            req.end();
+        });
+        expect(streamed).toBe(413);
     });
 
     it('still requires nothing extra of an ungated contract for a signed-in caller', async () => {

@@ -14,6 +14,17 @@ import { answerHealth } from './health.js';
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
 
+/** The most any call's request body may be: far above a real record create or update. */
+export const BODY_LIMIT_BYTES = 1024 * 1024;
+/** The calls that carry more: a whole build, base64, for serve.artifact.importBuild. */
+const LARGE_BODY_LIMITS: Readonly<Record<string, number>> = {
+    'serve.artifact.importBuild': 32 * 1024 * 1024,
+};
+
+export function bodyLimitFor(contract: string): number {
+    return LARGE_BODY_LIMITS[contract] ?? BODY_LIMIT_BYTES;
+}
+
 interface Caller {
     readonly userId: string;
     /** True when auth came from an api token rather than a person's ticket -- see resolveCaller. */
@@ -391,11 +402,38 @@ export class ApiGateway {
         return result.granted ? requested : targetTenantId;
     }
 
-    private readBody(req: http.IncomingMessage): Promise<string> {
+    /**
+     * The whole body, at most `limit` bytes. It used to read any size into memory, so one huge
+     * request -- to a public call like login, which needs no ticket -- could run a node out of
+     * memory and take every part on it down (roadmap, 2026-09-28). Refused on the declared length
+     * before a byte is read; otherwise counted as it arrives, and past the limit the rest is
+     * drained unkept. Decoded once at the end: decoding chunk by chunk split a multi-byte
+     * character that straddled two chunks.
+     */
+    private readBody(req: http.IncomingMessage, limit: number): Promise<string> {
+        const tooLarge = (): MeshError => new MeshError({
+            message: `Request body larger than ${limit} bytes.`, code: 'PAYLOAD_TOO_LARGE', status: 413,
+        });
+        const declared = Number(req.headers['content-length']);
+        if (Number.isFinite(declared) && declared > limit) {
+            req.resume();
+            return Promise.reject(tooLarge());
+        }
         return new Promise((resolve, reject) => {
-            let data = '';
-            req.on('data', (chunk: Buffer) => { data += chunk.toString('utf-8'); });
-            req.on('end', () => resolve(data));
+            const chunks: Buffer[] = [];
+            let size = 0;
+            const onData = (chunk: Buffer): void => {
+                size += chunk.length;
+                if (size > limit) {
+                    req.off('data', onData);
+                    req.resume();
+                    reject(tooLarge());
+                    return;
+                }
+                chunks.push(chunk);
+            };
+            req.on('data', onData);
+            req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
             req.on('error', reject);
         });
     }
@@ -425,8 +463,8 @@ export class ApiGateway {
         }
     }
 
-    private async parseInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
-        const input = await this.readInput(req, params);
+    private async parseInput(req: http.IncomingMessage, params: Record<string, string>, bodyLimit: number): Promise<Record<string, unknown>> {
+        const input = await this.readInput(req, params, bodyLimit);
         // Equality only from the outside -- see methods/queryRule.ts.
         const operator = firstOperator(input['query']);
         if (operator !== undefined) {
@@ -438,7 +476,7 @@ export class ApiGateway {
         return input;
     }
 
-    private async readInput(req: http.IncomingMessage, params: Record<string, string>): Promise<Record<string, unknown>> {
+    private async readInput(req: http.IncomingMessage, params: Record<string, string>, bodyLimit: number): Promise<Record<string, unknown>> {
         const method = (req.method ?? 'GET').toUpperCase();
 
         if (method === 'GET' || method === 'DELETE') {
@@ -450,7 +488,7 @@ export class ApiGateway {
             return { ...query, ...params };
         }
 
-        const raw = await this.readBody(req);
+        const raw = await this.readBody(req, bodyLimit);
         if (raw.trim() === '') {
             return { ...params };
         }
@@ -581,7 +619,7 @@ export class ApiGateway {
         const caller = await this.resolveCaller(req);
         await this.checkGate(route.row, route.contract, caller, target.tenantId);
 
-        const input = await this.parseInput(req, route.params);
+        const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract));
 
         // tenant_id is always known here -- it's the api's own owning tenant (or an operator's
         // explicit override, resolveEffectiveTenantId) -- regardless of whether the caller is.
