@@ -183,6 +183,45 @@ export const artifactRequestBuildContract = defineContract({
     print: (o) => `${o.id} (${o.status})`,
 });
 
+export const importInputSchema = z.object({
+    partId: z.string().min(1).describe('The serve.part this is a build of'),
+    ref: z.string().min(1).describe('The git ref it was built from'),
+    commit: z.string().regex(/^[0-9a-f]{40}$/).describe('The exact commit that ref resolved to'),
+    hash: z.string().regex(/^[0-9a-f]{64}$/).describe('The build\'s content hash, as the builder computed it -- checked against the files'),
+    wants: z.array(z.string()).optional().describe('The contracts the part calls (mesh.wants.json at build time), as the builder records them on the part'),
+    files: z.array(z.object({
+        path: z.string().min(1).describe('Relative path inside the build, forward slashes, e.g. "register.js"'),
+        contentBase64: z.string().describe('The file\'s exact bytes'),
+    })).min(1).describe('Every file of the build'),
+    pin: z.boolean().default(false).describe('Pin the part to this build once it is stored'),
+}).describe('A build made outside with the builder\'s own code (mesh-serve artifact-build)');
+
+/**
+ * Brings in a build made outside -- `mesh-serve artifact-build`, which runs the builder's own
+ * `buildService`/`buildPart` -- as if the queue had built it: owner, 2026-09-28, for the very first
+ * builds of a fresh install (no builder exists yet) and any time a build is made elsewhere. The
+ * content hash and every file's integrity are recomputed from the files themselves
+ * (`methods/build.ts` `hashOutput`, the builder's own function); anything that does not match is
+ * refused. Stored on the node that runs this, recorded `builtOn` that node, so every other node
+ * pulls it from there exactly like a queue build.
+ */
+export const artifactImportContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'importBuild',
+    description: 'Bring in a build made outside with the builder\'s own code, checked against its hash, as a successful build.',
+    inputSchema: importInputSchema,
+    outputSchema: artifactCrud.get.outputSchema,
+    rest: { method: 'POST', path: '/artifacts/importBuild' },
+    visibility: 'public',
+    destructive: true,
+    // What it stores is code a node will run: as trusted as requestBuild, and gated the same.
+    filePath: 'src/catalog/tools/importArtifact.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.id} ${o.hash?.slice(0, 12) ?? ''} (${o.status})`,
+    timeout: 120_000,
+});
+
+export type ImportArtifactInput = z.infer<typeof artifactImportContract.inputSchema>;
+
 export type RequestBuildInput = z.infer<typeof artifactRequestBuildContract.inputSchema>;
 export type RequestBuildOutput = z.infer<typeof artifactRequestBuildContract.outputSchema>;
 

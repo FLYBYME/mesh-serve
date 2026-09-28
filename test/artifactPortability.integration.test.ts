@@ -201,6 +201,61 @@ describe('a service part started on a node that never built it', () => {
         expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)).toEqual({ artifactHash: hash, from: 'port-a' });
     }, 30000);
 
+    describe('serve.artifact.importBuild -- a build made outside, brought in as if the builder made it', () => {
+        const files = { 'register.js': 'export default async function register() { return "imported"; }\n', 'register.js.map': '{}' };
+        const asInput = (f: Record<string, string>) => Object.entries(f).map(([p, c]) => ({ path: p, contentBase64: Buffer.from(c).toString('base64') }));
+        const hashOf = async (f: Record<string, string>): Promise<string> => {
+            const { hashOutput } = await import('../src/catalog/methods/build.js');
+            return hashOutput(new Map(Object.entries(f).map(([p, c]) => [p, Buffer.from(c)]))).hash;
+        };
+        const newPart = async (name: string): Promise<string> => {
+            const meta = { meta: { tenant_id: tenantId } };
+            const repo = await brokerA.call('serve.repo.create', { tenantId, name: `${name}-repo`, url: `/tmp/${name}.git`, defaultBranch: 'master' }, meta);
+            const part = await brokerA.call('serve.part.create', {
+                tenantId, repoId: repo.id, key: `${ORG_SLUG}/${name}`, kind: 'service', path: '.', entryPoint: 'src/register.ts', wants: [],
+            }, meta);
+            return part.id;
+        };
+        const commit = 'c'.repeat(40);
+
+        it('stores it on the node that ran the import, records a successful build there, and another node pulls it', async () => {
+            const partId = await newPart('imported');
+            const hash = await hashOf(files);
+            const onA = { nodeID: 'port-a', meta: { tenant_id: tenantId } };
+            const artifact = await brokerA.call('serve.artifact.importBuild', {
+                partId, ref: 'master', commit, hash, wants: ['identity.whoami'], pin: true, files: asInput(files),
+            }, onA);
+
+            expect(artifact).toMatchObject({ status: 'success', hash, builtOn: 'port-a', imported: true, commit, ref: 'master' });
+            expect(artifact.assets?.map((a) => a.url)).toEqual(['register.js', 'register.js.map']);
+            expect(artifact.assets?.[0]?.integrity).toMatch(/^sha384-/);
+            expect(await fs.readFile(path.join(dirA, hash, 'register.js'), 'utf8')).toBe(files['register.js']);
+            const part = await brokerA.call('serve.part.resolve', { id: partId }, onA);
+            expect(part).toMatchObject({ artifactId: artifact.id, wants: ['identity.whoami'] });
+
+            // Exactly like a queue build from here on: port-b pulls it from the node that stored it.
+            expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
+                .toEqual({ artifactHash: hash, from: 'port-a' });
+        }, 20000);
+
+        it('refuses files that do not hash to what it claims', async () => {
+            const partId = await newPart('tampered');
+            const hash = await hashOf(files);
+            await expect(brokerA.call('serve.artifact.importBuild', {
+                partId, ref: 'master', commit, hash, files: asInput({ ...files, 'register.js': 'export default () => "changed";\n' }),
+            }, { nodeID: 'port-a', meta: { tenant_id: tenantId } })).rejects.toThrow(/not the build it claims to be/);
+        }, 20000);
+
+        it('refuses a path that leaves the build\'s folder', async () => {
+            const partId = await newPart('escape');
+            const evil = { '../outside.js': 'x' };
+            await expect(brokerA.call('serve.artifact.importBuild', {
+                partId, ref: 'master', commit, hash: await hashOf(evil), files: asInput(evil),
+            }, { nodeID: 'port-a', meta: { tenant_id: tenantId } })).rejects.toThrow(/not a path inside a build/);
+            await expect(fs.access(path.join(dirA, 'outside.js'))).rejects.toThrow();
+        }, 20000);
+    });
+
     it('refuses cleanly when no node is recorded as having built it', async () => {
         const meta = { meta: { tenant_id: tenantId } };
 

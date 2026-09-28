@@ -1301,6 +1301,14 @@ build 404'd (`No asset at "index.js"`). Worked around by making edge1 the only b
 
 ---
 
+## Open — the api reads a request body of any size into memory (2026-09-28)
+
+`api/gateway.ts` `readBody` concatenates every chunk with no limit, so one large request can
+exhaust a node's memory. Found while adding `serve.artifact.importBuild` (a build is sent whole, ~7
+MB as base64 for 5 MB of files). Wanted: a limit per request (larger for importBuild), 413 beyond it.
+
+---
+
 ## Open — a failed call answers a bare "500 Internal Server Error" (2026-09-28)
 
 Rehearsing the hand-off on k3d, `deployment.bootstrap_write` failed because the namespace did not

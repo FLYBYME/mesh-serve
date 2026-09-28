@@ -11,6 +11,13 @@ import { z } from 'zod';
 
 import type { Part } from '../contracts/part.contract.js';
 import type { Repo } from '../contracts/repo.contract.js';
+
+/**
+ * What a build reads of a part and its repo -- nothing more, so a build can also run outside the
+ * platform (`mesh-serve artifact-build`) from a plain description instead of stored records.
+ */
+export type BuildablePart = Pick<Part, 'path' | 'entryPoint'>;
+export type BuildableRepo = Pick<Repo, 'id' | 'url'>;
 import { artifactAssetSchema } from '../schema/artifact.js';
 import { artifactDir } from './artifacts.js';
 
@@ -131,11 +138,11 @@ export async function withCheckoutLock<T>(dir: string, run: () => Promise<T>): P
 }
 
 /** Where a repo's single shared working copy lives. */
-function checkoutDir(repo: Repo): string {
+function checkoutDir(repo: BuildableRepo): string {
     return path.join(repoWorkdir, repo.id);
 }
 
-async function ensureRepoCheckout(repo: Repo, ref: string): Promise<string> {
+async function ensureRepoCheckout(repo: BuildableRepo, ref: string): Promise<string> {
     const dir = checkoutDir(repo);
 
     if (!(await exists(dir))) {
@@ -246,7 +253,7 @@ export async function runEsbuild(
  * part's code calls, e.g. ["identity.whoami", "serve.cdn.find"]. Absent means the part declares
  * nothing -- not an error, since not every part calls the mesh at all.
  */
-async function readWants(repoDir: string, part: Part): Promise<string[]> {
+async function readWants(repoDir: string, part: BuildablePart): Promise<string[]> {
     const file = path.join(repoDir, part.path, 'mesh.wants.json');
     if (!(await exists(file))) {
         return [];
@@ -278,34 +285,40 @@ async function walk(dir: string, base: string = dir): Promise<string[]> {
  * identical content from a prior build, nothing to overwrite.
  */
 async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
-    const files = (await walk(outDir)).sort();
-
-    const hasher = crypto.createHash('sha256');
-    // Read once per file, reused for both the overall content hash and each file's own SRI digest
-    // below -- the alternative is reading every file twice.
+    // Read once per file, reused for both the overall content hash and each file's own SRI digest.
     const contents = new Map<string, Buffer>();
-    for (const relPath of files) {
-        const content = await fs.readFile(path.join(outDir, relPath));
-        contents.set(relPath, content);
-        hasher.update(relPath);
-        hasher.update(content);
-    }
-    const hash = hasher.digest('hex');
+    for (const relPath of await walk(outDir)) contents.set(relPath, await fs.readFile(path.join(outDir, relPath)));
+    const { hash, assets } = hashOutput(contents);
 
     const finalDir = path.join(artifactDir, hash);
     if (!(await exists(finalDir))) {
         await fs.mkdir(artifactDir, { recursive: true });
         await fs.cp(outDir, finalDir, { recursive: true });
     }
+    return { hash, assets };
+}
 
-    const assets: ArtifactAssetInput[] = files.map((relPath) => ({
+/**
+ * What a build *is*, from its files alone: the content hash (every relative path and its bytes,
+ * sorted) and each file's asset entry with its sha384 integrity. The builder computes it here after
+ * bundling; `serve.artifact.importBuild` computes it again from the files it is handed, so an imported
+ * build is accepted only when it is byte-for-byte what it claims to be.
+ */
+export function hashOutput(contents: ReadonlyMap<string, Buffer>): { hash: string; assets: ArtifactAssetInput[] } {
+    // `<` on strings orders by UTF-16 code unit, exactly like the default sort() this always used.
+    const files = [...contents.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const hasher = crypto.createHash('sha256');
+    for (const [relPath, content] of files) {
+        hasher.update(relPath);
+        hasher.update(content);
+    }
+    const assets: ArtifactAssetInput[] = files.map(([relPath, content]) => ({
         url: relPath,
         name: path.basename(relPath),
         fileExtension: path.extname(relPath) || undefined,
-        integrity: `sha384-${crypto.createHash('sha384').update(contents.get(relPath) as Buffer).digest('base64')}`,
+        integrity: `sha384-${crypto.createHash('sha384').update(content).digest('base64')}`,
     }));
-
-    return { hash, assets };
+    return { hash: hasher.digest('hex'), assets };
 }
 
 /**
@@ -319,7 +332,7 @@ async function hashAndStoreOutput(outDir: string): Promise<{ hash: string; asset
  * that doesn't import any of them is unaffected -- esbuild only externalizes what's actually
  * imported.
  */
-export async function buildPart(part: Part, repo: Repo, ref: string, external: string[]): Promise<BuiltOutput> {
+export async function buildPart(part: BuildablePart, repo: BuildableRepo, ref: string, external: string[]): Promise<BuiltOutput> {
     return withCheckoutLock(checkoutDir(repo), async () => {
         const repoDir = await ensureRepoCheckout(repo, ref);
         const commit = await headCommit(repoDir);
@@ -389,7 +402,7 @@ export async function ensureArtifactNodeModules(pkg: string): Promise<void> {
  * disconnected one. (The same module-realm hazard `MESH_ERROR_BRAND` exists for.)
  * Node builtins need no such list: esbuild's own `platform: 'node'` already leaves them external.
  */
-export async function buildService(part: Part, repo: Repo, ref: string): Promise<BuiltOutput> {
+export async function buildService(part: BuildablePart, repo: BuildableRepo, ref: string): Promise<BuiltOutput> {
     return withCheckoutLock(checkoutDir(repo), async () => {
         const repoDir = await ensureRepoCheckout(repo, ref);
         const commit = await headCommit(repoDir);

@@ -9,6 +9,7 @@ import { LoginCommand } from './commands/login.js';
 import { SwitchCommand } from './commands/switch.js';
 import { ApisCommand } from './commands/apis.js';
 import { WatchCommand } from './commands/watch.js';
+import { ArtifactBuildCommand, ArtifactImportCommand } from './commands/artifact.js';
 import { registerDiscoveredCommands } from './core/dynamicCommands.js';
 import { patchSession, readSession, toCachedDescriptor, type Session } from './core/session.js';
 import { describeApi } from './core/apiClient.js';
@@ -50,6 +51,8 @@ function buildProgram(session: Session, writeErr: (text: string) => void): Comma
     new SwitchCommand().register(program);
     new ApisCommand().register(program);
     new WatchCommand().register(program);
+    new ArtifactBuildCommand().register(program);
+    new ArtifactImportCommand().register(program);
     // Last: a discovered command must never shadow a built-in.
     registerDiscoveredCommands(program, session);
     return program;

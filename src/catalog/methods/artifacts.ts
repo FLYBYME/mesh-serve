@@ -43,6 +43,12 @@ export function contentTypeFor(assetPath: string): string {
     return contentTypes[path.extname(assetPath).toLowerCase()] ?? 'application/octet-stream';
 }
 
+/** The folder one build's files live in on this node: `~/.mesh/artifacts/<hash>`. */
+export function artifactFolder(artifactHash: string, nodeID?: string): string {
+    const dir = (nodeID !== undefined ? testArtifactDirs.get(nodeID) : undefined) ?? artifactDir;
+    return path.resolve(dir, artifactHash);
+}
+
 /**
  * Resolves an artifact-relative asset path to an absolute filesystem path, refusing to escape the
  * artifact's own directory (e.g. via "../" segments in the request path). `nodeID`, when given, is
@@ -50,8 +56,7 @@ export function contentTypeFor(assetPath: string): string {
  * the real `artifactDir` back exactly as before.
  */
 export function artifactAssetPath(artifactHash: string, assetPath: string, nodeID?: string): string {
-    const dir = (nodeID !== undefined ? testArtifactDirs.get(nodeID) : undefined) ?? artifactDir;
-    const base = path.resolve(dir, artifactHash) + path.sep;
+    const base = artifactFolder(artifactHash, nodeID) + path.sep;
     const resolved = path.resolve(base, assetPath);
     if (!resolved.startsWith(base)) {
         throw new MeshError({ message: `Asset path "${assetPath}" escapes its artifact directory.`, code: 'BAD_REQUEST', status: 400 });
