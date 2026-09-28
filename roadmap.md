@@ -1281,7 +1281,12 @@ never stopping the running build before the new one is present locally.
 
 ---
 
-## Open — the website serves builds only from its own disk (2026-09-27)
+## Done (8565cee, 2026-09-28) — the website serves builds only from its own disk (2026-09-27)
+
+Fixed: on a miss the cdn pulls the whole build from a node that built it (`serve.artifact.pull`,
+shared with part starts in `methods/pullArtifact.ts`) and serves the local copy. Still open, under
+"a finished build lives only on its builder": if every node that built it is gone, a cdn that never
+cached it cannot get it. The original note:
 
 `serve.cdn` answers `/assets/<artifactHash>/<path>` straight from the local artifact folder
 (`artifactAssetPath`, `src/cdn/gateway.ts`); it never fetches a build it does not have. A second
