@@ -1296,6 +1296,16 @@ build 404'd (`No asset at "index.js"`). Worked around by making edge1 the only b
 
 ---
 
+## Open — a failed call answers a bare "500 Internal Server Error" (2026-09-28)
+
+Rehearsing the hand-off on k3d, `deployment.bootstrap_write` failed because the namespace did not
+exist yet (Kubernetes: 404 `namespaces "surfdns-system" not found`). The api answered
+`500 {"error":"Internal Server Error"}`; the reason was only in the serving node's log. An operator
+calling through the api cannot fix what it cannot see. Wanted: the error's message (not its stack)
+in the response, at least for operators.
+
+---
+
 ## Open — the image build fails now and then on `ETXTBSY` in `npm ci` (2026-09-27)
 
 `RUN npm ci` in the Dockerfile failed once: npm's preparation of a git dependency ran esbuild's
