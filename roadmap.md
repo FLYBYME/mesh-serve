@@ -1362,7 +1362,13 @@ which also ends the git-dependency `prepare` builds that ran ns2 out of memory.
 
 ---
 
-## Open — DNSSEC private keys are readable through `dnsZone.find`/`get` (2026-09-29)
+## Fixed in code, not deployed — DNSSEC private keys are readable through `dnsZone.find`/`get` (2026-09-29)
+
+**Status:** fixed in surfdns-domains f36dbea (local; not pushed or deployed). The key is `hidden`;
+`zoneKey.ts` is the only way to it (full-row path, no fallback); zones are still loaded tenant-scoped;
+enabling DNSSEC is still announced on `dnsZone.updated`. Left: push, build and pin
+`platform/domains-service`, then regenerate the company site's client. Decide whether to rotate
+the keys that were exposed. The `fields` bug below is still open.
 
 Found while building the company site's dashboard. `surfdns-domains`'
 `dnsZoneCrud` (`src/services/contracts/zone.contract.ts`) has no `hidden`, and its schema carries
