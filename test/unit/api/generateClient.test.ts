@@ -54,4 +54,25 @@ describe('the generated client', () => {
         // The named parsed type is still emitted, for code that holds a parsed value.
         expect(source).toMatch(/export type DomainFindInput = z\.infer<typeof domainFindInputSchema>/);
     });
+
+    it('declares the events the api streams, so models treat those collections as live', () => {
+        // From a descriptor, as `/api/_describe` hands it over: buildDescriptor only lists events
+        // this process could deliver, and none are registered in a unit test.
+        const described = {
+            ...buildDescriptor('api.test', [row], () => declaration),
+            events: [{ name: 'domain.created', gate: { kind: 'role', role: 'operator' } as const }, { name: 'domain.deleted' }],
+        };
+        const source = renderClient('api.test', described);
+        expect(source).toContain([
+            '    events: [',
+            `        { name: "domain.created", gate: { kind: 'role', role: "operator" } },`,
+            '        { name: "domain.deleted" },',
+            '    ],',
+        ].join('\n'));
+    });
+
+    it('writes no events entry for an api that streams none', async () => {
+        const source = await generateClient('api.test', 'api.test', [row], () => declaration);
+        expect(source).not.toContain('events:');
+    });
 });

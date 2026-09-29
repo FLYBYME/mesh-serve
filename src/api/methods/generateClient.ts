@@ -119,6 +119,19 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         );
     }
 
+    // What the api streams over `${base}/events`. mesh-web's models read this to decide that a
+    // collection is live -- that its rows follow `<name>.created`/`.updated`/`.deleted` instead of
+    // being refetched after every write -- so a client rendered without it refetched forever.
+    // Only written when there are some, so an api with no events renders the text it always did.
+    // (`?? []`: a descriptor read from an api older than events has no `events` at all.)
+    const events = descriptor.events ?? [];
+    const eventEntries = events.length === 0 ? [] : [
+        '    events: [',
+        ...events.map((event) => `        { name: ${JSON.stringify(event.name)}${
+            event.gate !== undefined ? `, gate: { kind: 'role', role: ${JSON.stringify(event.gate.role)} }` : ''} },`),
+        '    ],',
+    ];
+
     const lines = [
         '// GENERATED FILE -- do not edit.',
         '//',
@@ -144,6 +157,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         '    calls: {',
         ...callEntries,
         '    },',
+        ...eventEntries,
         '});',
         '',
     ];
