@@ -1433,3 +1433,29 @@ that serves no public traffic (`surf`, the hub, is a candidate) — and a concur
 Meanwhile: deploy the company site at quiet times, and do not retry a deploy whose builds already
 succeeded; finish it with `serve.composition.compose` + `serve.cdn.deploy` (no build). Also: the
 site's `scripts/deploy.mjs` gives up on the api after ~50 s of polling, which a slow build outlasts.
+
+---
+
+## Done (live 2026-09-29) — zone, record and repo writes stream to the browser
+
+The company site refetched every list after every write, because api.surfdns.net streamed none of
+these collections' events. Exposed, `kind: event`, role `operator` (the same gate as every call on
+these collections): `dnsZone`, `dnsRecord`, `repo`, `repoAccess`, `repoMirror` × `.created`,
+`.updated`, `.deleted` — 15 rows on api `6ab197ba3ee651f8f8708296`, added by hand with
+`serve.expose.add` like the existing event rows (no site spec owns this api's exposures).
+
+Checked live: a throwaway `sse-check-….example` zone was created, updated and deleted while
+`/api/events` was open; all three events arrived, `.updated` as `{id, patch, item}` and `.deleted`
+as `{id, tenantId}`, none carrying `dnssecPrivateKey`. The zone is gone (`dnsZone.find` by its id
+answers `[]`).
+
+## Open — an update event's `patch` is not stripped of hidden fields (2026-09-29)
+
+mesh's `CrudExecutor` strips `hidden` fields from every result and from each event's `item`, but
+the `.updated` event's `patch` is the caller's input as given (`mesh/src/db/CrudExecutor.ts`,
+`case 'update'` and `'replace'`). So an operator who sends `dnssecPrivateKey` in a
+`dnsZone.update` body, or `token` in a `repoMirror.update`, has it echoed to every other operator
+watching the stream. Nothing does that today — keys are stored through `zoneKey.ts`'s full-row
+path, which emits no event, and gitserver's mirror updates carry only status fields — so this is a
+hole waiting for a caller, not a leak. Fix in mesh: `stripHidden` the patch too (or refuse hidden
+fields in a CRUD update's input, since the ordinary path is not how they are meant to be written).
