@@ -1359,3 +1359,32 @@ record, `registry.publish_from_build`, and a package-build job on the build queu
 gitserver at the tag, `npm ci`, build, `npm pack`, version must equal the tag, publish with
 provenance). Then the repos move from `github:` dependencies to semver from npm.surfdns.net --
 which also ends the git-dependency `prepare` builds that ran ns2 out of memory.
+
+---
+
+## Open — DNSSEC private keys are readable through `dnsZone.find`/`get` (2026-09-29)
+
+Found while building the company site's dashboard. `surfdns-domains`'
+`dnsZoneCrud` (`src/services/contracts/zone.contract.ts`) has no `hidden`, and its schema carries
+`dnssecPrivateKey` (the PEM a zone is signed with). So:
+
+- `dnsZone.find` / `get` return every in-scope zone's signing key. api.surfdns.net exposes both
+  (role `operator`, tenant-scoped), so the key reaches a browser; the generated client's
+  `DnsZoneFindOutput` even types it.
+- The CRUD events (`data.*`, `dnsZone.*`) carry it to any subscriber.
+- `update` is `public`, so a caller can also *replace* a zone's signing key.
+
+Not verified against the live api on purpose: a test call would have printed keys. The code is
+unambiguous.
+
+**The fix is not just `hidden: ['dnssecPrivateKey']`.** mesh strips hidden fields from
+`ctx.db()` reads too (`mesh/src/db/CrudExecutor.ts` `stripHidden`), and `zone_sign`,
+`record_create` and `dnssec_enable` read the key through `ctx.db('dnsZone').resolve(...)`. With
+`hidden` alone, signing finds no key and fails. It needs, together: `hidden` on the field, the
+three tools reading the key through the full-row path (`db.collection('dnsZone')`, as
+`mesh/src/__tests__/db/HiddenFields.spec.ts` shows), `dnssec_enable` writing it through that path,
+and a test that `find`/`get`/events never carry it while signing still works. Then a deploy of
+`platform/domains-service`, and consider rotating keys that have been exposed.
+
+Mitigated on the client side only: the dashboard asks `dnsZone.find` for named `fields` and never
+for the key (surfdns-company-site, with a test).
