@@ -1411,3 +1411,25 @@ against the collection's full output schema, which requires fields the projectio
 `fields` fails on any collection with a required field, which is nearly all of them. Fix in mesh:
 a `find`/`findOne` with `fields` validates against the output schema made partial, or picked to
 the requested fields.
+
+---
+
+## Open — builds run on the gateway, and every site build stalls public traffic (2026-09-29)
+
+Seen deploying surfdns-company-site twice in a row: while each site build ran, `api.surfdns.net`
+stopped answering (10 s connect timeouts from the CLI) and the owner saw page loads time out; both
+recovered once the build finished (surfdns.net 0.4 s, the api 1.1 s). Both builds report
+`builtOn: "edge1"`, and edge1 is `role: gateway,control-plane`: it runs `platform/proxy` (every
+public request to every site), the api and the builder. A build — `npm ci --omit=dev
+--ignore-scripts` in the repo's workdir plus an esbuild bundle (the company site's is ~700 KB, most
+of it the generated client) — competes with the proxy for the same CPU and memory.
+
+Why the site build and not the kernel's: the kernel build is ~2 s from a warm workdir; the site's
+first build after gaining a dependency had to install it, and every site build bundles the
+generated client.
+
+Wanted: builds placed off the gateway — a `builder` role (label) the build queue selects, on a node
+that serves no public traffic (`surf`, the hub, is a candidate) — and a concurrency limit per node.
+Meanwhile: deploy the company site at quiet times, and do not retry a deploy whose builds already
+succeeded; finish it with `serve.composition.compose` + `serve.cdn.deploy` (no build). Also: the
+site's `scripts/deploy.mjs` gives up on the api after ~50 s of polling, which a slow build outlasts.
