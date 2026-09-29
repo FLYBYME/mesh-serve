@@ -1362,13 +1362,20 @@ which also ends the git-dependency `prepare` builds that ran ns2 out of memory.
 
 ---
 
-## Fixed in code, not deployed — DNSSEC private keys are readable through `dnsZone.find`/`get` (2026-09-29)
+## Done (surfdns-domains f36dbea, live 2026-09-29) — DNSSEC private keys were readable through `dnsZone.find`/`get`
 
-**Status:** fixed in surfdns-domains f36dbea (local; not pushed or deployed). The key is `hidden`;
-`zoneKey.ts` is the only way to it (full-row path, no fallback); zones are still loaded tenant-scoped;
-enabling DNSSEC is still announced on `dnsZone.updated`. Left: push, build and pin
-`platform/domains-service`, then regenerate the company site's client. Decide whether to rotate
-the keys that were exposed. The `fields` bug below is still open.
+**Status:** live on `platform/domains-service` (build 6abc3471). Checked on api.surfdns.net:
+`dnsZone.find` returns no key. The company site's client is regenerated without it (eb683f0).
+No rotation needed: all 3 zones have `dnssec: false`, and the key is only ever written by enabling
+DNSSEC, so no key existed to leak.
+
+**Still open, smaller:** the *write* side. `dnsZone.create`/`update` are public and their inputs
+still accept `dnssecPrivateKey` (`hidden` only strips output). A caller can set their own zone's
+key, which `zone_sign` would then sign with. It is tenant-scoped, so a caller can only damage their
+own zone, but key material should only ever be written by `dns.dnssec_enable`. Fix: refuse the
+field on public create/update (or a mesh `writeOnly`/`internalOnly` field option).
+
+The `fields` bug below is still open.
 
 Found while building the company site's dashboard. `surfdns-domains`'
 `dnsZoneCrud` (`src/services/contracts/zone.contract.ts`) has no `hidden`, and its schema carries
