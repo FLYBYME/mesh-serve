@@ -63,14 +63,18 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
 
         let inputType = 'void';
         if (!isEmptyObjectSchema(call.input)) {
-            const inputType_ = `${name}Input`;
+            const schemaName = `${lowerFirst(name)}InputSchema`;
             schemas.push(jsonSchemaToZod(call.input as Record<string, unknown>, {
-                name: `${lowerFirst(name)}InputSchema`,
+                name: schemaName,
                 module: 'esm',
-                type: inputType_,
+                // `XInput` stays what it was — the parsed shape (`z.infer`), which the server sees.
+                type: `${name}Input`,
                 noImport: true,
             }));
-            inputType = inputType_;
+            // A *caller* passes the schema's input side: a field with a default may be left out.
+            // Typing the call with `z.infer` made every defaulted field required at every call site
+            // (`domain.find` demanded `offset`, found by the company site's dashboard).
+            inputType = `z.input<typeof ${schemaName}>`;
         }
 
         const outputType = `${name}Output`;
