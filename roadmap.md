@@ -1386,5 +1386,15 @@ three tools reading the key through the full-row path (`db.collection('dnsZone')
 and a test that `find`/`get`/events never carry it while signing still works. Then a deploy of
 `platform/domains-service`, and consider rotating keys that have been exposed.
 
-Mitigated on the client side only: the dashboard asks `dnsZone.find` for named `fields` and never
-for the key (surfdns-company-site, with a test).
+Mitigated on the client side only: the dashboard keeps five fields of each zone and drops the
+rest, key included, as soon as they arrive (surfdns-company-site, with a test). The key still
+crosses the wire until the server hides it.
+
+**A second bug, found trying the obvious defence: `fields` does not work over the api.**
+`dnsZone.find` with `fields=["id","name",…]` answers 500 (surfdns.net, 2026-09-29, request
+`1b3a7bc1…`; edge1's log: `ZodError … [0, "tenantId"] Required`). The repository projects the rows
+to the named fields (`mesh/src/db/DomainRepository.ts`), and then the call's result is validated
+against the collection's full output schema, which requires fields the projection left out. So
+`fields` fails on any collection with a required field, which is nearly all of them. Fix in mesh:
+a `find`/`findOne` with `fields` validates against the output schema made partial, or picked to
+the requested fields.
