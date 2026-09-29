@@ -1,6 +1,6 @@
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 
-import { buildDescriptor, type DeclarationLookup } from './descriptor.js';
+import { buildDescriptor, type DeclarationLookup, type ExposureDescriptor } from './descriptor.js';
 import type { Expose } from '../contracts/expose.contract.js';
 
 /**
@@ -45,16 +45,37 @@ function isEmptyObjectSchema(schema: unknown): boolean {
     return s.type === 'object' && (s.properties === undefined || Object.keys(s.properties).length === 0);
 }
 
-function gateLiteral(row: Expose | undefined): string {
-    if (row?.permission !== undefined) return `{ kind: 'permission', permission: ${JSON.stringify(row.permission)} }`;
-    if (row?.role !== undefined) return `{ kind: 'role', role: ${JSON.stringify(row.role)} }`;
-    return 'undefined';
+/**
+ * A described call's gate — `buildDescriptor`'s `gateOf`: the contract's own floor and the expose
+ * row's role joined with `+`, `permission:<p>` for a permission, `public` for neither — as the
+ * client's `Gate` literal. A permission is the most specific thing a caller must hold, so it wins;
+ * otherwise the last role (the row's own, which `gateOf` appends after the contract's floor).
+ *
+ * Read from the descriptor rather than the expose rows so the same function renders a client on
+ * the server (`serve.api.generateClient`) and on an operator's machine from the public
+ * `/api/_describe` (`mesh-serve generate`) — one renderer, one output, wherever it runs.
+ */
+export function gateLiteral(gate: string): string {
+    if (gate === 'public' || gate === '') return 'undefined';
+    const parts = gate.split('+');
+    const permission = parts.find((p) => p.startsWith('permission:'));
+    if (permission !== undefined) return `{ kind: 'permission', permission: ${JSON.stringify(permission.slice('permission:'.length))} }`;
+    const role = parts.at(-1);
+    return role === undefined ? 'undefined' : `{ kind: 'role', role: ${JSON.stringify(role)} }`;
 }
 
+/** The server's entry: the rows it holds, joined against the live contracts, then rendered. */
 export async function generateClient(id: string, host: string, rows: readonly Expose[], declare: DeclarationLookup): Promise<string> {
-    const descriptor = buildDescriptor(host, rows, declare);
-    const rowByKey = new Map(rows.map((r) => [r.contract, r]));
+    return renderClient(id, buildDescriptor(host, rows, declare));
+}
 
+/**
+ * The client for a described api — the whole of the rendering. Pure: a descriptor in, source text
+ * out, so it runs wherever the descriptor is, including an operator's machine with no access to the
+ * api's records (`mesh-serve generate`). A fix to what is rendered then takes effect with the
+ * operator's installed mesh-serve, not after every node is upgraded.
+ */
+export function renderClient(id: string, descriptor: ExposureDescriptor): string {
     const schemas: string[] = [];
     const callEntries: string[] = [];
 
@@ -85,7 +106,7 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
             noImport: true,
         }));
 
-        const gate = gateLiteral(rowByKey.get(call.key));
+        const gate = gateLiteral(call.gate);
         const doc = [
             call.description,
             '',
@@ -101,7 +122,7 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
     const lines = [
         '// GENERATED FILE -- do not edit.',
         '//',
-        `// Emitted from ${host}'s live exposure by serve.api.generateClient.`,
+        `// Rendered from ${descriptor.host}'s live exposure (its /api/_describe).`,
         `// Exposure: ${descriptor.exposure}`,
         `// ShapeHash: ${descriptor.shapeHash}`,
         '//',

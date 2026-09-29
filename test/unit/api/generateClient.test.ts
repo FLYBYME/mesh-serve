@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContractDeclaration } from '@flybyme/mesh';
-import { generateClient } from '../../../src/api/methods/generateClient.js';
+import { buildDescriptor } from '../../../src/api/methods/descriptor.js';
+import { gateLiteral, generateClient, renderClient } from '../../../src/api/methods/generateClient.js';
 import type { Expose } from '../../../src/api/contracts/expose.contract.js';
 
 /**
@@ -22,6 +23,29 @@ const declaration: ContractDeclaration = {
     },
     output: { type: 'array', items: { type: 'string' } },
 };
+
+describe('a call\'s gate, read from the descriptor', () => {
+    it('is nothing for a public call', () => {
+        expect(gateLiteral('public')).toBe('undefined');
+    });
+
+    it('is the role, or the last role (the expose row\'s, after the contract\'s floor)', () => {
+        expect(gateLiteral('operator')).toBe(`{ kind: 'role', role: "operator" }`);
+        expect(gateLiteral('user+admin')).toBe(`{ kind: 'role', role: "admin" }`);
+    });
+
+    it('is the permission when there is one — the most specific thing a caller must hold', () => {
+        expect(gateLiteral('operator+permission:dns.write')).toBe(`{ kind: 'permission', permission: "dns.write" }`);
+    });
+});
+
+describe('rendering from a described api, as `mesh-serve generate` does locally', () => {
+    it('is the same text the server renders from its rows', async () => {
+        const described = buildDescriptor('api.test', [row], () => declaration);
+        const onServer = await generateClient('api.test', 'api.test', [row], () => declaration);
+        expect(renderClient('api.test', described)).toBe(onServer);
+    });
+});
 
 describe('the generated client', () => {
     it('types a call by its schema\'s input side, so defaulted fields are optional to a caller', async () => {
