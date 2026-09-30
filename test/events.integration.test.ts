@@ -261,12 +261,50 @@ describe('/api/events', () => {
         }) as typeof broker.call);
         try {
             // Three operator-gated events, one public; and whether the subscriber is an operator.
+            // At most once: the answer may still be kept from the tests above.
             const stream = await subscribe('', operatorToken);
             await stream.waitFor(': open');
-            expect(asked).toBe(1);
+            expect(asked).toBeLessThanOrEqual(1);
+            // The two rows exposed a moment ago are streamed at once: adding them cleared the
+            // exposure the gateway had kept.
+            broker.emit('serve.part.stopped', lifecycle(orgId, 'just-exposed'));
+            await stream.waitFor('"key":"just-exposed"');
             stream.close();
         } finally {
             spy.mockRestore();
         }
+    });
+
+    it('reuses who the caller is and what they hold: a second call asks identity nothing', async () => {
+        const whoami = (): Promise<Response> => fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${operatorToken}` } });
+        expect((await whoami()).status).toBe(200);
+
+        const call = broker.call.bind(broker);
+        const asked: string[] = [];
+        const spy = vi.spyOn(broker, 'call').mockImplementation(((action: string, ...rest: unknown[]) => {
+            asked.push(action);
+            return (call as (a: string, ...r: unknown[]) => unknown)(action, ...rest);
+        }) as typeof broker.call);
+        try {
+            expect((await whoami()).status).toBe(200);
+            expect(asked.filter((a) => a.startsWith('identity.ticket') || a.startsWith('identity.apiToken') || a === 'identity.hasRole'
+                || a.startsWith('serve.api') || a.startsWith('serve.expose'))).toEqual([]);
+            expect(asked).toContain('identity.whoami');
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    // Last: it ends the member's ticket.
+    it('forgets a signed-out ticket at once, not after the moment it is kept', async () => {
+        await broker.call('serve.expose.add', { apiId, contract: 'identity.ticket.signOut', public: true }, { meta: { tenant_id: orgId } });
+        const whoami = (): Promise<Response> => fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${memberToken}` } });
+        expect((await whoami()).status).toBe(200);
+        const out = await fetch(`${ORIGIN}/api/identity/signOut`, {
+            method: 'POST', headers: { authorization: `Bearer ${memberToken}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ token: memberToken }),
+        });
+        expect(out.status).toBe(200);
+        expect((await whoami()).status).not.toBe(200);
     });
 });

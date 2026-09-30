@@ -1449,7 +1449,28 @@ Checked live: a throwaway `sse-check-….example` zone was created, updated and 
 as `{id, tenantId}`, none carrying `dnssecPrivateKey`. The zone is gone (`dnsZone.find` by its id
 answers `[]`).
 
-## Fixed in v0.10.3, not yet live — `/api/events` took ~16 s to open (2026-09-29)
+## Fixed in v0.10.4 — every api call took ~0.9 s (median), 2.5-4 s at p90 (2026-09-29)
+
+From edge1's proxy log (1926 requests, 16:24-00:36 UTC): every api.surfdns.net call had a ~0.9 s
+median whatever it did -- even `_describe`, which needs no caller, took 0.68 s -- while website
+pages answered in ~70 ms. Each request asked, one after another over the mesh: which api the host
+is (`serve.api.resolveByHost`), its exposed rows (`serve.expose.find`), whether the ticket is valid
+(`identity.ticket.validate`), whether the caller holds each role (`identity.hasRole`, once per
+role), and only then made the call. And it rebuilt the whole descriptor (213 calls' schemas and a
+SHA-256) for one response header, on edge1, the busiest node.
+
+Now (`src/api/recent.ts`): the target is kept 10 s and dropped the moment this node hears a
+`serve.expose.*`/`serve.api.*` event; a resolved ticket 15 s (a sign-out through this gateway
+drops it at once); a role answer 15 s; the descriptor once per kept target. Browsers keep a CORS
+preflight 10 minutes (`Access-Control-Max-Age`). The cost, stated: a role revoked or a ticket
+revoked elsewhere still works for up to 15 s. A second request now asks identity and the catalog
+nothing (`events.integration.test.ts`).
+
+Not addressed here: why one mesh call costs ~0.2-0.3 s at all. `design/the-picture.md` puts
+identity on surf (Chicago) and the records in MongoDB Atlas; if the live system matches, each is a
+trip across the internet. Measure before moving anything.
+
+## Fixed in v0.10.3 — `/api/events` took ~16 s to open (2026-09-29)
 
 `handleEvents` checked each event row's gate with its own `identity.hasRole` call, one after
 another, before writing the stream's first byte — and every row asks about the same role,

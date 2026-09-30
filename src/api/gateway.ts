@@ -10,6 +10,7 @@ import { EventHub, openStream, type Omitted, type Subscriber } from './methods/e
 import { matchPath, specificity } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
 import { answerHealth } from './health.js';
+import { Recent } from './recent.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -66,6 +67,17 @@ export class ApiGateway {
     /** Open `/events` subscriptions -- closed by `stop()`, since a stream never ends on its own. */
     private readonly streams = new Set<{ close(reason?: string): void }>();
 
+    // Reused answers (recent.ts says why). What each costs:
+    /** Which api a host is, and its exposed rows: an exposure change applies within 10 s. */
+    private readonly targets = new Recent<Target>(10_000);
+    /** Who a bearer token is: a ticket revoked elsewhere still works for up to 15 s. A sign-out through this gateway is forgotten at once. */
+    private readonly callers = new Recent<Caller | undefined>(15_000);
+    /** Whether a user holds a role in a tenant: a revoked role still works for up to 15 s. */
+    private readonly roles = new Recent<boolean>(15_000);
+    /** Each target's descriptor, built once rather than on every request (it hashes every schema). */
+    private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
+    private readonly unsubscribes: (() => void)[] = [];
+
     constructor(private readonly broker: IServiceBroker) {
         this.hub = new EventHub(broker);
     }
@@ -97,6 +109,9 @@ export class ApiGateway {
             // (net/client.ts:166) never actually saw it, silently disabling the exact detection
             // that comment's own history says was already found broken once before, differently.
             res.setHeader('Access-Control-Expose-Headers', 'x-exposure-shape');
+            // A browser asks permission (OPTIONS) before each distinct cross-origin call; this lets
+            // it keep the answer for 10 minutes instead of paying a second round trip every time.
+            res.setHeader('Access-Control-Max-Age', '600');
             if ((req.method ?? 'GET').toUpperCase() === 'OPTIONS') {
                 res.statusCode = 204;
                 res.end();
@@ -140,6 +155,12 @@ export class ApiGateway {
             this.broker?.logger.error('Api server error', err);
         });
 
+        // An exposure or api changed: the next request reads it fresh, so the 10 s a target is kept
+        // only bounds a change this node did not hear about.
+        for (const name of ['serve.expose', 'serve.api'].flatMap((d) => [`${d}.created`, `${d}.updated`, `${d}.deleted`])) {
+            this.unsubscribes.push(this.hub.subscribe(name, () => this.targets.clear()));
+        }
+
         await new Promise<void>((resolve, reject) => {
             this.server?.listen(SERVER_PORT, SERVER_HOST, () => resolve());
             this.server?.once('error', reject);
@@ -157,6 +178,7 @@ export class ApiGateway {
         // `server.close` waits for every open connection to end, and a subscription never ends by
         // itself -- without this, stopping the api with one browser tab open hung forever.
         for (const stream of [...this.streams]) stream.close('the api is stopping');
+        for (const off of this.unsubscribes.splice(0)) off();
         if (this.server) {
             this.server.closeIdleConnections?.();
             await new Promise((resolve) => this.server?.close(resolve));
@@ -211,9 +233,37 @@ export class ApiGateway {
         }
     }
 
-    private async resolveTarget(hostname: string): Promise<Target> {
-        const api = await this.resolveApi(hostname);
-        return { host: api.apiHost, tenantId: api.tenantId, rows: await this.resolveExposeRows(api.id, api.tenantId) };
+    private resolveTarget(hostname: string): Promise<Target> {
+        return this.targets.get(hostname, async () => {
+            const api = await this.resolveApi(hostname);
+            return { host: api.apiHost, tenantId: api.tenantId, rows: await this.resolveExposeRows(api.id, api.tenantId) };
+        });
+    }
+
+    private describe(target: Target): ReturnType<typeof buildDescriptor> {
+        let descriptor = this.descriptors.get(target);
+        if (descriptor === undefined) {
+            descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
+            this.descriptors.set(target, descriptor);
+        }
+        return descriptor;
+    }
+
+    /** One user's role in one tenant, as identity answers it -- reused for 15 s (see `roles`). */
+    private holdsRole(userId: string, role: string, tenantId: string): Promise<boolean> {
+        return this.roles.get(`${userId}\u0000${role}\u0000${tenantId}`, async () => {
+            // The same meta checkGate always sent -- see its comment for why organizationId too.
+            const meta = { user: { id: userId, tenant_id: tenantId, organizationId: tenantId } };
+            const result = await this.broker.call('identity.hasRole', { userId, role, organizationId: tenantId }, { meta });
+            return result.granted;
+        });
+    }
+
+    private bearer(req: http.IncomingMessage): string | undefined {
+        const header = req.headers.authorization;
+        if (header === undefined || !header.startsWith('Bearer ')) return undefined;
+        const token = header.slice('Bearer '.length).trim();
+        return token === '' ? undefined : token;
     }
 
     /**
@@ -225,16 +275,15 @@ export class ApiGateway {
      * `viaApiToken`/`agentName` distinguish a person from an agent: placeOnHold (below) is the
      * one place that distinction actually matters.
      */
-    private async resolveCaller(req: http.IncomingMessage): Promise<Caller | undefined> {
-        const header = req.headers.authorization;
-        if (header === undefined || !header.startsWith('Bearer ')) {
-            return undefined;
-        }
-        const token = header.slice('Bearer '.length).trim();
-        if (token === '') {
-            return undefined;
-        }
+    private resolveCaller(req: http.IncomingMessage): Promise<Caller | undefined> {
+        const token = this.bearer(req);
+        if (token === undefined) return Promise.resolve(undefined);
+        // Only a token that resolved to someone is kept: an unknown one is asked about every time,
+        // so a ticket issued a moment ago is never refused for 15 s.
+        return this.callers.get(token, () => this.lookUpCaller(token), (caller) => caller !== undefined);
+    }
 
+    private async lookUpCaller(token: string): Promise<Caller | undefined> {
         const ticket = await this.broker.call('identity.ticket.validate', { token });
         if (ticket.valid && ticket.userId !== undefined) {
             return { userId: ticket.userId, viaApiToken: false, roles: ticket.roles ?? [] };
@@ -331,12 +380,7 @@ export class ApiGateway {
         // rather than parallel so the message names the first one actually missing, which is the
         // one an operator has to grant.
         for (const roleKey of required) {
-            const result = await this.broker.call('identity.hasRole', {
-                userId: caller.userId,
-                role: roleKey,
-                organizationId: tenantId,
-            }, { meta });
-            if (!result.granted) {
+            if (!(await this.holdsRole(caller.userId, roleKey, tenantId))) {
                 throw new MeshError({
                     message: `"${row.contract}" requires role "${roleKey}".`,
                     code: 'FORBIDDEN',
@@ -346,12 +390,7 @@ export class ApiGateway {
         }
 
         if (row.role !== undefined) {
-            const result = await this.broker.call('identity.hasRole', {
-                userId: caller.userId,
-                role: row.role,
-                organizationId: tenantId,
-            }, { meta });
-            if (!result.granted) {
+            if (!(await this.holdsRole(caller.userId, row.role, tenantId))) {
                 throw new MeshError({ message: `Requires role "${row.role}".`, code: 'FORBIDDEN', status: 403 });
             }
         }
@@ -393,13 +432,7 @@ export class ApiGateway {
             return targetTenantId;
         }
 
-        const meta = { user: { id: caller.userId, tenant_id: targetTenantId, organizationId: targetTenantId } };
-        const result = await this.broker.call('identity.hasRole', {
-            userId: caller.userId,
-            role: 'operator',
-            organizationId: targetTenantId,
-        }, { meta });
-        return result.granted ? requested : targetTenantId;
+        return (await this.holdsRole(caller.userId, 'operator', targetTenantId)) ? requested : targetTenantId;
     }
 
     /**
@@ -528,19 +561,11 @@ export class ApiGateway {
         const events: string[] = [];
         const omitted: Omitted[] = [];
 
-        // Asked once per role, not once per event. Nearly every event row names the same role
-        // (`operator`), and asking identity again for each, one after another, held the stream's
-        // first byte back ~16 s with 55 events on api.surfdns.net (2026-09-29) -- a page that
-        // counted itself live missed everything written in that time.
-        const roles = new Map<string, Promise<boolean>>();
-        const holds = (who: Caller, role: string): Promise<boolean> => {
-            let answer = roles.get(role);
-            if (answer === undefined) {
-                answer = this.hasRole(who, role, target.tenantId);
-                roles.set(role, answer);
-            }
-            return answer;
-        };
+        // Asked once per role, not once per event (`holdsRole` shares one answer). Nearly every
+        // event row names the same role (`operator`), and asking identity again for each, one after
+        // another, held the stream's first byte back ~16 s with 55 events on api.surfdns.net
+        // (2026-09-29) -- a page that counted itself live missed everything written in that time.
+        const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, target.tenantId);
 
         for (const name of wanted ?? []) {
             if (!rows.some((row) => row.contract === name)) omitted.push({ name, reason: 'not streamed on this api' });
@@ -574,7 +599,7 @@ export class ApiGateway {
 
         const subscriberFor = async (who: Caller | undefined): Promise<Subscriber> => ({
             scope: target.tenantId,
-            operator: who !== undefined && await this.hasRole(who, 'operator', target.tenantId),
+            operator: who !== undefined && await holds(who, 'operator'),
         });
 
         const stream = openStream({
@@ -582,8 +607,9 @@ export class ApiGateway {
             events,
             omitted,
             hub: this.hub,
-            // The first answer reuses this request's; each recheck asks afresh (roles can be revoked).
-            subscriber: { scope: target.tenantId, operator: caller !== undefined && await holds(caller, 'operator') },
+            // Each recheck (every heartbeat, 20 s) outlasts the 15 s the answer is kept, so a revoked
+            // role or ticket still ends the stream's privileges on the next beat.
+            subscriber: await subscriberFor(caller),
             // A signed-in subscription ends when its credential does; an anonymous one has nothing
             // to lose. Roles are re-read, so a revoked operator stops seeing other tenants' events.
             recheck: async () => {
@@ -596,15 +622,9 @@ export class ApiGateway {
         res.on('close', () => this.streams.delete(stream));
     }
 
-    private async hasRole(caller: Caller, role: string, tenantId: string): Promise<boolean> {
-        // The same call and meta checkGate makes -- see its comment for why organizationId too.
-        const meta = { user: { id: caller.userId, tenant_id: tenantId, organizationId: tenantId } };
-        const result = await this.broker.call('identity.hasRole', { userId: caller.userId, role, organizationId: tenantId }, { meta });
-        return result.granted;
-    }
 
     private async handleDescribe(target: Target, res: http.ServerResponse): Promise<void> {
-        const descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
+        const descriptor = this.describe(target);
 
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 200;
@@ -675,8 +695,14 @@ export class ApiGateway {
         const timeout = route.contract.timeout;
         const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta, ...(timeout !== undefined ? { timeout } : {}) });
 
-        const descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
-        res.setHeader('x-exposure-shape', descriptor.shapeHash);
+        // A sign-out through this gateway ends the ticket here at once, not after the 15 s it is kept.
+        if (route.row.contract === 'identity.ticket.signOut') {
+            if (typeof input.token === 'string') this.callers.forget(input.token);
+            const token = this.bearer(req);
+            if (token !== undefined) this.callers.forget(token);
+        }
+
+        res.setHeader('x-exposure-shape', this.describe(target).shapeHash);
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 200;
         res.end(JSON.stringify(result));
