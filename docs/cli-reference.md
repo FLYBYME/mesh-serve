@@ -35,6 +35,7 @@ Boots a complete Mesh node mounting all four core services:
 * `--logLevel <enum>`: Logger severity (`error`, `warn`, `info`, `debug`, default: `debug`).
 * `--publicScheme <enum>`: Public URL scheme embedded in HTML envelopes (`http` or `https`, default: `https`).
 * `--publicApiPort <number>`: Public-facing port for API URLs in local unproxied deployments.
+* `--metricsPort <number>`: Serve the node's own metrics (Prometheus text) at `GET /metrics` on this port, bound to `--host`. Off by default; also `MESH_METRICS_PORT`. Metric names are listed in [configuration.md](configuration.md#node-metrics-metricsport).
 
 ### `mesh-serve login`
 Authenticates with the active API host and saves the session ticket to `~/.mesh/session.json`:

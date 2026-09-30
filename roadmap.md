@@ -1595,11 +1595,12 @@ locally with one v4.8.5 node and two v4.9.0 ones.
 Still full on connect: `handlePeerConnect`'s one-off `$node.pex`, kept so an old node that
 reconnects can still learn peers. Drop it once no v4.8 node is left.
 
-## Open — the mesh nodes' own logs never reach VictoriaLogs (2026-09-30)
+## Not a bug — "the mesh nodes' logs never reach VictoriaLogs" (2026-09-30)
 
-In the log store, the last 10 minutes held lines from obs-surfdns-state-0 and coredns only; none
-from any mesh-*-node pod, which log constantly (read with `k8s.logs`). The node pods run with host
-networking; whether vlagent skips them or their lines fail to parse is not known yet.
+Reported above from a 10-minute window that held only obs-surfdns-state-0 and coredns. Over 12 h
+the store has every mesh-*-node pod, up to its last line: a settled node logs a few lines an hour,
+so a short window can miss them all. The loud one was kube-state-metrics (~11,000 lines of a
+forbidden watch it retried), since limited to the kinds we run (surfdns-compute baseline).
 
 ## Open — surf drops off the mesh about once an hour (2026-09-30)
 
@@ -1607,3 +1608,19 @@ The builder's log on compute1: `Peer disconnected: surf` / `Node offline (missed
 17 times in ~15 h, each followed by a reconnect. surf is the one node outside Kubernetes (1 GB,
 Chicago). Re-check after the gossip fix: a node busy parsing megabytes of presence can miss its
 own beats.
+
+## Done in v0.10.8 (mesh v4.10.0) — a node can be scraped: its calls, its bytes per topic, its event loop (2026-09-30)
+
+The gossip storm above was found by counting WebSocket bytes by hand on a laptop. Now
+`start --metricsPort <n>` (or `MESH_METRICS_PORT`) serves `GET /metrics` in Prometheus text on
+`--host`, for VictoriaMetrics; off by default, 404 for anything else, no auth. Exposed:
+`mesh_rpc_calls_total{action,outcome}` and `mesh_rpc_duration_seconds{action}` for calls the node
+handles, `mesh_rpc_outgoing_total` / `mesh_rpc_outgoing_duration_seconds` for calls it sends,
+`mesh_transport_bytes_total` / `mesh_transport_packets_total{direction,kind,topic}` at the WS
+transport (an RPC's topic is its action), `mesh_event_loop_delay_seconds{stat}` and
+`mesh_event_loop_utilization` per scrape window, `mesh_registry_nodes{available}`,
+`process_cpu_seconds_total`, `process_resident_memory_bytes`, `nodejs_heap_used_bytes`, and
+`mesh_node_info{node_id,version,mesh_version}`. Full table: docs/configuration.md.
+
+Not on yet: no node passes `--metricsPort` and nothing scrapes it. Needs the flag in each node's
+args (k8s pods, and the docker units on edge1, ns1, ns2, surf) and a scrape job per node.

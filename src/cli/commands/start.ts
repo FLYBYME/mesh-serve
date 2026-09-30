@@ -7,10 +7,12 @@ import {
     PlacementRegistry, RegistryModule,
     z,
 } from '@flybyme/mesh';
-import { WSTransport } from '@flybyme/mesh/node';
+import { WSTransport, installNodeMetrics } from '@flybyme/mesh/node';
 
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
+import { meshFrameworkVersion, resolveMetricsPort, startMetricsServer } from '../core/metricsServer.js';
+import { runningVersion } from '../../catalog/methods/upgrade.js';
 import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
@@ -54,6 +56,7 @@ const startInputSchema = z.object({
     advertise: z.string().optional().describe('The address other nodes reach this one on -- its public IP or hostname -- when --host is a wildcard (0.0.0.0). A node\'s identity in the registry is its address, so without this every node on a wildcard bind advertises ws://0.0.0.0:<port> and each peer discards the others as a copy of itself. Required to join a cluster (--bootstrapNode) from a wildcard bind'),
     bootstrapNode: z.array(z.string()).optional().describe('ws:// URL(s) of existing node(s) to join as a peer, e.g. --bootstrapNode ws://10.0.0.5:6005 ws://10.0.0.6:6005 -- omit to start a fresh, standalone cluster of one. Mesh core dials every one of these at startup and keeps a real, direct connection to each; naming more than one hub here is the fix for a spoke otherwise only ever reaching a second hub through an unreliable relay (dialLearnedPeer, PEX-discovered peers) instead of a direct connection'),
     parts: z.string().optional().describe(`Core parts to run on this node, comma-separated (${CORE_PART_NAMES.join(', ')}) -- what this node is *for*. Only needed for parts that nothing will ever call into existence: an http listener (api, cdn) or a timer (queue) is never demand-loaded, because the demand arrives through the thing that isn't running yet. Everything else loads on first call and needs no flag. The usual second-node case is --parts api,cdn`),
+    metricsPort: z.coerce.number().int().optional().describe('Serve this node\'s own metrics (calls and their durations per action, bytes per mesh topic, event loop, CPU, memory) as Prometheus text at GET /metrics on this port, bound to --host like the mesh transport -- for the fleet\'s VictoriaMetrics. No auth: bind it only to a private address. Also read from MESH_METRICS_PORT. Off when unset'),
     labels: z.array(z.string()).optional().describe('This node\'s own labels, as key=value pairs (e.g. --labels role=dns region=bhs) -- carried in every presence broadcast (serve.node.find) and what serve.part\'s nodeSelector matches against to pin a service to this node instead of wherever placementFor would otherwise pick'),
 });
 
@@ -88,6 +91,16 @@ export class StartCommand extends BaseCommand {
         const wildcard = args.host === '0.0.0.0' || args.host === '::';
         if (wildcard && args.bootstrapNode !== undefined && args.bootstrapNode.length > 0 && args.advertise === undefined) {
             throw new Error(`--host ${args.host} joins a cluster with no way for peers to dial it back. Pass --advertise <this machine's public IP or hostname>.`);
+        }
+
+        // Bound before the node joins anything, so a taken port or a bad MESH_METRICS_PORT fails
+        // the start outright rather than leaving a node running that nobody can see. Same address
+        // as the mesh transport: on the fleet that is the node's private address, and there is no
+        // auth on this port.
+        const metricsPort = resolveMetricsPort(args.metricsPort);
+        if (metricsPort !== undefined) {
+            const metrics = await startMetricsServer({ port: metricsPort, host: args.host });
+            logger.info(`Metrics at http://${metrics.host}:${metrics.port}/metrics`);
         }
 
         const node = new MeshApp({
@@ -139,6 +152,11 @@ export class StartCommand extends BaseCommand {
         // so the list of its domains is written out here, and this is the only place in the
         // codebase that names a part's domains by hand.
         const broker = node.getProvider<IServiceBroker>('broker');
+        if (metricsPort !== undefined) {
+            // Who this is, and the process/event-loop gauges. Until now a scrape had only the
+            // broker's and transport's own counters.
+            installNodeMetrics({ nodeID: args.nodeID, version: runningVersion(), meshVersion: meshFrameworkVersion(), registry: broker.registry });
+        }
         for (const domain of CATALOG_DOMAINS) {
             await broker.loadDomain(domain, {}, { resolve: resolveHandler });
         }
