@@ -1449,6 +1449,29 @@ Checked live: a throwaway `sse-check-….example` zone was created, updated and 
 as `{id, tenantId}`, none carrying `dnssecPrivateKey`. The zone is gone (`dnsZone.find` by its id
 answers `[]`).
 
+## Open — api CRUD calls hop to another node before reaching the database (owner, 2026-09-30)
+
+Owner's direction to think about: keep an api CRUD call at the api, not api -> the node that
+mounts the domain -> the database. Today the gateway `broker.call`s `dnsZone.find` and the broker
+routes it to whichever node mounts `dnsZone`; that node runs `CrudExecutor` against Mongo. mesh
+already has the second caller this needs: `CrudExecutor` is shared by `DatabaseMiddleware` and
+`ctx.db()` ("two callers, one implementation"), with the same scoping, hidden-field stripping and
+events. What the gateway would need: the CRUD definitions (`defineCrud`) loaded on the api node
+without the rest of the service, and the owning module's `beforeCrud`/`afterCrud` hooks -- a
+domain with hooks has to keep routing, or its hooks move into the definition. Tools stay routed.
+Measure first: one mesh hop vs one database round trip (if the database is Atlas far from edge1,
+the hop may be the small part), and whether a CRUD verb is ever answered by a node that is not
+the one holding the data's cache.
+
+## Open — `platform/intel` runs on edge1 though its record says `desired: stopped` (2026-09-30)
+
+edge1 logs `[intel:listener]` from artifact 6ab96a01 (the part's own, commit 57474a4, 2026-09-27),
+while `serve.part.find` has the part `desired: stopped`. Nothing that reads records would start it,
+and nothing stops it: `serve.part.reconcile` also warns "edge1-edge did not report what it is
+running; nothing unseen is started this pass" (RPC timeout on `serve.part.runningHere`). The intel
+duplicate-`ip` fix (surfdns-intel f93f98e) cannot be rolled out through the record until someone
+decides whether intel should run (owner: every edge service is a sensor -- so, probably running).
+
 ## Fixed in v0.10.4 — every api call took ~0.9 s (median), 2.5-4 s at p90 (2026-09-29)
 
 From edge1's proxy log (1926 requests, 16:24-00:36 UTC): every api.surfdns.net call had a ~0.9 s
