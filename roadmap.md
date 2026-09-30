@@ -1428,6 +1428,12 @@ Why the site build and not the kernel's: the kernel build is ~2 s from a warm wo
 first build after gaining a dependency had to install it, and every site build bundles the
 generated client.
 
+**Worse, 2026-09-30 01:23:46-01:28:11:** a `surfdns-proxy` service build (for proxy-ns1) on edge1
+took surfdns.net, api.surfdns.net and metrics.surfdns.net down for ~4.5 minutes (port 443 still
+accepted connections; nothing answered) -- and the build itself failed, with
+`RPC Timeout calling serve.artifact.update locally after 10000ms`: edge1 was too loaded to answer
+itself. A service build is now an outage, not a slowdown.
+
 Wanted: builds placed off the gateway — a `builder` role (label) the build queue selects, on a node
 that serves no public traffic (`surf`, the hub, is a candidate) — and a concurrency limit per node.
 Meanwhile: deploy the company site at quiet times, and do not retry a deploy whose builds already
