@@ -1469,7 +1469,18 @@ Measure first: one mesh hop vs one database round trip (if the database is Atlas
 the hop may be the small part), and whether a CRUD verb is ever answered by a node that is not
 the one holding the data's cache.
 
-## Open — `_describe` lists a `hidden` field in outputs again (dnsZone, since edge1's restart, 2026-09-30)
+## Done (v0.10.5, mesh v4.8.5) — `_describe` lists a `hidden` field in outputs again (dnsZone, 2026-09-30)
+
+**Cause:** parts in one process share mesh's contract registry (first copy wins) and CRUD
+registry (last copy wins; the executor strips `hidden` by it). surfdns-mail bundled dnsZone from
+before `hidden` and loaded before domains-service on edge1: its stale contract was described, while
+domains' own CRUD entry kept the data stripped. The reverse load order would have returned the key.
+**Fixed** twice: mesh 546a0a3 (a re-registration never un-hides a field; declared outputs leave
+hidden fields out whatever copy won), and mail/certs/nameserver now lock surfdns-domains f36dbea.
+Still true: any part that bundles another service's collection carries a copy that can go stale --
+the lasting fix is parts calling collections by name without bundling their definitions.
+
+Original finding:
 
 api.surfdns.net's `/api/_describe` (shapeHash 49bf440c…) now shows `dnssecPrivateKey` in the
 output of dnsZone.get, find, create and update. On 2026-09-29 (shapeHash d46169d4…, the client in
