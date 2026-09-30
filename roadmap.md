@@ -1469,6 +1469,21 @@ Measure first: one mesh hop vs one database round trip (if the database is Atlas
 the hop may be the small part), and whether a CRUD verb is ever answered by a node that is not
 the one holding the data's cache.
 
+## Open — every upgrade leaves its old image behind; surf's disk filled (2026-10-01)
+
+surf (14 GB) hit 100%: 27 mesh-serve images, v0.7.8 through v0.10.5, ~509 MB each -- 7.7 GB of
+them unused -- plus 1.5 GB of journal. Nothing could be written: compute's new build could not be
+copied in ("ENOSPC: no space left on device", from every source), and the old build kept running.
+The owner pruned by hand (`docker image prune -a`, `journalctl --vacuum-size=200M`, `apt-get
+clean`): 100% -> 32%.
+
+- `serve.node.upgrade` (deploy/node-upgrade) removes images older than the one it just replaced,
+  once the new version is running: the current one and the previous (for a rollback) stay.
+- machine.import (surfdns-compute) caps the journal (`SystemMaxUse=` in journald.conf) and sets
+  docker's log rotation (`log-opts` max-size/max-file); every machine gathers both the same way,
+  surf only filled first because its disk is the smallest.
+- Low free space is a machine status (machine.check), not something found when a write fails.
+
 ## Done (v0.10.5, mesh v4.8.5) — `_describe` lists a `hidden` field in outputs again (dnsZone, 2026-09-30)
 
 **Cause:** parts in one process share mesh's contract registry (first copy wins) and CRUD
