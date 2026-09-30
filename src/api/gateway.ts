@@ -37,6 +37,38 @@ interface Caller {
     readonly roles: readonly string[];
 }
 
+/** The JSON Schema `type`s one property of an input schema allows, through `anyOf`/`oneOf` (an optional or nullable field). */
+function typesOf(property: unknown): string[] {
+    if (typeof property !== 'object' || property === null) return [];
+    const p: Record<string, unknown> = { ...property };
+    const own = typeof p.type === 'string' ? [p.type] : Array.isArray(p.type) ? p.type.filter((t): t is string => typeof t === 'string') : [];
+    const nested = [p.anyOf, p.oneOf].flatMap((list) => (Array.isArray(list) ? list.flatMap(typesOf) : []));
+    return [...own, ...nested];
+}
+
+/**
+ * A GET or DELETE input, its scalar strings turned into the numbers and booleans the contract's
+ * input schema declares. A query string has only strings: `k8s.logs?lines=100` reached the tool as
+ * `lines: "100"` and was refused ("lines: Expected number, received string", 2026-09-30) -- every
+ * GET contract with a number or boolean field failed over HTTP; only CRUD finds worked, their paging
+ * fields coercing themselves. Only a field the schema types as number/integer/boolean is touched,
+ * and only when the string is one exactly: a string field that looks numeric (a zone name, a key)
+ * stays a string.
+ */
+export function typedQueryValues(input: Record<string, unknown>, inputSchema: Record<string, unknown>): Record<string, unknown> {
+    const properties = typeof inputSchema.properties === 'object' && inputSchema.properties !== null
+        ? Object.fromEntries(Object.entries(inputSchema.properties)) : {};
+    const out: Record<string, unknown> = { ...input };
+    for (const [key, value] of Object.entries(input)) {
+        if (typeof value !== 'string') continue;
+        const types = typesOf(properties[key]);
+        if (types.includes('string')) continue;
+        if ((types.includes('number') || types.includes('integer')) && /^-?\d+(\.\d+)?$/.test(value)) out[key] = Number(value);
+        else if (types.includes('boolean') && (value === 'true' || value === 'false')) out[key] = value === 'true';
+    }
+    return out;
+}
+
 interface Route {
     readonly row: Expose;
     readonly contract: ContractDeclaration;
@@ -496,8 +528,11 @@ export class ApiGateway {
         }
     }
 
-    private async parseInput(req: http.IncomingMessage, params: Record<string, string>, bodyLimit: number): Promise<Record<string, unknown>> {
-        const input = await this.readInput(req, params, bodyLimit);
+    private async parseInput(req: http.IncomingMessage, params: Record<string, string>, bodyLimit: number, inputSchema: Record<string, unknown>): Promise<Record<string, unknown>> {
+        const method = (req.method ?? 'GET').toUpperCase();
+        const read = await this.readInput(req, params, bodyLimit);
+        // A query string carries only strings: typed by the contract's own input schema.
+        const input = method === 'GET' || method === 'DELETE' ? typedQueryValues(read, inputSchema) : read;
         // Equality only from the outside -- see methods/queryRule.ts.
         const operator = firstOperator(input['query']);
         if (operator !== undefined) {
@@ -654,7 +689,7 @@ export class ApiGateway {
         const caller = await this.resolveCaller(req);
         await this.checkGate(route.row, route.contract, caller, target.tenantId);
 
-        const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract));
+        const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input);
 
         // tenant_id is always known here -- it's the api's own owning tenant (or an operator's
         // explicit override, resolveEffectiveTenantId) -- regardless of whether the caller is.
