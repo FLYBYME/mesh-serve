@@ -1449,6 +1449,19 @@ Checked live: a throwaway `sse-check-….example` zone was created, updated and 
 as `{id, tenantId}`, none carrying `dnssecPrivateKey`. The zone is gone (`dnsZone.find` by its id
 answers `[]`).
 
+## Fixed in v0.10.3, not yet live — `/api/events` took ~16 s to open (2026-09-29)
+
+`handleEvents` checked each event row's gate with its own `identity.hasRole` call, one after
+another, before writing the stream's first byte — and every row asks about the same role,
+`operator`. With 55 event rows on api.surfdns.net (40 before the zone/record/repo rows above) a
+subscription took ~16 s to open, measured from this machine with both a bare `fetch` and
+mesh-web's `createFetchEventSource`. mesh-web counted its lists live from the first fetch, so
+anything written in those seconds was never seen (mesh-web v0.21.4 now refetches a list fetched
+before the stream's first open). Fix: one `hasRole` per distinct role per subscription, reused for
+the subscriber's own operator check (test: `events.integration.test.ts`, "asks identity once per
+role"). Takes effect when the api nodes run v0.10.3 (`serve.node.upgrade`) — an owner call, since
+the api runs on edge1 alongside the proxy.
+
 ## Open — an update event's `patch` is not stripped of hidden fields (2026-09-29)
 
 mesh's `CrudExecutor` strips `hidden` fields from every result and from each event's `item`, but

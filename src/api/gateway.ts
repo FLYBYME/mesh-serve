@@ -528,6 +528,20 @@ export class ApiGateway {
         const events: string[] = [];
         const omitted: Omitted[] = [];
 
+        // Asked once per role, not once per event. Nearly every event row names the same role
+        // (`operator`), and asking identity again for each, one after another, held the stream's
+        // first byte back ~16 s with 55 events on api.surfdns.net (2026-09-29) -- a page that
+        // counted itself live missed everything written in that time.
+        const roles = new Map<string, Promise<boolean>>();
+        const holds = (who: Caller, role: string): Promise<boolean> => {
+            let answer = roles.get(role);
+            if (answer === undefined) {
+                answer = this.hasRole(who, role, target.tenantId);
+                roles.set(role, answer);
+            }
+            return answer;
+        };
+
         for (const name of wanted ?? []) {
             if (!rows.some((row) => row.contract === name)) omitted.push({ name, reason: 'not streamed on this api' });
         }
@@ -543,7 +557,7 @@ export class ApiGateway {
                     omitted.push({ name, reason: `requires role "${row.role}" -- not signed in` });
                     continue;
                 }
-                if (!(await this.hasRole(caller, row.role, target.tenantId))) {
+                if (!(await holds(caller, row.role))) {
                     omitted.push({ name, reason: `requires role "${row.role}"` });
                     continue;
                 }
@@ -568,7 +582,8 @@ export class ApiGateway {
             events,
             omitted,
             hub: this.hub,
-            subscriber: await subscriberFor(caller),
+            // The first answer reuses this request's; each recheck asks afresh (roles can be revoked).
+            subscriber: { scope: target.tenantId, operator: caller !== undefined && await holds(caller, 'operator') },
             // A signed-in subscription ends when its credential does; an anonymous one has nothing
             // to lose. Roles are re-read, so a revoked operator stops seeing other tenants' events.
             recheck: async () => {

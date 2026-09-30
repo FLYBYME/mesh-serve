@@ -5,7 +5,7 @@
  * was built on: an event that cannot be scoped is delivered to nobody, and a subscription that
  * could never deliver is refused with its reasons rather than accepted and left silent.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, defineEvent, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule,
@@ -245,5 +245,28 @@ describe('/api/events', () => {
         await stream.waitFor('"key":"after"');
         expect(stream.received()).not.toContain('no-tenant');
         stream.close();
+    });
+
+    // Last: it exposes more events, which the tests above list exactly.
+    it('asks identity once per role, not once per event, before the stream opens', async () => {
+        const meta = { meta: { tenant_id: orgId } };
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.stopped', role: 'operator' }, meta);
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.updated', role: 'operator' }, meta);
+
+        const call = broker.call.bind(broker);
+        let asked = 0;
+        const spy = vi.spyOn(broker, 'call').mockImplementation(((action: string, ...rest: unknown[]) => {
+            if (action === 'identity.hasRole') asked++;
+            return (call as (a: string, ...r: unknown[]) => unknown)(action, ...rest);
+        }) as typeof broker.call);
+        try {
+            // Three operator-gated events, one public; and whether the subscriber is an operator.
+            const stream = await subscribe('', operatorToken);
+            await stream.waitFor(': open');
+            expect(asked).toBe(1);
+            stream.close();
+        } finally {
+            spy.mockRestore();
+        }
     });
 });
