@@ -1469,6 +1469,20 @@ Measure first: one mesh hop vs one database round trip (if the database is Atlas
 the hop may be the small part), and whether a CRUD verb is ever answered by a node that is not
 the one holding the data's cache.
 
+## Open — `_describe` lists a `hidden` field in outputs again (dnsZone, since edge1's restart, 2026-09-30)
+
+api.surfdns.net's `/api/_describe` (shapeHash 49bf440c…) now shows `dnssecPrivateKey` in the
+output of dnsZone.get, find, create and update. On 2026-09-29 (shapeHash d46169d4…, the client in
+surfdns-company-site eb683f0) it did not: mesh's `defineCrud` omits `hidden` fields from the
+public output schema. The data is still stripped -- `dnsZone.find` returned no key on any of 3
+zones -- so this is the description, not a leak. But a client generated from it types the key as a
+field zones carry, and `_describe` no longer says the field is secret. Neither `describe.ts` /
+`descriptor.ts` nor mesh (v4.8.3 → v4.8.4) changed in between; what changed is edge1's restart onto
+v0.10.4, which reloaded domains-service (artifact 6abc3471, bundled against mesh #v4.2.1).
+Suspect: `contractDeclaration()` now resolves the declaration from a copy whose schema is the full
+`outputSchema`, not `publicOutputSchema`. Until fixed, don't commit a client regenerated from
+live (the site keeps eb683f0's).
+
 ## Open — starting a service part's new build leaves an untracked old copy running (2026-09-30)
 
 Setting `platform/intel` to `desired: running` on its new pinned build (6abc6363, hash 2d7a1978)
