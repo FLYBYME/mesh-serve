@@ -1463,6 +1463,18 @@ Measure first: one mesh hop vs one database round trip (if the database is Atlas
 the hop may be the small part), and whether a CRUD verb is ever answered by a node that is not
 the one holding the data's cache.
 
+## Open — starting a service part's new build leaves an untracked old copy running (2026-09-30)
+
+Setting `platform/intel` to `desired: running` on its new pinned build (6abc6363, hash 2d7a1978)
+loaded it on edge1 beside the copy already running there (artifact 60a1f52f, the one below). The
+node's registry (`catalog/methods/services.ts`) holds one entry per (node, part): the new load
+overwrote the old entry, so the old module -- its `broker.on('intel.observation')` listener
+included -- keeps running with nothing tracking it. Every observation is now ingested twice, and
+the old copy still throws the duplicate-`ip` error. `serve.part.stop` would unload the tracked (new)
+copy, never the old; only a mesh-node restart clears it. Fix: loading a part must unload whatever
+this node already runs for it (tracked or found by module path) before registering the new one,
+and refuse to report a start while an old copy is still loaded.
+
 ## Open — `platform/intel` runs on edge1 though its record says `desired: stopped` (2026-09-30)
 
 edge1 logs `[intel:listener]` from artifact 6ab96a01 (the part's own, commit 57474a4, 2026-09-27),
