@@ -1574,3 +1574,36 @@ watching the stream. Nothing does that today — keys are stored through `zoneKe
 path, which emits no event, and gitserver's mirror updates carry only status fields — so this is a
 hole waiting for a caller, not a leak. Fix in mesh: `stripHidden` the patch too (or refuse hidden
 fields in a CRUD update's input, since the ordinary path is not how they are meant to be written).
+
+## Fixed in v0.10.7 (mesh v4.9.0) — gossip cost half a CPU core per node, and slowed every call (2026-09-30)
+
+Every mesh node used ~0.5 of a core all day with nothing to do (cAdvisor, all six cluster nodes;
+the idle builder on compute1 at 0.4), and every api call took 2-7 s, metrics or not. The fleet
+tunnel carried 4-9 MB/s per node at idle (ns1 9.0, ns2 8.7, edge1 7.1, compute1 4.1 MB/s sent);
+edge2 and edge3, which run no mesh node, ~0. The telemetry store itself answered in ~250 ms from
+edge1. Cause, in mesh's MeshOrchestrator: `$node.presence` broadcast the node's whole description
+-- every contract's input and output JSON Schema -- every 15 s, and each gossip round *published*
+`$node.pex` with every known node's whole description to every peer every 10 s (the round picked
+one peer, then broadcast anyway). Three local bare nodes: ~230 KiB per presence, ~680 KiB per PEX.
+ns1 and ns2 each run two mesh nodes on 2 cores, which is why they sat at 84%.
+
+mesh v4.9.0: a small `$node.beat` every 15 s (every packet renews a lease, so it keeps old peers
+happy too); the full presence only on a catalog change, on connect, on request, and every 5
+minutes; `$node.peers` (addresses only) to the picked peer. Old and new nodes mix; measured
+locally with one v4.8.5 node and two v4.9.0 ones.
+
+Still full on connect: `handlePeerConnect`'s one-off `$node.pex`, kept so an old node that
+reconnects can still learn peers. Drop it once no v4.8 node is left.
+
+## Open — the mesh nodes' own logs never reach VictoriaLogs (2026-09-30)
+
+In the log store, the last 10 minutes held lines from obs-surfdns-state-0 and coredns only; none
+from any mesh-*-node pod, which log constantly (read with `k8s.logs`). The node pods run with host
+networking; whether vlagent skips them or their lines fail to parse is not known yet.
+
+## Open — surf drops off the mesh about once an hour (2026-09-30)
+
+The builder's log on compute1: `Peer disconnected: surf` / `Node offline (missed heartbeats): surf`
+17 times in ~15 h, each followed by a reconnect. surf is the one node outside Kubernetes (1 GB,
+Chicago). Re-check after the gossip fix: a node busy parsing megabytes of presence can miss its
+own beats.
