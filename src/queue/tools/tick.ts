@@ -14,16 +14,88 @@ import { QUEUE_MAX_CONCURRENCY, type QueueJob, type QueueTickOutput } from '../c
 const inFlight = new Set<string>();
 
 /**
+ * Event-driven, with the timer as a safety net (2026-09-30).
+ *
+ * The tick ran every 500 ms on every queue node, and each pass made a `claim` call funnelled onto
+ * the leader -- 2 claims a second with nothing queued, seen in the builder's own metrics the day
+ * they were turned on. Now a pass runs when there can be work: a job was created
+ * (`serve.queue.created`, from any node), a job here finished (a slot is free), a retry's backoff
+ * came due. The interval (QUEUE_TICK_MS, 60 s) remains only for what no event announces: a lease
+ * abandoned by a node that died mid-job.
+ *
+ * Every trigger goes through `pump`: one pass at a time on this node, and a trigger during a pass
+ * runs exactly one more after it -- a burst of creates costs one extra pass, not one each.
+ */
+interface PumpState {
+    passing: Promise<QueueTickOutput> | undefined;
+    again: boolean;
+    listening: boolean;
+}
+
+/** Per broker: one process normally holds one node, but a test runs several side by side. */
+const pumps = new WeakMap<object, PumpState>();
+
+function stateOf(ctx: IServiceContext): PumpState {
+    let state = pumps.get(ctx.broker);
+    if (state === undefined) {
+        state = { passing: undefined, again: false, listening: false };
+        pumps.set(ctx.broker, state);
+    }
+    return state;
+}
+
+function pump(ctx: IServiceContext): Promise<QueueTickOutput> {
+    const state = stateOf(ctx);
+    if (state.passing !== undefined) {
+        state.again = true;
+        return state.passing;
+    }
+    const running = (async () => {
+        let last: QueueTickOutput = { started: 0, inFlight: inFlight.size };
+        do {
+            state.again = false;
+            last = await pass(ctx);
+        } while (state.again && !ctx.signal.aborted);
+        return last;
+    })().finally(() => {
+        state.passing = undefined;
+    });
+    state.passing = running;
+    return running;
+}
+
+/** Runs `pump` without waiting, logging what it throws: for triggers that have nobody to answer. */
+function wake(ctx: IServiceContext): void {
+    if (ctx.signal.aborted) return;
+    pump(ctx).catch((err: unknown) => ctx.logger.error('serve.queue: a pass threw', err));
+}
+
+/** Subscribes once per load; the part's unload (or the node's stop) aborts `ctx.signal`. */
+function listen(ctx: IServiceContext): void {
+    const state = stateOf(ctx);
+    if (state.listening || ctx.signal.aborted) return;
+    const off = ctx.broker.subscribe('serve.queue.created', () => wake(ctx));
+    state.listening = true;
+    ctx.signal.addEventListener('abort', () => {
+        off();
+        state.listening = false;
+    }, { once: true });
+}
+
+/** The interval's pass, and the first one after a load: starts listening, then pumps. */
+export async function tick(_params: Record<string, never>, ctx: IServiceContext): Promise<QueueTickOutput> {
+    listen(ctx);
+    return pump(ctx);
+}
+
+/**
  * One pass of the queue loop: claim up to the concurrency limit and start what it claims.
  *
- * The broker calls this every `queueTickContract.intervalMs` and guarantees no two passes overlap,
- * so nothing here has to re-implement either. What it does still own is the difference between
- * *claiming* and *running*: claims are sequential within a pass (each is a fast dispatched call
- * that funnels onto the leader), while the work they start runs concurrently -- `run()` is
- * deliberately not awaited. The predecessor's real bug was never the tick rate, it was that only
- * one job ever ran at a time.
+ * Claims are sequential within a pass (each is a fast dispatched call that funnels onto the
+ * leader), while the work they start runs concurrently -- `run()` is deliberately not awaited. The
+ * predecessor's real bug was never the tick rate, it was that only one job ever ran at a time.
  */
-export async function tick(_params: Record<string, never>, ctx: IServiceContext): Promise<QueueTickOutput> {
+async function pass(ctx: IServiceContext): Promise<QueueTickOutput> {
     let started = 0;
 
     while (inFlight.size < QUEUE_MAX_CONCURRENCY) {
@@ -44,6 +116,8 @@ export async function tick(_params: Record<string, never>, ctx: IServiceContext)
             })
             .finally(() => {
                 inFlight.delete(job.id);
+                // A slot is free: whatever waited on the limit can start now.
+                wake(ctx);
             });
     }
 
@@ -91,5 +165,8 @@ async function run(job: QueueJob, ctx: IServiceContext): Promise<void> {
             nextAttemptAt: new Date(Date.now() + backoffMs),
         }, tenantMeta);
         ctx.logger.debug(`serve.queue: ${job.id} failed, retrying in ${backoffMs}ms`);
+        // The retry's own wake-up, rather than a timer asking every 500 ms whether it is due yet.
+        const retry = setTimeout(() => wake(ctx), backoffMs + 50);
+        retry.unref();
     }
 }

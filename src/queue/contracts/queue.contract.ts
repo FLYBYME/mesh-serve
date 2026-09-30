@@ -80,7 +80,10 @@ export const queueTickContract = defineContract({
     dependencies: ['serve.queue'],
     filePath: 'src/queue/tools/tick.ts',
     concurrency: 'interval',
-    intervalMs: Number(process.env.QUEUE_TICK_MS ?? 500),
+    // A safety net only: a pass runs when a job is created, a slot frees or a retry comes due
+    // (tools/tick.ts). This catches what no event announces -- a lease left by a dead node. Was
+    // 500 ms: 2 claims a second, cluster-wide, with nothing queued (2026-09-30).
+    intervalMs: Number(process.env.QUEUE_TICK_MS ?? 60_000),
     permissions: ['operator'],
     print: (o) => `started ${o.started}, ${o.inFlight} in flight`,
 });
