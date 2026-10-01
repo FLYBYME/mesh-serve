@@ -17,7 +17,9 @@
  */
 export const KEEP_PER_PART = 3;
 export const KEEP_RELEASES = 3;
-export const KEEP_RECENT_MS = 24 * 3600_000;
+// An hour, not a day: a build is pinned or released within minutes of finishing, and a day's
+// window kept every build of a busy day -- 84 of them, the database 83% full again (2026-10-01).
+export const KEEP_RECENT_MS = 3600_000;
 
 export interface RetentionArtifact {
     readonly id: string;

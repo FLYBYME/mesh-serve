@@ -226,6 +226,10 @@ export async function runEsbuild(
         // whatever recent Node the cluster actually runs, not a browser-compat target.
         target: platform === 'node' ? 'node20' : 'es2020',
         sourcemap: true,
+        // A service's map without the sources inlined: they were ~9 MB of a ~12 MB service build,
+        // every build kept in a 512 MB database (2026-10-01), and no node reads them -- the lines
+        // still map, and the sources are the commit. A browser's map keeps them, for devtools.
+        sourcesContent: platform !== 'node',
         minify: true,
         logLevel: 'silent',
         external,

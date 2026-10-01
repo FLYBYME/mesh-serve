@@ -318,7 +318,7 @@ export type PruneArtifactsOutput = z.infer<typeof pruneOutputSchema>;
 export const artifactPruneContract = defineContract({
     domain: 'serve.artifact',
     action: 'prune',
-    description: 'Removes the stored files of builds nothing needs -- keeps every pinned build, each part\'s newest 3, every build in each composition\'s newest 3 releases, and anything built in the last day. Records stay. dryRun reports without removing.',
+    description: 'Removes the stored files of builds nothing needs -- keeps every pinned build, each part\'s newest 3, every build in each composition\'s newest 3 releases, and anything built in the last hour. Records stay. dryRun reports without removing.',
     inputSchema: z.object({ dryRun: z.boolean().optional().describe('Report what would go, remove nothing') }),
     outputSchema: pruneOutputSchema,
     rest: { method: 'POST', path: '/artifacts/prune' },
@@ -333,11 +333,14 @@ export const artifactPruneContract = defineContract({
     timeout: 300_000,
 });
 
-/** The same, once a day, on the leader. */
+/**
+ * The same, every hour, on the leader. Still named pruneDaily (renaming moves its contract key);
+ * it ran daily until a day's builds alone filled the database (2026-10-01).
+ */
 export const artifactPruneDailyContract = defineContract({
     domain: 'serve.artifact',
     action: 'pruneDaily',
-    description: 'Runs serve.artifact.prune every ARTIFACT_PRUNE_INTERVAL_MS (default 24 h).',
+    description: 'Runs serve.artifact.prune every ARTIFACT_PRUNE_INTERVAL_MS (default 1 h).',
     inputSchema: z.object({}),
     outputSchema: pruneOutputSchema,
     rest: { method: 'POST', path: '/artifacts/prune-daily' },
@@ -346,7 +349,7 @@ export const artifactPruneDailyContract = defineContract({
     dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
     filePath: 'src/catalog/tools/pruneArtifacts.ts',
     concurrency: 'interval',
-    intervalMs: Number(process.env.ARTIFACT_PRUNE_INTERVAL_MS ?? 24 * 3600_000),
+    intervalMs: Number(process.env.ARTIFACT_PRUNE_INTERVAL_MS ?? 3600_000),
     permissions: ['operator'],
     print: (o) => `removed ${o.removed} builds (${Math.round(o.bytes / 1e6)} MB)`,
     timeout: 300_000,
