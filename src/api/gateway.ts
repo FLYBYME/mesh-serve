@@ -1,7 +1,10 @@
 import http from 'node:http';
 
 import { isMeshError, MeshError } from '@flybyme/mesh';
-import type { ContractDeclaration, IServiceBroker, IServiceToolRegistry } from '@flybyme/mesh';
+import type { ContractDeclaration, Database, IServiceBroker, IServiceToolRegistry, z } from '@flybyme/mesh';
+import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
+import type { activitySchema } from './schema/activity.js';
+import './contracts/activity.contract.js';
 
 import { type Expose } from './contracts/expose.contract.js';
 import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
@@ -82,6 +85,14 @@ interface Route {
     readonly row: Expose;
     readonly contract: ContractDeclaration;
     readonly params: Record<string, string>;
+}
+
+/** What one call learned on its way through, for the activity log -- filled in as it goes. */
+interface CallTrace {
+    readonly startedAt: number;
+    caller?: Caller;
+    organizationId?: string;
+    input?: Record<string, unknown>;
 }
 
 interface Target {
@@ -326,6 +337,58 @@ export class ApiGateway {
             message: 'This account belongs to several organizations: name one with the x-organization header.',
             code: 'BAD_REQUEST', status: 400,
         });
+    }
+
+    /**
+     * One row in the activity log, when this call is one it keeps (methods/activity.ts). Never
+     * waits and never fails the call: a log write that fails is logged and the call stands.
+     */
+    private recordActivity(target: Target, route: Route, req: http.IncomingMessage, trace: CallTrace, status: number, error?: string): void {
+        const outcome = outcomeOf(status);
+        if (!shouldRecord(route.contract, outcome)) return;
+        const header = (name: string): string | undefined => {
+            const value = req.headers[name];
+            const first = Array.isArray(value) ? value[0] : value;
+            return first === undefined || first === '' ? undefined : first.slice(0, 200);
+        };
+        const forwardedFor = header('x-forwarded-for');
+        const userAgent = header('user-agent');
+        const row = {
+            at: new Date(trace.startedAt),
+            apiId: route.row.apiId,
+            contract: route.row.contract,
+            organizationId: trace.organizationId ?? target.tenantId,
+            actor: {
+                userId: trace.caller?.userId ?? '',
+                viaApiToken: trace.caller?.viaApiToken ?? false,
+                ...(trace.caller?.agentName !== undefined ? { agentName: trace.caller.agentName } : {}),
+            },
+            outcome,
+            status,
+            ...(error !== undefined && outcome !== 'ok' ? { error: error.slice(0, 300) } : {}),
+            input: summarizeInput(trace.input),
+            durationMs: Math.max(0, Date.now() - trace.startedAt),
+            ip: req.socket.remoteAddress ?? '',
+            ...(forwardedFor !== undefined ? { forwardedFor } : {}),
+            ...(userAgent !== undefined ? { userAgent } : {}),
+        };
+        void this.writeActivity(row).catch((err: unknown) => {
+            this.broker.logger.warn(`[api] activity not recorded for ${route.row.contract}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }
+
+    /** Rows expire on their own: a TTL index on `at`, ensured once per process. */
+    private activityIndex: Promise<void> | undefined;
+
+    private async writeActivity(row: z.input<typeof activitySchema>): Promise<void> {
+        this.activityIndex ??= this.broker.getProvider<Database>('database').getCollection('serve.activity')
+            .createIndex({ at: 1 }, { name: 'activity_expiry', expireAfterSeconds: ACTIVITY_RETENTION_DAYS * 86_400 })
+            .then(() => undefined, (err: unknown) => {
+                this.activityIndex = undefined;
+                throw err;
+            });
+        await this.activityIndex;
+        await this.broker.call('serve.activity.create', row);
     }
 
     /** The organizations an account is a member of, by id; kept as briefly as a role answer. */
@@ -752,12 +815,36 @@ export class ApiGateway {
             return;
         }
 
+        // Every call that changes something, or is refused, goes in the activity log -- whichever
+        // way it ends. What the call learned on the way (who, which organization, its input) is
+        // collected in `trace` so a refusal before the input is read is still recorded.
+        const trace: CallTrace = { startedAt: Date.now() };
+        try {
+            await this.handleCall(target, route, req, res, trace);
+            this.recordActivity(target, route, req, trace, res.statusCode);
+        } catch (err) {
+            const status = isMeshError(err) ? err.status : err instanceof Error && err.message.includes('Local tool not found') ? 503 : 500;
+            this.recordActivity(target, route, req, trace, status, err instanceof Error ? err.message : String(err));
+            throw err;
+        }
+    }
+
+    private async handleCall(
+        target: Target,
+        route: Route,
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        trace: CallTrace,
+    ): Promise<void> {
         const caller = await this.resolveCaller(req);
+        trace.caller = caller;
         const gated = route.contract.permissions.length > 0 || route.row.role !== undefined || route.row.permission !== undefined;
         const organization = await this.callOrganization(req, gated, caller, target.tenantId);
+        trace.organizationId = organization;
         await this.checkGate(route.row, route.contract, caller, organization);
 
         const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input);
+        trace.input = input;
 
         // tenant_id is always known here -- it's the api's own owning tenant (or an operator's
         // explicit override, resolveEffectiveTenantId) -- regardless of whether the caller is.
@@ -779,6 +866,7 @@ export class ApiGateway {
         const effectiveTenantId = organization === target.tenantId
             ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
             : organization;
+        trace.organizationId = effectiveTenantId;
         const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
 
         // The agent surface: a destructive call made by an api token (never by a signed-in person's

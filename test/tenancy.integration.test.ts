@@ -7,7 +7,7 @@
  * checked against identity.membership every time (gateway.ts callOrganization). These tests stand
  * three organizations side by side and prove none sees another's rows.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
@@ -76,6 +76,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
         await broker.loadDomain('identity', {}, { resolve: resolveHandler });
         await broker.loadDomain('serve.api', {}, { resolve: resolveHandler });
         await broker.loadDomain('serve.expose', {}, { resolve: resolveHandler });
+        await broker.loadDomain('serve.activity', {}, { resolve: resolveHandler });
         await broker.call('identity.role.ensureBuiltins', {});
 
         const user = async (key: string, roles: string[]): Promise<string> => (await broker.call('identity.user.create', {
@@ -157,4 +158,35 @@ describe('a member\'s call runs in their own organization, never another', () =>
         expect(res.status).toBe(200);
         expect((await res.json() as { organizations: { name: string }[] }).organizations.map((o) => o.name)).toEqual(['Peera']);
     });
+
+    // Last: it changes Ada's password.
+    it('keeps an activity log: changes and refusals, who and in which organization, never a password', async () => {
+        // A refusal (Ada naming an organization she is not in) and a change (Ada setting her
+        // password -- destructive, with a secret in it).
+        await repos('ada', orgId.platform);
+        const res = await fetch(`${ORIGIN}/api/identity/password`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token.ada}` },
+            body: JSON.stringify({ currentPassword: PASSWORD, password: 'a-brand-new-password-34' }),
+        });
+        expect(res.status).toBe(200);
+
+        const rows = await vi.waitFor(async () => {
+            const found = await broker.call('serve.activity.find', { query: {}, limit: 100 });
+            if (!found.some((r) => r.contract === 'identity.user.setPassword') || !found.some((r) => r.outcome === 'refused')) throw new Error('not yet');
+            return found;
+        }, { timeout: 5000, interval: 100 });
+
+        const refused = rows.find((r) => r.outcome === 'refused' && r.contract === 'serve.repo.find');
+        expect(refused?.actor.userId).not.toBe('');
+        const change = rows.find((r) => r.contract === 'identity.user.setPassword');
+        expect(change).toMatchObject({ outcome: 'ok' });
+        expect(change?.input).toContain('[redacted]');
+        expect(change?.input).not.toContain('a-brand-new-password-34');
+        expect(change?.input).not.toContain(PASSWORD);
+        expect(change?.ip).not.toBe('');
+        // Reads that succeed are not kept.
+        expect(rows.some((r) => r.contract === 'serve.repo.find' && r.outcome === 'ok')).toBe(false);
+    });
+
 });
