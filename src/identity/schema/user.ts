@@ -8,4 +8,5 @@ export const userSchema = z.object({
   provisional: z.boolean().optional().describe('A provisional account can do exactly one thing: set its own password'),
   suspendedAt: z.coerce.date().optional().describe('When the user was suspended'),
   suspendedReason: z.string().optional().describe('Reason for suspension'),
+  emailVerifiedAt: z.coerce.date().optional().describe('When the account proved it reads its email address (identity.user.verify_complete)'),
 }).describe('A person or a machine that can hold a ticket; every action internal');

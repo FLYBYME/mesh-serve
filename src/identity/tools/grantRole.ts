@@ -2,6 +2,7 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { GrantRoleInput, GrantRoleOutput } from '../contracts/user.contract.js';
+import { findUserByEmail } from '../methods/findByEmail.js';
 
 export async function grantRole(
     input: GrantRoleInput,
@@ -17,7 +18,7 @@ export async function grantRole(
 
     const user = input.userId !== undefined
         ? await ctx.db('identity.user').resolve({ id: input.userId })
-        : await ctx.db('identity.user').findOne({ query: { email: input.email } });
+        : await findUserByEmail(ctx, input.email ?? '');
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'NOT_FOUND', status: 404 });
     }

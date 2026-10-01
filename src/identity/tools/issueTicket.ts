@@ -3,6 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/ticket.contract.js';
 import { verifyPassword, issuedToken } from '../methods/hash.js';
+import { findUserByEmail } from '../methods/findByEmail.js';
 
 const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -10,7 +11,7 @@ export async function issueTicket(
     input: IssueInput,
     ctx: IServiceContext
 ): Promise<IssueOutput> {
-    const user = await ctx.db('identity.user').findOne({ query: { email: input.email } });
+    const user = await findUserByEmail(ctx, input.email);
     if (user === undefined || !(await verifyPassword(input.password, user.passwordHash ?? ''))) {
         throw new MeshError({ message: 'Invalid email or password.', code: 'INVALID_CREDENTIALS', status: 401 });
     }
