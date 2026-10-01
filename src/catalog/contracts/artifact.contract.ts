@@ -300,3 +300,52 @@ export const artifactWatchReleaseContract = defineContract({
 });
 
 export type WatchReleaseOutput = z.infer<typeof artifactWatchReleaseContract.outputSchema>;
+
+const pruneOutputSchema = z.object({
+    dryRun: z.boolean(),
+    kept: z.number().int().describe('Builds whose files stay in the database'),
+    removed: z.number().int().describe('Builds whose files were (or, dry run, would be) removed'),
+    files: z.number().int(),
+    bytes: z.number().int(),
+});
+export type PruneArtifactsOutput = z.infer<typeof pruneOutputSchema>;
+
+/**
+ * Removes stored build files nothing needs: not pinned, not among a part's newest builds or a
+ * composition's newest releases, not just built (methods/artifactRetention.ts). The records stay.
+ * Found needed 2026-10-01: build files were the largest thing in a full 512 MB database.
+ */
+export const artifactPruneContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'prune',
+    description: 'Removes the stored files of builds nothing needs -- keeps every pinned build, each part\'s newest 3, every build in each composition\'s newest 3 releases, and anything built in the last day. Records stay. dryRun reports without removing.',
+    inputSchema: z.object({ dryRun: z.boolean().optional().describe('Report what would go, remove nothing') }),
+    outputSchema: pruneOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/prune' },
+    destructive: true,
+    dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
+    filePath: 'src/catalog/tools/pruneArtifacts.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.dryRun ? 'would remove' : 'removed'} ${o.removed} builds (${Math.round(o.bytes / 1e6)} MB), kept ${o.kept}`,
+    timeout: 300_000,
+});
+
+/** The same, once a day, on the leader. */
+export const artifactPruneDailyContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'pruneDaily',
+    description: 'Runs serve.artifact.prune every ARTIFACT_PRUNE_INTERVAL_MS (default 24 h).',
+    inputSchema: z.object({}),
+    outputSchema: pruneOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/prune-daily' },
+    destructive: true,
+    leaderScoped: true,
+    dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
+    filePath: 'src/catalog/tools/pruneArtifacts.ts',
+    concurrency: 'interval',
+    intervalMs: Number(process.env.ARTIFACT_PRUNE_INTERVAL_MS ?? 24 * 3600_000),
+    permissions: ['operator'],
+    print: (o) => `removed ${o.removed} builds (${Math.round(o.bytes / 1e6)} MB)`,
+    timeout: 300_000,
+});

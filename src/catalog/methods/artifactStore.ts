@@ -48,6 +48,29 @@ export async function storeArtifact(broker: IServiceBroker, hash: string, assetP
     return written;
 }
 
+/** Every stored build's hash, with how many files and bytes it holds in the database. */
+export async function storedBuilds(broker: IServiceBroker): Promise<Map<string, { files: number; bytes: number }>> {
+    const bucket = bucketOf(broker);
+    if (!bucket) throw new Error('no database on this node to read stored builds from');
+    const out = new Map<string, { files: number; bytes: number }>();
+    for (const f of await bucket.find({}, { projection: { length: 1, 'metadata.hash': 1 } }).toArray()) {
+        const hash: unknown = f.metadata?.hash;
+        if (typeof hash !== 'string') continue;
+        const cur = out.get(hash) ?? { files: 0, bytes: 0 };
+        out.set(hash, { files: cur.files + 1, bytes: cur.bytes + f.length });
+    }
+    return out;
+}
+
+/** Deletes one build's files from the database (its record is the caller's). Returns how many. */
+export async function dropStoredBuild(broker: IServiceBroker, hash: string): Promise<number> {
+    const bucket = bucketOf(broker);
+    if (!bucket) throw new Error('no database on this node to drop a build from');
+    const files = await bucket.find({ 'metadata.hash': hash }, { projection: { _id: 1 } }).toArray();
+    for (const f of files) await bucket.delete(f._id);
+    return files.length;
+}
+
 /**
  * Writes a build's files from the database onto this node's disk -- checked, file by file, against
  * the sha384 integrity its record carries, so what comes back is exactly what was built. Written
