@@ -323,6 +323,8 @@ export const artifactPruneContract = defineContract({
     outputSchema: pruneOutputSchema,
     rest: { method: 'POST', path: '/artifacts/prune' },
     destructive: true,
+    // Offered to operators through an api: without it the contract is internal and refused there.
+    visibility: 'public',
     dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
     filePath: 'src/catalog/tools/pruneArtifacts.ts',
     concurrency: 'on-demand',
