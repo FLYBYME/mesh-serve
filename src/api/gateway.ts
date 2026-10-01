@@ -37,6 +37,15 @@ interface Caller {
     readonly roles: readonly string[];
 }
 
+/** The organization a request names: the `x-organization` header, or `?organization=` (an EventSource cannot set headers). */
+export function namedOrganization(req: Pick<http.IncomingMessage, 'headers' | 'url'>): string | undefined {
+    const header = req.headers['x-organization'];
+    const fromHeader = Array.isArray(header) ? header[0] : header;
+    const value = fromHeader ?? new URL(req.url ?? '/', 'http://localhost').searchParams.get('organization') ?? undefined;
+    const trimmed = value?.trim();
+    return trimmed === undefined || trimmed === '' ? undefined : trimmed;
+}
+
 /** The JSON Schema `type`s one property of an input schema allows, through `anyOf`/`oneOf` (an optional or nullable field). */
 function typesOf(property: unknown): string[] {
     if (typeof property !== 'object' || property === null) return [];
@@ -106,6 +115,8 @@ export class ApiGateway {
     private readonly callers = new Recent<Caller | undefined>(15_000);
     /** Whether a user holds a role in a tenant: a revoked role still works for up to 15 s. */
     private readonly roles = new Recent<boolean>(15_000);
+    /** Each account's organizations (callOrganization), as briefly as a role. */
+    private readonly memberOf = new Recent<readonly string[]>(15_000);
     /** Each target's descriptor, built once rather than on every request (it hashes every schema). */
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
     private readonly unsubscribes: (() => void)[] = [];
@@ -282,6 +293,49 @@ export class ApiGateway {
     }
 
     /** One user's role in one tenant, as identity answers it -- reused for 15 s (see `roles`). */
+    /**
+     * The organization a call runs in -- the boundary between customers.
+     *
+     * Until 2026-10-01 every call ran in the api's own organization (the platform's), whoever made
+     * it: only `role: operator` on every member page's exposure row kept a customer from reading the
+     * platform's zones and mail. Now:
+     * - anonymous, or a public call (no gate on the row or the contract): the api's own, as before
+     *   -- a public call acts for the api's owner whoever makes it (login, the contact form);
+     * - an operator: the api's own, as before (resolveEffectiveTenantId may still redirect it);
+     * - anyone else: one of their own organizations -- named by the `x-organization` header (or
+     *   `?organization=`, for an EventSource, which cannot set headers), or their only one --
+     *   checked against identity.membership on every call. Never one they are not a member of, and
+     *   never the api's own unless they are a member of it.
+     */
+    private async callOrganization(req: http.IncomingMessage, gated: boolean, caller: Caller | undefined, apiTenantId: string): Promise<string> {
+        if (caller === undefined || !gated) return apiTenantId;
+        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) return apiTenantId;
+        const theirs = await this.organizationsOf(caller.userId);
+        const named = namedOrganization(req);
+        if (named !== undefined) {
+            if (!theirs.includes(named)) {
+                throw new MeshError({ message: 'You are not a member of that organization.', code: 'FORBIDDEN', status: 403 });
+            }
+            return named;
+        }
+        if (theirs.length === 1) return theirs[0]!;
+        if (theirs.length === 0) {
+            throw new MeshError({ message: 'This account belongs to no organization yet.', code: 'FORBIDDEN', status: 403 });
+        }
+        throw new MeshError({
+            message: 'This account belongs to several organizations: name one with the x-organization header.',
+            code: 'BAD_REQUEST', status: 400,
+        });
+    }
+
+    /** The organizations an account is a member of, by id; kept as briefly as a role answer. */
+    private organizationsOf(userId: string): Promise<readonly string[]> {
+        return this.memberOf.get(userId, async () => {
+            const who = await this.broker.call('identity.whoami', {}, { meta: { user: { id: userId, tenant_id: '', organizationId: '' } } });
+            return who.organizations.map((o) => o.organizationId);
+        });
+    }
+
     private holdsRole(userId: string, role: string, tenantId: string): Promise<boolean> {
         return this.roles.get(`${userId}\u0000${role}\u0000${tenantId}`, async () => {
             // The same meta checkGate always sent -- see its comment for why organizationId too.
@@ -600,7 +654,12 @@ export class ApiGateway {
         // event row names the same role (`operator`), and asking identity again for each, one after
         // another, held the stream's first byte back ~16 s with 55 events on api.surfdns.net
         // (2026-09-29) -- a page that counted itself live missed everything written in that time.
-        const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, target.tenantId);
+        // A member's stream is their own organization's, as a member's call is (callOrganization);
+        // anonymous and operators keep the api's own.
+        const scopeOf = (who: Caller | undefined): Promise<string> => this.callOrganization(req, true, who, target.tenantId)
+            .catch((err: unknown) => { if (who === undefined) return target.tenantId; throw err; });
+        const scope = await scopeOf(caller);
+        const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, scope);
 
         for (const name of wanted ?? []) {
             if (!rows.some((row) => row.contract === name)) omitted.push({ name, reason: 'not streamed on this api' });
@@ -632,9 +691,11 @@ export class ApiGateway {
                 : new MeshError({ message: `Nothing here can be streamed to you. ${reasons}`, code: 'FORBIDDEN', status: 403 });
         }
 
+        // The scope is re-read on every recheck: a member removed from the organization stops
+        // receiving its events on the next beat (the recheck then fails, and the stream ends).
         const subscriberFor = async (who: Caller | undefined): Promise<Subscriber> => ({
-            scope: target.tenantId,
-            operator: who !== undefined && await holds(who, 'operator'),
+            scope: await scopeOf(who),
+            operator: who !== undefined && await this.holdsRole(who.userId, 'operator', target.tenantId),
         });
 
         const stream = openStream({
@@ -650,7 +711,12 @@ export class ApiGateway {
             recheck: async () => {
                 const current = await this.resolveCaller(req);
                 if (caller !== undefined && current === undefined) return undefined;
-                return subscriberFor(current);
+                // Refused now (no longer a member of the organization it streams): end it. Any
+                // other failure stays a blip, which openStream rides out.
+                return subscriberFor(current).catch((err: unknown) => {
+                    if (isMeshError(err) && (err.status === 403 || err.status === 400)) return undefined;
+                    throw err;
+                });
             },
         });
         this.streams.add(stream);
@@ -687,7 +753,9 @@ export class ApiGateway {
         }
 
         const caller = await this.resolveCaller(req);
-        await this.checkGate(route.row, route.contract, caller, target.tenantId);
+        const gated = route.contract.permissions.length > 0 || route.row.role !== undefined || route.row.permission !== undefined;
+        const organization = await this.callOrganization(req, gated, caller, target.tenantId);
+        await this.checkGate(route.row, route.contract, caller, organization);
 
         const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input);
 
@@ -705,7 +773,12 @@ export class ApiGateway {
         // and resolveCallerScope (DatabaseMiddleware) only ever reads the field a collection's own
         // scopedBy names -- an api-wide meta that only ever set tenant_id left membership as the one
         // collection this gateway's automatic scoping could never satisfy.
-        const effectiveTenantId = await this.resolveEffectiveTenantId(caller, target.tenantId, input);
+        // A member's call runs in their own organization (callOrganization); only a call running in
+        // the api's own tenant -- anonymous, public, or an operator's -- may be redirected by an
+        // operator's explicit tenantId.
+        const effectiveTenantId = organization === target.tenantId
+            ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
+            : organization;
         const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
 
         // The agent surface: a destructive call made by an api token (never by a signed-in person's

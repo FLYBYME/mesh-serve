@@ -15,8 +15,11 @@ type RoleType = z.infer<typeof roleCrud.baseSchema>;
  */
 export const BuiltinRoles: readonly RoleType[] = [
     { key: 'operator', name: 'Operator', scope: 'global', builtin: true, inherits: [], permissions: ['identity.*', 'serve.*'] },
-    { key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: [], permissions: [] },
-    { key: 'admin', name: 'Admin', scope: 'organization', builtin: true, inherits: [], permissions: [] },
+    // Each holds everything the one below it does: an exposure row asking for `member` admits an
+    // organization's admins and owner too (2026-10-01, when member calls began running in the
+    // member's own organization).
+    { key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: ['admin'], permissions: [] },
+    { key: 'admin', name: 'Admin', scope: 'organization', builtin: true, inherits: ['member'], permissions: [] },
     { key: 'member', name: 'Member', scope: 'organization', builtin: true, inherits: [], permissions: [] },
 ];
 
