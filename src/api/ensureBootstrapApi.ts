@@ -53,6 +53,10 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     // Grants/revokes a cluster-scoped role (e.g. the `member`/`admin` a site's own gates check) --
     // distinct from org membership above, and the only api-reachable way to change one.
     { contract: 'identity.user.grantRole', role: 'operator' },
+    // The operator's account and organization lists: identity.user's own find is internal (a row
+    // carries its password hash), so accounts come through list, which never reads it out.
+    { contract: 'identity.user.list', role: 'operator' },
+    { contract: 'identity.organization.find', role: 'operator' },
     { contract: 'serve.expose.add', role: 'operator' },
     { contract: 'serve.expose.remove', role: 'operator' },
 

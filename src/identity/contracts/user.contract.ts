@@ -109,5 +109,42 @@ export const userGrantRoleContract = defineContract({
     print: (o) => `${o.userId}: ${o.roles.join(', ') || 'no roles'}`,
 });
 
+export const listUsersInputSchema = z.object({}).describe('No input; every account on the platform');
+
+export const listUsersOutputSchema = z.object({
+    users: z.array(z.object({
+        id: z.string().describe('The account\'s id'),
+        email: z.string().describe('The account\'s email'),
+        displayName: z.string().describe('The account\'s display name'),
+        roles: z.array(z.string()).describe('Cluster-scoped roles held directly on the account'),
+        provisional: z.boolean().describe('True until the account\'s owner sets a password'),
+        suspendedAt: z.coerce.date().optional().describe('When the account was suspended, if it is'),
+        createdAt: z.coerce.date().optional().describe('When the account was made'),
+        organizations: z.array(z.object({
+            organizationId: z.string().describe('The organization\'s id'),
+            name: z.string().describe('The organization\'s display name'),
+            roleKey: z.string().describe('The account\'s role in it'),
+        })).describe('Every organization the account belongs to'),
+    })).describe('Every account, oldest first'),
+}).describe('The platform\'s accounts');
+
+export const userListContract = defineContract({
+    domain: 'identity.user',
+    action: 'list',
+    // identity.user's own crud is internal because a row carries its password hash; this is the
+    // operator's view of the same accounts with that field never read out.
+    description: 'Every account on the platform and the organizations each belongs to (operator).',
+    inputSchema: listUsersInputSchema,
+    outputSchema: listUsersOutputSchema,
+    rest: { method: 'GET', path: '/identity/users' },
+    dependencies: ['identity.membership', 'identity.organization'],
+    visibility: 'public',
+    filePath: 'src/identity/tools/listUsers.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => o.users.map((u) => `${u.email}  ${u.organizations.map((g) => `${g.name}:${g.roleKey}`).join(', ')}`).join('\n'),
+});
+
+export type ListUsersInput = z.infer<typeof userListContract.inputSchema>;
+export type ListUsersOutput = z.infer<typeof userListContract.outputSchema>;
+
 export type GrantRoleInput = z.infer<typeof userGrantRoleContract.inputSchema>;
 export type GrantRoleOutput = z.infer<typeof userGrantRoleContract.outputSchema>;

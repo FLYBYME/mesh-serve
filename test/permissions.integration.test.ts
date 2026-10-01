@@ -160,6 +160,19 @@ describe('a contract permission floor an expose row cannot lower', () => {
         expect(res.status).toBe(200);
     });
 
+    it('lists accounts to an operator only, and never their password hashes', async () => {
+        const refused = await fetch(`${ORIGIN}/api/identity/users`, { headers: { authorization: `Bearer ${memberToken}` } });
+        expect(refused.status).toBe(403);
+
+        const res = await fetch(`${ORIGIN}/api/identity/users`, { headers: { authorization: `Bearer ${operatorToken}` } });
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).not.toMatch(/passwordHash/);
+        const { users } = JSON.parse(text) as { users: { email: string; organizations: { roleKey: string }[] }[] };
+        const member = users.find((u) => u.email === 'member@perm.invalid');
+        expect(member?.organizations.map((o) => o.roleKey)).toEqual(['member']);
+    });
+
     it('leaves a contract that declares no floor genuinely public', async () => {
         // identity.ticket.issue is how you log in; it must stay reachable with no credentials.
         const res = await fetch(`${ORIGIN}/api/identity/ticket`, {
