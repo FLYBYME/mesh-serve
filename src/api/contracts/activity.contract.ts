@@ -1,4 +1,4 @@
-import { defineCrud } from '@flybyme/mesh';
+import { defineContract, defineCrud, z } from '@flybyme/mesh';
 
 import { activitySchema } from '../schema/activity.js';
 
@@ -18,3 +18,41 @@ export const activityCrud = defineCrud('serve.activity', activitySchema, {
     },
     filePath: 'src/api/contracts/activity.contract.ts',
 });
+
+export const activityMineInputSchema = z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50).describe('How many, newest first'),
+    before: z.coerce.date().optional().describe('Only rows before this time -- the next page: the last row\'s `at`'),
+}).describe('My organization\'s activity');
+
+export const activityMineOutputSchema = z.object({
+    rows: z.array(z.object({
+        at: z.coerce.date(),
+        contract: z.string(),
+        outcome: z.enum(['ok', 'refused', 'failed', 'held']),
+        actor: z.object({ userId: z.string(), viaApiToken: z.boolean(), agentName: z.string().optional() }),
+        input: z.string(),
+        error: z.string().optional(),
+    })),
+}).describe('What was changed in my organization, by whom, newest first -- addresses and clients left out');
+
+/**
+ * A customer's own activity: what was done in their organization -- by their people, their agents'
+ * tokens, or the platform's operators acting for them. The organization is the one the call runs
+ * in (the gateway's, membership-checked), never one named in the input; where the call came from
+ * (address, user agent) stays the operator's.
+ */
+export const activityMineContract = defineContract({
+    domain: 'serve.activity',
+    action: 'mine',
+    description: 'What was changed in my organization, by whom, newest first.',
+    inputSchema: activityMineInputSchema,
+    outputSchema: activityMineOutputSchema,
+    rest: { method: 'GET', path: '/activity/mine' },
+    visibility: 'public',
+    dependencies: ['serve.activity'],
+    filePath: 'src/api/tools/activityMine.ts', concurrency: 'on-demand', permissions: [],
+    print: (o) => o.rows.map((r) => `${r.at.toISOString()} ${r.outcome} ${r.contract}`).join('\n'),
+});
+
+export type ActivityMineInput = z.infer<typeof activityMineContract.inputSchema>;
+export type ActivityMineOutput = z.infer<typeof activityMineContract.outputSchema>;

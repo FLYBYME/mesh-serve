@@ -187,6 +187,30 @@ describe('a member\'s call runs in their own organization, never another', () =>
         expect(change?.ip).not.toBe('');
         // Reads that succeed are not kept.
         expect(rows.some((r) => r.contract === 'serve.repo.find' && r.outcome === 'ok')).toBe(false);
+
+        // A customer sees their own organization's activity and their own actions -- nobody else's,
+        // and never where a call came from.
+        const api = await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
+        if (api === undefined) throw new Error('no api');
+        await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.activity.mine', role: 'member' }, { meta: { tenant_id: orgId.platform } });
+        // Someone else's change, in another organization: Ada must not see it.
+        await fetch(`${ORIGIN}/api/identity/password`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${token.two}` },
+            body: JSON.stringify({ currentPassword: PASSWORD, password: 'twos-new-password-56' }),
+        });
+        const mine = await vi.waitFor(async () => {
+            const r = await fetch(`${ORIGIN}/api/activity/mine`, { headers: { authorization: `Bearer ${token.ada}` } });
+            expect(r.status).toBe(200);
+            const body = await r.json() as { rows: { contract: string; outcome: string; actor: { userId: string } }[] };
+            if (!body.rows.some((x) => x.contract === 'identity.user.setPassword')) throw new Error('not yet');
+            return body.rows;
+        }, { timeout: 5000, interval: 100 });
+        const adaId = rows.find((r) => r.contract === 'identity.user.setPassword')?.actor.userId;
+        expect(mine.every((x) => x.actor.userId === adaId)).toBe(true);
+        // Her password change, and her refusals from the earlier tests (two organizations not hers).
+        expect([...new Set(mine.map((x) => x.outcome))].sort()).toEqual(['ok', 'refused']);
+        expect(JSON.stringify(mine)).not.toMatch(/"ip"|forwardedFor|userAgent/);
     });
 
 });
