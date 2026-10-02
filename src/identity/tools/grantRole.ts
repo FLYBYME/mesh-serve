@@ -25,6 +25,19 @@ export async function grantRole(
 
     const has = user.roles.includes(input.role);
     const changed = input.granted ? !has : has;
+
+    // Nobody can take the platform away from everyone, by mistake or one click on a roles page: an
+    // operator never drops their own operator role (another operator must), and the last
+    // operator's role is never revoked.
+    if (!input.granted && has && input.role === 'operator') {
+        if (ctx.meta?.user?.id === user.id) {
+            throw new MeshError({ message: 'You cannot remove your own operator role: another operator has to.', code: 'FORBIDDEN', status: 403 });
+        }
+        const operators = await ctx.db('identity.user').find({ query: { roles: 'operator' }, limit: 2 });
+        if (operators.filter((o) => o.id !== user.id).length === 0) {
+            throw new MeshError({ message: 'That is the last operator: grant the role to someone else first.', code: 'FORBIDDEN', status: 403 });
+        }
+    }
     const roles = input.granted
         ? (has ? user.roles : [...user.roles, input.role])
         : user.roles.filter((r) => r !== input.role);

@@ -148,6 +148,24 @@ describe('password reset and email verification', () => {
         expect((await linksFor('ada@reset.invalid')).filter((l) => l.template === 'password_changed')).toHaveLength(2);
     });
 
+    it('the operator role: never dropped by its holder, never taken from the last one', async () => {
+        const op = (await broker.call('identity.user.find', { query: { email: 'op@reset.invalid' } }))[0];
+        const opId = op?.id ?? '';
+        const asOp = { meta: { user: { id: opId, tenant_id: platformId } } };
+        const asAda = { meta: { user: { id: userId, tenant_id: platformId } } };
+
+        // Op is the only operator: nobody can take it, not even another account acting.
+        await expect(broker.call('identity.user.grantRole', { userId: opId, role: 'operator', granted: false }, asAda))
+            .rejects.toMatchObject({ status: 403, message: expect.stringContaining('last operator') });
+        // With a second operator, still not by Op's own hand.
+        await broker.call('identity.user.grantRole', { userId, role: 'operator' }, asOp);
+        await expect(broker.call('identity.user.grantRole', { userId: opId, role: 'operator', granted: false }, asOp))
+            .rejects.toMatchObject({ status: 403, message: expect.stringContaining('your own operator role') });
+        // By the other operator: allowed.
+        await expect(broker.call('identity.user.grantRole', { userId: opId, role: 'operator', granted: false }, asAda))
+            .resolves.toMatchObject({ changed: true });
+    });
+
     it('stops sending after a few requests an hour, still answering the same', async () => {
         for (let i = 0; i < 5; i++) await broker.call('identity.user.reset_request', { email: 'ada@reset.invalid' });
         const resets = (await linksFor('ada@reset.invalid')).filter((l) => l.template === 'reset_password');
