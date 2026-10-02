@@ -3,6 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { SetPasswordInput, SetPasswordOutput } from '../contracts/user.contract.js';
 import { hashPassword, verifyPassword } from '../methods/hash.js';
+import { notifyPasswordChanged } from './userToken.js';
 
 export async function setPassword(
     input: SetPasswordInput,
@@ -34,6 +35,8 @@ export async function setPassword(
     });
 
     ctx.logger.debug(`set password for user "${userId}"`, { id: userId, claimed: wasProvisional });
+    // Claiming an account sets its first password: nothing was changed, so nothing to report.
+    if (!wasProvisional) await notifyPasswordChanged(ctx, user, 'changed');
 
     return { ok: true, claimed: wasProvisional };
 }

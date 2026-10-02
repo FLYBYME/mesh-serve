@@ -137,6 +137,15 @@ describe('password reset and email verification', () => {
         await expect(broker.call('identity.ticket.issue', { email: 'ada@reset.invalid', password: 'first-password-1234' })).rejects.toBeDefined();
         await expect(broker.call('identity.ticket.issue', { email: 'ada@reset.invalid', password: 'second-password-5678' })).resolves.toMatchObject({ userId });
         await expect(broker.call('identity.user.reset_complete', { token: reset?.token ?? '', password: 'third-password-9012' })).rejects.toMatchObject({ status: 400 });
+        // And the account is told, once -- the second, refused attempt changed nothing.
+        expect((await linksFor('ada@reset.invalid')).filter((l) => l.template === 'password_changed')).toHaveLength(1);
+    });
+
+    it('changing your own password tells you too', async () => {
+        const ticket = await broker.call('identity.ticket.issue', { email: 'ada@reset.invalid', password: 'second-password-5678' });
+        const as = { meta: { user: { id: userId, tenant_id: '' }, ticket: ticket.token } };
+        await broker.call('identity.user.setPassword', { currentPassword: 'second-password-5678', password: 'fourth-password-3456' }, as);
+        expect((await linksFor('ada@reset.invalid')).filter((l) => l.template === 'password_changed')).toHaveLength(2);
     });
 
     it('stops sending after a few requests an hour, still answering the same', async () => {

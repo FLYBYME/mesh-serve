@@ -59,6 +59,34 @@ async function issue(ctx: IServiceContext, user: { id: string; email: string; di
     return true;
 }
 
+/**
+ * Tells an account its password was changed -- by itself (setPassword) or by a reset link -- so a
+ * change its owner did not make is noticed. Queued like the links; never fails the change it
+ * reports: a mail problem is logged, the password stays set.
+ */
+export async function notifyPasswordChanged(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, how: 'changed' | 'reset'): Promise<void> {
+    try {
+        const tenantId = await mailTenant(ctx);
+        if (tenantId === undefined) {
+            ctx.logger.warn(`[identity] password ${how} for "${user.id}", but there is no organization to send the notice as (IDENTITY_MAIL_TENANT)`);
+            return;
+        }
+        await ctx.call('serve.queue.create', {
+            tenantId,
+            contract: MAIL_CONTRACT,
+            payload: {
+                templateKey: 'password_changed',
+                to: user.email,
+                vars: { name: user.displayName, how, url: `${LINK_BASE.replace(/\/+$/, '')}/forgot-password` },
+            },
+            maxAttempts: 5,
+            timeoutMs: 30_000,
+        }, { meta: { user: { id: '', tenant_id: tenantId } } });
+    } catch (err) {
+        ctx.logger.error(`[identity] the password-changed notice for "${user.id}" was not queued`, err);
+    }
+}
+
 /** The address's recent requests, for the rate limit -- any purpose. */
 async function recentRequests(ctx: IServiceContext, email: string): Promise<Date[]> {
     const rows = await ctx.db('identity.userToken').find({ query: { email }, sort: '-createdAt', limit: 10 });
@@ -112,6 +140,7 @@ export async function reset_complete(input: ResetCompleteInput, ctx: IServiceCon
     }
     if (signedOutSessions > 0) ctx.emit('identity.user.signed_out', { userId: user.id });
     ctx.logger.info(`[identity] password reset for "${user.id}"; ${signedOutSessions} sessions ended`);
+    await notifyPasswordChanged(ctx, user, 'reset');
     return { ok: true, signedOutSessions };
 }
 
