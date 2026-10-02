@@ -29,6 +29,16 @@ describe('resolveMetricsPort', () => {
         expect(resolveMetricsPort(undefined, ' ')).toBeUndefined();
     });
 
+    it('a node bound to a private (fleet) address serves metrics at wsPort + 3000 unless told otherwise; public or loopback stays off', () => {
+        expect(resolveMetricsPort(undefined, undefined, { host: '10.10.0.3', wsPort: 6005 })).toBe(9005);
+        expect(resolveMetricsPort(undefined, undefined, { host: '192.168.1.4', wsPort: 6005 })).toBe(9005);
+        expect(resolveMetricsPort(undefined, 'off', { host: '10.10.0.3', wsPort: 6005 })).toBeUndefined();
+        expect(resolveMetricsPort(undefined, '9100', { host: '10.10.0.3', wsPort: 6005 })).toBe(9100);
+        expect(resolveMetricsPort(undefined, undefined, { host: '0.0.0.0', wsPort: 6005 })).toBeUndefined();
+        expect(resolveMetricsPort(undefined, undefined, { host: '51.79.1.2', wsPort: 6005 })).toBeUndefined();
+        expect(resolveMetricsPort(undefined, undefined, { host: '127.0.0.1', wsPort: 6005 })).toBeUndefined();
+    });
+
     it('refuses something that is not a port before anything binds', () => {
         expect(() => resolveMetricsPort(undefined, 'nine')).toThrow(/MESH_METRICS_PORT/);
         expect(() => resolveMetricsPort(70000, undefined)).toThrow(/--metricsPort/);

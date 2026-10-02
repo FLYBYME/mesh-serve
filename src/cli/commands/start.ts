@@ -97,10 +97,19 @@ export class StartCommand extends BaseCommand {
         // the start outright rather than leaving a node running that nobody can see. Same address
         // as the mesh transport: on the fleet that is the node's private address, and there is no
         // auth on this port.
-        const metricsPort = resolveMetricsPort(args.metricsPort);
+        const metricsPort = resolveMetricsPort(args.metricsPort, process.env.MESH_METRICS_PORT, { host: args.host, wsPort: args.wsPort });
+        // Asked for (flag or env): a port that cannot bind stops the start. Only defaulted (a fleet
+        // node's wsPort + 3000): a busy port is said and the node runs on -- an upgrade must never
+        // fail a node over its metrics.
+        const askedForMetrics = args.metricsPort !== undefined || (process.env.MESH_METRICS_PORT ?? '').trim() !== '';
         if (metricsPort !== undefined) {
-            const metrics = await startMetricsServer({ port: metricsPort, host: args.host });
-            logger.info(`Metrics at http://${metrics.host}:${metrics.port}/metrics`);
+            try {
+                const metrics = await startMetricsServer({ port: metricsPort, host: args.host });
+                logger.info(`Metrics at http://${metrics.host}:${metrics.port}/metrics`);
+            } catch (err) {
+                if (askedForMetrics) throw err;
+                logger.warn(`No metrics: port ${metricsPort} (wsPort + 3000) did not bind on ${args.host}: ${err instanceof Error ? err.message : String(err)}`);
+            }
         }
 
         const node = new MeshApp({

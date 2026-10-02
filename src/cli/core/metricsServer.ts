@@ -79,14 +79,32 @@ function isAddressInfo(value: unknown): value is AddressInfo {
     return typeof value === 'object' && value !== null && 'port' in value && typeof value.port === 'number';
 }
 
+/** A private IPv4 address (10/8, 172.16/12, 192.168/16): a fleet address, never the internet's. */
+export function isPrivateAddress(host: string): boolean {
+    const parts = host.split('.').map(Number);
+    if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+    const [a = -1, b = -1] = parts;
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
 /**
- * `--metricsPort`, else MESH_METRICS_PORT, else off. Checked before the node binds anything, like
- * --parts and --labels, so a typo fails before the node joins a cluster.
+ * `--metricsPort`, else MESH_METRICS_PORT (`off` turns it off), else -- on a node bound to a private
+ * address -- `wsPort + 3000`, the pods' own convention; else off. Until 2026-10-02 the default was
+ * off, and the host nodes (edge1, ns1, ns2, surf, compute1) served no metrics: each needed a line
+ * in its node.env, and only SSH could put it there. A private bind is the fleet's, and so is the
+ * metrics port (no auth on it): a public or loopback bind keeps it off. Checked before the node
+ * binds anything, like --parts and --labels, so a typo fails before the node joins a cluster.
  */
-export function resolveMetricsPort(flag: number | undefined, env: string | undefined = process.env.MESH_METRICS_PORT): number | undefined {
+export function resolveMetricsPort(
+    flag: number | undefined,
+    env: string | undefined = process.env.MESH_METRICS_PORT,
+    bind?: { host: string; wsPort: number },
+): number | undefined {
     if (flag !== undefined) return checkedPort(flag, '--metricsPort');
-    if (env === undefined || env.trim() === '') return undefined;
-    return checkedPort(Number(env), `MESH_METRICS_PORT ("${env}")`);
+    if (env !== undefined && env.trim().toLowerCase() === 'off') return undefined;
+    if (env !== undefined && env.trim() !== '') return checkedPort(Number(env), `MESH_METRICS_PORT ("${env}")`);
+    if (bind !== undefined && isPrivateAddress(bind.host)) return checkedPort(bind.wsPort + 3000, '--wsPort + 3000');
+    return undefined;
 }
 
 function checkedPort(port: number, source: string): number {
