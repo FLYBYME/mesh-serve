@@ -115,6 +115,8 @@ describe('password reset and email verification', () => {
         const user = await broker.call('identity.user.get', { id: userId });
         expect(user.emailVerifiedAt).toBeInstanceOf(Date);
         await expect(broker.call('identity.user.verify_complete', { token: link?.token ?? '' })).rejects.toMatchObject({ status: 400 });
+        // Welcomed once, on the first verification.
+        expect((await linksFor('ada@reset.invalid')).filter((l) => l.template === 'welcome')).toHaveLength(1);
     });
 
     it('a reset request answers the same for a stranger, and sends nothing to them', async () => {

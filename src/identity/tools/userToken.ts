@@ -65,25 +65,29 @@ async function issue(ctx: IServiceContext, user: { id: string; email: string; di
  * reports: a mail problem is logged, the password stays set.
  */
 export async function notifyPasswordChanged(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, how: 'changed' | 'reset'): Promise<void> {
+    await queueNotice(ctx, user, 'password_changed', { how, url: `${LINK_BASE.replace(/\/+$/, '')}/forgot-password` });
+}
+
+/**
+ * A notice to an account (no link to prove anything): queued like the links, as the sending
+ * organization; never fails what it reports -- a mail problem is logged.
+ */
+async function queueNotice(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, templateKey: string, vars: Record<string, string>): Promise<void> {
     try {
         const tenantId = await mailTenant(ctx);
         if (tenantId === undefined) {
-            ctx.logger.warn(`[identity] password ${how} for "${user.id}", but there is no organization to send the notice as (IDENTITY_MAIL_TENANT)`);
+            ctx.logger.warn(`[identity] no ${templateKey} notice for "${user.id}": there is no organization to send it as (IDENTITY_MAIL_TENANT)`);
             return;
         }
         await ctx.call('serve.queue.create', {
             tenantId,
             contract: MAIL_CONTRACT,
-            payload: {
-                templateKey: 'password_changed',
-                to: user.email,
-                vars: { name: user.displayName, how, url: `${LINK_BASE.replace(/\/+$/, '')}/forgot-password` },
-            },
+            payload: { templateKey, to: user.email, vars: { name: user.displayName, ...vars } },
             maxAttempts: 5,
             timeoutMs: 30_000,
         }, { meta: { user: { id: '', tenant_id: tenantId } } });
     } catch (err) {
-        ctx.logger.error(`[identity] the password-changed notice for "${user.id}" was not queued`, err);
+        ctx.logger.error(`[identity] the ${templateKey} notice for "${user.id}" was not queued`, err);
     }
 }
 
@@ -164,7 +168,12 @@ export async function verify_complete(input: VerifyCompleteInput, ctx: IServiceC
     if (user === undefined || normalizeEmail(user.email) !== row.email) {
         throw new MeshError({ message: 'That link is not valid any more. Ask for a new one.', code: 'INVALID_TOKEN', status: 400 });
     }
-    if (user.emailVerifiedAt === undefined) await ctx.db('identity.user').update({ id: user.id, emailVerifiedAt: new Date() });
+    if (user.emailVerifiedAt === undefined) {
+        await ctx.db('identity.user').update({ id: user.id, emailVerifiedAt: new Date() });
+        // The first time only: the account is real now, so it is welcomed (mail's `welcome` template
+        // says what the account can do).
+        await queueNotice(ctx, user, 'welcome', { url: LINK_BASE.replace(/\/+$/, '') });
+    }
     return { ok: true, email: user.email };
 }
 
