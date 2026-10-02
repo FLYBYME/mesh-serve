@@ -86,6 +86,16 @@ describe('password reset and email verification', () => {
             .rejects.toBeDefined();
     });
 
+    it('a new account comes with its own organization, and owns it', async () => {
+        const orgs = await broker.call('identity.organization.find', { query: { ownerId: userId } });
+        expect(orgs).toHaveLength(1);
+        expect(orgs[0]?.name).toBe('Ada\'s organization');
+        expect(orgs[0]?.slug).toMatch(/^ada-[0-9a-f]{6}$/);
+        const orgId = orgs[0]?.id ?? '';
+        const members = await broker.call('identity.membership.find', { query: {} }, { meta: { user: { id: userId, tenant_id: orgId, organizationId: orgId } } });
+        expect(members.map((m) => ({ userId: m.userId, roleKey: m.roleKey }))).toEqual([{ userId, roleKey: 'owner' }]);
+    });
+
     it('registering queues a verification email, sent as the platform -- never inline', async () => {
         const links = await linksFor('ada@reset.invalid');
         expect(links.map((l) => l.template)).toEqual(['verify_email']);
