@@ -166,6 +166,30 @@ describe('password reset and email verification', () => {
             .resolves.toMatchObject({ changed: true });
     });
 
+    it('an operator manages any organization\'s people; an organization always keeps an owner', async () => {
+        const op = (await broker.call('identity.user.find', { query: { email: 'op@reset.invalid' } }))[0];
+        const opId = op?.id ?? '';
+        const adaOrg = (await broker.call('identity.organization.find', { query: { ownerId: userId } }))[0]?.id ?? '';
+        const asOp = { meta: { user: { id: opId, tenant_id: platformId } } };
+        const roster = async () => (await broker.call('identity.membership.find', { query: {} }, { meta: { user: { id: userId, tenant_id: adaOrg, organizationId: adaOrg } } }))
+            .map((m) => `${m.userId === userId ? 'ada' : 'op'}:${m.roleKey}`).sort();
+
+        // Called from the platform organization, it writes into Ada's -- not the caller's own.
+        await broker.call('identity.membership.assign', { userId: opId, organizationId: adaOrg, roleKey: 'member' }, asOp);
+        expect(await roster()).toEqual(['ada:owner', 'op:member']);
+
+        await expect(broker.call('identity.membership.assign', { userId, organizationId: adaOrg, roleKey: null }, asOp))
+            .rejects.toMatchObject({ status: 403, message: expect.stringContaining('only owner') });
+        await expect(broker.call('identity.membership.assign', { userId: opId, organizationId: adaOrg, roleKey: 'operator' }, asOp))
+            .rejects.toMatchObject({ status: 422 });
+
+        await broker.call('identity.membership.assign', { userId: opId, organizationId: adaOrg, roleKey: 'owner' }, asOp);
+        await broker.call('identity.membership.assign', { userId, organizationId: adaOrg, roleKey: 'member' }, asOp);
+        await broker.call('identity.membership.assign', { userId: opId, organizationId: adaOrg, roleKey: null }, asOp)
+            .then(() => { throw new Error('the last owner was removed'); }, (err: unknown) => expect(err).toMatchObject({ status: 403 }));
+        expect(await roster()).toEqual(['ada:member', 'op:owner']);
+    });
+
     it('stops sending after a few requests an hour, still answering the same', async () => {
         for (let i = 0; i < 5; i++) await broker.call('identity.user.reset_request', { email: 'ada@reset.invalid' });
         const resets = (await linksFor('ada@reset.invalid')).filter((l) => l.template === 'reset_password');

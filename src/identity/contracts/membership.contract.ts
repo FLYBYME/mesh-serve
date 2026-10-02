@@ -1,4 +1,4 @@
-import { defineCrud, MeshError, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, MeshError, z } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { membershipSchema } from '../schema/membership.js';
@@ -43,3 +43,39 @@ export const membershipCrud = defineCrud('identity.membership', membershipSchema
 });
 
 export type Membership = z.infer<typeof membershipCrud.outputSchema>;
+
+export const membershipAssignInputSchema = z.object({
+    userId: z.string().min(1).describe('The account'),
+    organizationId: z.string().min(1).describe('The organization'),
+    roleKey: z.string().min(1).nullable().describe('An organization-scoped role key (e.g. owner, member), or null to take the account out of the organization'),
+}).describe('Put an account in an organization with a role, change its role, or take it out');
+
+export const membershipAssignOutputSchema = z.object({
+    userId: z.string(),
+    organizationId: z.string(),
+    roleKey: z.string().nullable().describe('The role afterwards; null when no longer a member'),
+    changed: z.boolean(),
+});
+
+/**
+ * The operator's way to manage any organization's people. membership.create/update cannot: the
+ * collection is scoped by organization, and its CRUD writes into the *caller's* own organization
+ * whatever the input says (organization.contract.ts tells that story). This writes with the named
+ * organization's scope, explicitly. An organization always keeps an owner.
+ */
+export const membershipAssignContract = defineContract({
+    domain: 'identity.membership',
+    action: 'assign',
+    description: 'Put an account in an organization with a role, change it, or remove it (roleKey null). An organization always keeps an owner.',
+    inputSchema: membershipAssignInputSchema,
+    outputSchema: membershipAssignOutputSchema,
+    rest: { method: 'POST', path: '/identity/memberships/assign' },
+    dependencies: ['identity.membership', 'identity.organization', 'identity.user', 'identity.role'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/assignMembership.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.userId} in ${o.organizationId}: ${o.roleKey ?? 'removed'}`,
+});
+
+export type MembershipAssignInput = z.infer<typeof membershipAssignInputSchema>;
+export type MembershipAssignOutput = z.infer<typeof membershipAssignOutputSchema>;
