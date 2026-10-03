@@ -128,6 +128,19 @@ describe('a member\'s call runs in their own organization, never another', () =>
         await client.close();
     });
 
+    // A browser on another origin asks first; a header it may not send fails the whole call, which
+    // the page reports only as "could not reach the server" (surfdns.net, 2026-10-03).
+    it('lets a browser on another origin send the organization header', async () => {
+        const res = await fetch(`${ORIGIN}/api/sourceRepos`, {
+            method: 'OPTIONS',
+            headers: { origin: 'https://site.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization,x-organization' },
+        });
+        const allowed = (res.headers.get('access-control-allow-headers') ?? '').split(',').map((h) => h.trim().toLowerCase());
+
+        expect(res.status).toBeLessThan(300);
+        expect(allowed).toEqual(expect.arrayContaining(['authorization', 'content-type', 'x-organization']));
+    });
+
     it('a customer sees only their own organization\'s rows -- never the platform\'s', async () => {
         expect(await repos('ada')).toEqual({ status: 200, names: ['peera-repo'] });
     });

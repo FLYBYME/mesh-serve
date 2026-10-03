@@ -41,6 +41,13 @@ interface Caller {
 }
 
 /** The organization a request names: the `x-organization` header, or `?organization=` (an EventSource cannot set headers). */
+/**
+ * Every request header a browser page may send this gateway from another origin: what it reads
+ * (authorization, x-organization) and what a JSON body needs. A header read here but missing from
+ * this list works from curl and the CLI and fails in every browser.
+ */
+export const CORS_ALLOWED_HEADERS = 'authorization, content-type, x-organization';
+
 export function namedOrganization(req: Pick<http.IncomingMessage, 'headers' | 'url'>): string | undefined {
     const header = req.headers['x-organization'];
     const fromHeader = Array.isArray(header) ? header[0] : header;
@@ -155,7 +162,10 @@ export class ApiGateway {
              */
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
+            // x-organization: the organization a call runs in (callOrganization). A request header
+            // the browser is not told it may send fails its preflight, and the page sees only
+            // "could not reach the server" -- every signed-in call on surfdns.net, 2026-10-03 05:08Z.
+            res.setHeader('Access-Control-Allow-Headers', CORS_ALLOWED_HEADERS);
             // Without this, `fetch()` silently withholds x-exposure-shape from response.headers on
             // any cross-origin call (site and api are almost always different hosts) -- DevTools'
             // Network tab still shows the raw header regardless of CORS, which is what made this
