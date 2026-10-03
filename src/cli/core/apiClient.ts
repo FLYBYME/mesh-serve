@@ -106,9 +106,14 @@ export async function callApi(
     const { path, rest } = fillPath(call.path, input);
 
     let url = `${origin(apiUrl)}/api${path}`;
-    const init: RequestInit = { method, headers: {} };
-    const headers = init.headers as Record<string, string>;
+    const headers: Record<string, string> = {};
+    const init: RequestInit = { method, headers };
     if (token !== undefined) headers['Authorization'] = `Bearer ${token}`;
+
+    // Act in one of the caller's organizations, as a site page does (the gateway's x-organization):
+    // MESH_ORGANIZATION=<id> mesh-serve <call>. Unset, the call runs where it always has.
+    const organization = process.env.MESH_ORGANIZATION?.trim();
+    if (organization !== undefined && organization !== '') headers['x-organization'] = organization;
 
     if (method === 'GET' || method === 'DELETE') {
         const query = new URLSearchParams();
