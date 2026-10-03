@@ -1,4 +1,4 @@
-import { defineCrud, MeshError, z } from '@flybyme/mesh';
+import { defineContract, defineCrud, MeshError, z } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { organizationSchema } from '../schema/organization.js';
@@ -62,3 +62,35 @@ export const organizationCrud = defineCrud('identity.organization', organization
 });
 
 export type Organization = z.infer<typeof organizationCrud.outputSchema>;
+
+export const organizationRemoveInputSchema = z.object({
+    organizationId: z.string().min(1).describe('The organization to remove'),
+}).describe('Remove an organization and its memberships');
+
+export const organizationRemoveOutputSchema = z.object({
+    organizationId: z.string(),
+    name: z.string(),
+    memberships: z.number().int().describe('Memberships removed with it'),
+});
+
+/**
+ * identity.organization.remove -- an organization taken away with its memberships: a throwaway one
+ * from a checkout rehearsal, once billing.order_unwind has undone what it held. The accounts stay.
+ * Never the platform's own organization. Operator-only.
+ */
+export const organizationRemoveContract = defineContract({
+    domain: 'identity.organization',
+    action: 'remove',
+    description: 'Operator: removes an organization and its memberships (the accounts stay). Never the platform\'s own.',
+    inputSchema: organizationRemoveInputSchema,
+    outputSchema: organizationRemoveOutputSchema,
+    rest: { method: 'POST', path: '/identity/organizations/remove' },
+    dependencies: ['identity.organization', 'identity.membership'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/removeOrganization.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.name} removed, with ${o.memberships} memberships`,
+});
+
+export type OrganizationRemoveInput = z.infer<typeof organizationRemoveInputSchema>;
+export type OrganizationRemoveOutput = z.infer<typeof organizationRemoveOutputSchema>;
