@@ -312,17 +312,32 @@ export class ApiGateway {
      * platform's zones and mail. Now:
      * - anonymous, or a public call (no gate on the row or the contract): the api's own, as before
      *   -- a public call acts for the api's owner whoever makes it (login, the contact form);
-     * - an operator: the api's own, as before (resolveEffectiveTenantId may still redirect it);
+     * - an operator, on an operator-only row (the row's role, or the contract's permissions): the
+     *   api's own (resolveEffectiveTenantId may still redirect it);
+     * - an operator anywhere else: like anyone else when the request names an organization --
+     *   their own pages show the organization they chose (architecture
+     *   design/organization-scoping.md, 2026-10-03); the api's own when it names none, as before,
+     *   so a client that never names one (the CLI) is unchanged;
      * - anyone else: one of their own organizations -- named by the `x-organization` header (or
      *   `?organization=`, for an EventSource, which cannot set headers), or their only one --
      *   checked against identity.membership on every call. Never one they are not a member of, and
      *   never the api's own unless they are a member of it.
      */
-    private async callOrganization(req: http.IncomingMessage, gated: boolean, caller: Caller | undefined, apiTenantId: string): Promise<string> {
+    private async callOrganization(
+        req: http.IncomingMessage,
+        gated: boolean,
+        caller: Caller | undefined,
+        apiTenantId: string,
+        operatorOnly: boolean,
+    ): Promise<string> {
         if (caller === undefined || !gated) return apiTenantId;
-        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) return apiTenantId;
-        const theirs = await this.organizationsOf(caller.userId);
+
         const named = namedOrganization(req);
+        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
+            if (operatorOnly || named === undefined) return apiTenantId;
+        }
+
+        const theirs = await this.organizationsOf(caller.userId);
         if (named !== undefined) {
             if (!theirs.includes(named)) {
                 throw new MeshError({ message: 'You are not a member of that organization.', code: 'FORBIDDEN', status: 403 });
@@ -718,8 +733,9 @@ export class ApiGateway {
         // another, held the stream's first byte back ~16 s with 55 events on api.surfdns.net
         // (2026-09-29) -- a page that counted itself live missed everything written in that time.
         // A member's stream is their own organization's, as a member's call is (callOrganization);
-        // anonymous and operators keep the api's own.
-        const scopeOf = (who: Caller | undefined): Promise<string> => this.callOrganization(req, true, who, target.tenantId)
+        // anonymous keep the api's own, and so do operators unless the stream names an
+        // organization (their own pages; operator pages name Platform).
+        const scopeOf = (who: Caller | undefined): Promise<string> => this.callOrganization(req, true, who, target.tenantId, false)
             .catch((err: unknown) => { if (who === undefined) return target.tenantId; throw err; });
         const scope = await scopeOf(caller);
         const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, scope);
@@ -839,7 +855,8 @@ export class ApiGateway {
         const caller = await this.resolveCaller(req);
         trace.caller = caller;
         const gated = route.contract.permissions.length > 0 || route.row.role !== undefined || route.row.permission !== undefined;
-        const organization = await this.callOrganization(req, gated, caller, target.tenantId);
+        const operatorOnly = route.row.role === 'operator' || route.contract.permissions.includes('operator');
+        const organization = await this.callOrganization(req, gated, caller, target.tenantId, operatorOnly);
         trace.organizationId = organization;
         await this.checkGate(route.row, route.contract, caller, organization);
 

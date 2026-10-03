@@ -48,6 +48,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
     let broker: IServiceBroker;
     const token: Record<string, string> = {};
     const orgId: Record<string, string> = {};
+    const userId: Record<string, string> = {};
 
     const repos = async (who: string, organization?: string): Promise<{ status: number; names?: string[]; error?: string }> => {
         const res = await fetch(`${ORIGIN}/api/sourceRepos`, {
@@ -83,6 +84,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
             email: `${key}@tenancy.invalid`, displayName: key, passwordHash: await hashPassword(PASSWORD), roles, provisional: false,
         })).id;
         const operator = await user('operator', ['operator']);
+        userId.operator = operator;
         const ada = await user('ada', []);
         const two = await user('two', []);
         await user('stranger', []);
@@ -152,6 +154,35 @@ describe('a member\'s call runs in their own organization, never another', () =>
     it('an operator still works in the api\'s own organization', async () => {
         expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
     });
+
+    // design/organization-scoping.md (2026-10-03): operators see every organization only on
+    // operator rows; on a member row, naming an organization makes them a member like any other.
+    it('an operator naming one of their organizations on a member row gets exactly that one', async () => {
+        expect(await repos('operator', orgId.peera)).toEqual({ status: 403, error: expect.stringMatching(/not a member of that organization/) });
+
+        await broker.call('identity.membership.create', { userId: userId.operator, organizationId: orgId.peera, roleKey: 'member', joinedAt: new Date() },
+            { meta: { user: { id: userId.operator, tenant_id: orgId.peera, organizationId: orgId.peera } } });
+
+        await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] }), { timeout: 20_000, interval: 500 });
+        expect(await repos('operator', orgId.platform)).toEqual({ status: 200, names: ['platform-repo'] });
+        // Naming none: the api's own, as before -- a client that never names one is unchanged.
+        expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
+    }, 30_000);
+
+    it('on an operator-only row an operator works in the api\'s own, whatever the request names', async () => {
+        const meta = { meta: { tenant_id: orgId.platform } };
+        const api = await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
+        if (api === undefined) throw new Error('no api');
+
+        await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
+        await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'operator' }, meta);
+        try {
+            await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['platform-repo'] }), { timeout: 20_000, interval: 500 });
+        } finally {
+            await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
+            await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'member' }, meta);
+        }
+    }, 30_000);
 
     it('a public call still runs for the api\'s owner, signed in or not', async () => {
         const res = await fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${token.ada}` } });
