@@ -160,8 +160,12 @@ describe('a member\'s call runs in their own organization, never another', () =>
     it('an operator naming one of their organizations on a member row gets exactly that one', async () => {
         expect(await repos('operator', orgId.peera)).toEqual({ status: 403, error: expect.stringMatching(/not a member of that organization/) });
 
-        await broker.call('identity.membership.create', { userId: userId.operator, organizationId: orgId.peera, roleKey: 'member', joinedAt: new Date() },
-            { meta: { user: { id: userId.operator, tenant_id: orgId.peera, organizationId: orgId.peera } } });
+        const operator = userId.operator;
+        const peera = orgId.peera;
+        if (operator === undefined || peera === undefined) throw new Error('the operator or Peera was not set up');
+
+        await broker.call('identity.membership.create', { userId: operator, organizationId: peera, roleKey: 'member', joinedAt: new Date() },
+            { meta: { user: { id: operator, tenant_id: peera, organizationId: peera } } });
 
         await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] }), { timeout: 20_000, interval: 500 });
         expect(await repos('operator', orgId.platform)).toEqual({ status: 200, names: ['platform-repo'] });
