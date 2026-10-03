@@ -31,8 +31,37 @@ async function exists(p: string): Promise<boolean> {
     return fs.stat(p).then(() => true, () => false);
 }
 
+/**
+ * How a build reaches private GitHub repositories: the token in `GITHUB_TOKEN` (the builder pod's
+ * environment, unsealed from the vault -- processGroup secretEnv, name `builder.github-token`), as
+ * git configuration passed through the environment (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`), so it is
+ * never in a command line, a URL, a log line or a file. Covers git itself and npm's git
+ * dependencies, which lockfiles name as `git+ssh://git@github.com/...`: rewritten to HTTPS, which
+ * carries the token. Replaces the hand-placed `/etc/mesh/gitconfig` on compute1 (2026-10-03).
+ * No token: nothing added -- public repositories still build.
+ */
+export function gitAuthEnv(token: string | undefined = process.env.GITHUB_TOKEN): Record<string, string> {
+    if (token === undefined || token.trim() === '') return {};
+
+    const basic = Buffer.from(`x-access-token:${token.trim()}`).toString('base64');
+    const config: Array<[string, string]> = [
+        ['http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basic}`],
+        ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
+        ['url.https://github.com/.insteadOf', 'git@github.com:'],
+    ];
+
+    const env: Record<string, string> = { GIT_CONFIG_COUNT: String(config.length), GIT_TERMINAL_PROMPT: '0' };
+    config.forEach(([key, value], i) => {
+        env[`GIT_CONFIG_KEY_${i}`] = key;
+        env[`GIT_CONFIG_VALUE_${i}`] = value;
+    });
+
+    return env;
+}
+
 async function git(args: string[], cwd?: string): Promise<string> {
-    const { stdout } = await execFileAsync('git', args, { cwd });
+    const { stdout } = await execFileAsync('git', args, { cwd, env: { ...process.env, ...gitAuthEnv() } });
+
     return stdout;
 }
 
@@ -83,6 +112,8 @@ async function ensureNpmInstall(dir: string): Promise<void> {
     // so no lifecycle script's output was ever going to be used regardless of whether it succeeded.
     await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund', '--omit=dev', '--ignore-scripts'], {
         cwd: dir,
+        // npm clones git dependencies with git: the same GitHub access as the repository's own clone.
+        env: { ...process.env, ...gitAuthEnv() },
         // npm's own install log easily clears the default 1MB maxBuffer on a real dependency tree;
         // this only needs to not throw, the output itself is never read.
         maxBuffer: 1024 * 1024 * 50,
