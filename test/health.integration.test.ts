@@ -34,7 +34,8 @@ describe('the api server\'s /health', () => {
     };
 
     beforeAll(async () => {
-        apps.push(await node('health-ok', 16581, true), await node('health-nodb', 16582, false));
+        // 16583-4: 16581 is nodeLabels', and two files on one port fail each other in a parallel run.
+        apps.push(await node('health-ok', 16583, true), await node('health-nodb', 16584, false));
         healthy = await serve(apps[0]!);
         noDatabase = await serve(apps[1]!);
     }, 30000);

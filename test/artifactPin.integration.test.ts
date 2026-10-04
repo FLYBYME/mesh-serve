@@ -29,7 +29,7 @@ import '../src/identity/contracts/apiToken.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 
 const DB_NAME = 'mesh-serve-artifact-pin-integration-test';
-const WS = 16591;
+const WS = 16590; // 16591 is nodeMesh's: two files on one port fail each other in a parallel run
 const NODE = 'pin-a';
 const ORG_SLUG = 'pin-org';
 
