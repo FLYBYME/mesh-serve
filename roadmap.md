@@ -1624,3 +1624,30 @@ transport (an RPC's topic is its action), `mesh_event_loop_delay_seconds{stat}` 
 
 Not on yet: no node passes `--metricsPort` and nothing scrapes it. Needs the flag in each node's
 args (k8s pods, and the docker units on edge1, ns1, ns2, surf) and a scrape job per node.
+
+## Open — would the fleet come back from all six servers rebooting at once? (2026-10-04)
+
+The owner's view: it should come back, even if it takes half an hour, but it won't, because too many
+timing issues arise as the nodes return. Not tested. Risks seen live on 2026-10-04 (full story in
+company/architecture/log/2026-10-04/dns-outage.md):
+
+- **Waiting on each other with no one retrying.** The part reconciler skips a node that doesn't
+  report what it runs ("nothing unseen is started this pass"). The nameserver's zone load retries
+  only if the domains service on edge1 answers. In a cold start, every first attempt lands while
+  its dependencies are still down.
+- **Long safety nets.** ns2's bare pods came back on compute's 5-minute resync, not the watch. In a
+  cold start, every recovery that misses its event waits a resync, maybe two. (The watcher now
+  reopens a stream silent for 60 s, and passes and resyncs are logged: surfdns-compute 1a00e5f.)
+- **Single points with no fallback.** Every k3s pod depends on edge3 (the control plane at
+  10.10.0.1). Recreating bare pods depends on the deployment controller on surf, the deployment
+  domain's leader. If either comes up last, or not at all, nothing else recovers.
+- **Leftovers holding ports.** Fixed for the nameserver (8ef44a2, a stuck TCP stop kept 8053), but
+  the pattern may exist in other parts.
+- **Outside the fleet:** MongoDB Atlas, ghcr.io (images), name.com.
+
+Plan:
+1. A cold-start map: for each server and pod, what it needs before it works, who starts it, and
+   what retries when a dependency isn't up yet. Gaps show up as "nothing retries this".
+2. Fix the gaps.
+3. Reboot all six at once, at a chosen time (there are no clients yet), and time each component's
+   return from the logs.
