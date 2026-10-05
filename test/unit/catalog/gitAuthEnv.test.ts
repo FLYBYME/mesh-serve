@@ -5,9 +5,14 @@ import { gitAuthEnv } from '../../../src/catalog/methods/build.js';
 
 const run = promisify(execFile);
 
-/** What git itself reads from a configuration given through the environment. */
+/**
+ * What git itself reads from a configuration given through the environment -- and only that: the
+ * machine's own global and system config are left out (a laptop with the same insteadOf rewrites
+ * in ~/.gitconfig answered each twice).
+ */
 async function gitConfig(env: Record<string, string>, ...args: string[]): Promise<string> {
-    const { stdout } = await run('git', ['config', ...args], { env: { ...process.env, ...env } });
+    const isolated = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    const { stdout } = await run('git', ['config', ...args], { env: { ...process.env, ...isolated, ...env } });
 
     return stdout.trim();
 }

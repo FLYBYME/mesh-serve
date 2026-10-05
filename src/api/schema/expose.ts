@@ -7,4 +7,5 @@ export const exposeSchema = z.object({
   contract: z.string().describe('The domain.action key being exposed, e.g. "identity.whoami" -- or, for kind "event", the event name, e.g. "serve.part.failed"'),
   role: z.string().optional().describe('An identity.role key the caller must effectively hold (checked via identity.hasRole); absent (with permission also absent) means public'),
   permission: z.string().optional().describe('Triggers an identity.permits check against the caller\'s resolved role permissions for this contract; at most one of role or permission is set. Contracts only'),
+  unheld: z.boolean().optional().describe('An operator\'s standing approval (serve.expose.hold): a destructive call to this contract made with an api token runs at once instead of being held for a decision. Absent: held, as every other. Set per row, never on the contract, so each exception is one visible row'),
 }).describe('One contract an api is allowed to serve, or one event it streams, and at what gate');

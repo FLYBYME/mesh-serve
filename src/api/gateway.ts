@@ -901,7 +901,12 @@ export class ApiGateway {
         // `destructive` already exists on every contract as documentation (descriptor.ts, the CLI's
         // own help text); this is what actually makes it load-bearing. serve.hold.decide itself is
         // deliberately never marked destructive, so an operator's own decision can't recursively hold.
-        if (caller?.viaApiToken === true && route.contract.destructive === true) {
+        // The one exception is an operator's standing approval on this exposure row (serve.expose.hold,
+        // `unheld`): the approved list, one visible row per contract.
+        if (caller?.viaApiToken === true && route.contract.destructive === true && route.row.unheld === true) {
+            this.broker.logger.debug(`[api] ${route.row.contract}: token call by ${caller.userId} runs at once (approved, not held)`);
+        }
+        if (caller?.viaApiToken === true && route.contract.destructive === true && route.row.unheld !== true) {
             const held = await this.placeOnHold(route, caller, target, input, effectiveTenantId);
             res.setHeader('Content-Type', 'application/json');
             res.statusCode = 202;

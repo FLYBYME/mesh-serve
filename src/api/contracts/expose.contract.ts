@@ -71,3 +71,25 @@ export const exposeRemoveContract = defineContract({
 
 export type RemoveInput = z.infer<typeof exposeRemoveContract.inputSchema>;
 export type RemoveOutput = z.infer<typeof exposeRemoveContract.outputSchema>;
+
+export const holdInputSchema = z.object({
+    apiId: z.string().min(1).describe('The serve.api the exposure belongs to'),
+    contract: z.string().min(1).describe('The exposed domain.action key'),
+    hold: z.boolean().describe('false: a destructive call to it made with an api token runs at once (an operator\'s standing approval); true: held for a decision again, as every other'),
+}).describe('Whether destructive token calls to one exposed contract are held');
+
+export const exposeHoldContract = defineContract({
+    domain: 'serve.expose',
+    action: 'hold',
+    description: 'Say whether destructive calls made with an api token to one exposed contract wait for an operator (the default) or run at once: the approved list, one row at a time. For the calls an agent must make to work at all, like a workspace daemon reporting in.',
+    inputSchema: holdInputSchema,
+    outputSchema: addOutputSchema,
+    rest: { method: 'POST', path: '/expose/hold' },
+    visibility: 'public',
+    // Destructive, so a token can never approve itself: this call, made with a token, is held too.
+    destructive: true,
+    filePath: 'src/api/tools/hold.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.contract} on ${o.apiId}: ${o.unheld === true ? 'runs at once for api tokens' : 'held for api tokens'}`,
+});
+
+export type HoldInput = z.infer<typeof exposeHoldContract.inputSchema>;
