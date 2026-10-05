@@ -21,6 +21,9 @@ export const BuiltinRoles: readonly RoleType[] = [
     { key: 'owner', name: 'Owner', scope: 'organization', builtin: true, inherits: ['admin'], permissions: [] },
     { key: 'admin', name: 'Admin', scope: 'organization', builtin: true, inherits: ['member'], permissions: [] },
     { key: 'member', name: 'Member', scope: 'organization', builtin: true, inherits: [], permissions: [] },
+    // An organization's agent account (identity.agent.ensure): inherits nothing, so an exposure for
+    // `member` does not admit it. What it may call is exposed for `agent` by name, one call at a time.
+    { key: 'agent', name: 'Agent', scope: 'organization', builtin: true, inherits: [], permissions: [] },
 ];
 
 /**

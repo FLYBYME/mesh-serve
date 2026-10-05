@@ -124,6 +124,7 @@ export async function reset_complete(input: ResetCompleteInput, ctx: IServiceCon
     await ctx.db('identity.userToken').update({ id: row.id, usedAt: new Date() });
     const user = await ctx.db('identity.user').findOne({ query: { id: row.userId } });
     if (user === undefined) throw new MeshError({ message: 'That reset link is not valid any more. Ask for a new one.', code: 'INVALID_TOKEN', status: 400 });
+    if (user.kind === 'agent') throw new MeshError({ message: 'An agent account has no password.', code: 'FORBIDDEN', status: 403 });
 
     // A reset proves the person reads the address, so it verifies it too -- and claims a
     // provisional account the same way setting a first password does.

@@ -18,6 +18,12 @@ export async function setPassword(
     if (user === undefined) {
         throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
     }
+    // An agent account never has a password: it acts only by its tokens, and one that could set a
+    // password could sign in and act beyond them.
+    if (user.kind === 'agent') {
+        throw new MeshError({ message: 'An agent account has no password.', code: 'FORBIDDEN', status: 403 });
+    }
+
     const wasProvisional = user.provisional === true;
     // A ticket alone is not enough to replace a password that exists: a stolen ticket would
     // otherwise lock the owner out for good. A provisional account has none yet -- setting the
