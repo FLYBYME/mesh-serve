@@ -3,9 +3,12 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import { artifactCrud } from '../contracts/artifact.contract.js';
 import type { WatchReleaseOutput } from '../contracts/artifact.contract.js';
+import { queueCrud } from '../../queue/contracts/queue.contract.js';
 
 /** Bound on both the real build's ctx.call timeout and serve.queue's own lease for it. */
-export const BUILD_TIMEOUT_MS = 5 * 60_000;
+// A part's first build installs its git dependencies cold, and a few of ours compile themselves on
+// install: past 5 minutes, the call timed out while the build went on (2026-10-05).
+export const BUILD_TIMEOUT_MS = 15 * 60_000;
 /** The queue lane every build runs in: at most one at a time, cluster-wide. */
 export const BUILD_QUEUE_GROUP = 'serve.artifact.build';
 
@@ -52,6 +55,25 @@ export async function watchRelease(_params: Record<string, never>, ctx: IService
             // their npm installs side by side, ran out of memory and had to be rebooted by hand.
             group: BUILD_QUEUE_GROUP,
         }, { meta });
+    }
+
+    // A build left 'running' after its job failed (its builder died, so nothing ran its own failure
+    // path) is failed here, with the job's reason: a build never hangs at 'running'.
+    const running = await repo.find({ query: { status: 'running' } });
+    const failedJobs = running.length === 0
+        ? []
+        : await db.repo(queueCrud.get.outputSchema, 'serve.queue').find({ query: { contract: 'serve.artifact.build', status: 'failed' } });
+    for (const raw of running) {
+        const artifact = artifactCrud.get.outputSchema.parse(raw);
+        const job = failedJobs.find((j) => j.payload.id === artifact.id);
+        if (job === undefined) {
+            continue;
+        }
+
+        await ctx.call('serve.artifact.update', {
+            id: artifact.id, status: 'failed', error: job.error ?? 'Its build job failed.',
+        }, { meta: { tenant_id: artifact.tenantId } });
+        ctx.logger.error(`Build ${artifact.id} failed: ${job.error ?? 'its job failed'}`);
     }
 
     return { enqueued: pending.length };

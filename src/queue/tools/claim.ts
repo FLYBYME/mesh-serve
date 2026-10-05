@@ -56,7 +56,22 @@ export async function claim(
             limit: GROUP_SCAN_LIMIT,
         });
 
-        if (candidates.length === 0) return undefined;
+        // A job whose lease ran out while processing had a worker that stopped before it finished
+        // (a node killed out of memory, most concretely). Once it has used its attempts, it is
+        // failed, never taken again: a build that killed its builder was reclaimed seven times with
+        // maxAttempts 1, killing the builder each time (2026-10-05).
+        const abandoned = candidates.filter((c) => c.status === 'processing' && (c.attempts ?? 0) >= (c.maxAttempts ?? 1));
+        for (const job of abandoned) {
+            await ctx.db('serve.queue', { tenant_id: job.tenantId }).update({
+                id: job.id,
+                status: 'failed',
+                error: `Its worker stopped before it finished (attempt ${job.attempts ?? 0} of ${job.maxAttempts ?? 1}): the node may have run out of memory or restarted.`,
+            });
+            ctx.logger.error(`serve.queue: ${job.id} (${job.contract}) abandoned by its worker after ${job.attempts ?? 0} attempt(s); failed, not retried`);
+        }
+
+        const claimable = candidates.filter((c) => !abandoned.includes(c));
+        if (claimable.length === 0) return undefined;
 
         // Only a job actively within its lease blocks its group -- one past lockedUntil is exactly
         // the abandoned-and-reclaimable case the $lt clause above already admits as a candidate, and
@@ -68,7 +83,7 @@ export async function claim(
             activelyProcessing.map((j) => j.group).filter((g): g is string => g !== undefined),
         );
 
-        const job = candidates.find((c) => c.group === undefined || !busyGroups.has(c.group));
+        const job = claimable.find((c) => c.group === undefined || !busyGroups.has(c.group));
         if (job === undefined) return undefined;
 
         // The schema declares real defaults (timeoutMs: 30_000, attempts: 0) that always apply at

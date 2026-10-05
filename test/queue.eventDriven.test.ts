@@ -78,4 +78,26 @@ describe('serve.queue, event-driven', () => {
         const [row] = await app.call('serve.queue.find', { query: { id: job.id } }, { meta });
         expect(row?.attempts).toBe(2);
     }, 12_000);
+
+    it('fails a job whose worker stopped after its last attempt, never taking it again', async () => {
+        // As a build looks after its builder was killed: processing, its lease run out, its one
+        // attempt used.
+        const job = await app.call('serve.queue.create', {
+            tenantId: TENANT_ID,
+            contract: 'serve.queue.find_one',
+            payload: { query: { id: 'abandoned' } },
+            maxAttempts: 1,
+            timeoutMs: 5000,
+            status: 'processing',
+            attempts: 1,
+            lockedUntil: new Date(Date.now() - 60_000),
+        }, { meta });
+
+        await app.call('serve.queue.claim', {}, { meta });
+
+        const [row] = await app.call('serve.queue.find', { query: { id: job.id } }, { meta });
+        expect(row?.status).toBe('failed');
+        expect(row?.attempts).toBe(1);
+        expect(row?.error).toMatch(/worker stopped before it finished/);
+    });
 });
