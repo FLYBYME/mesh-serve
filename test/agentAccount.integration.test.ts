@@ -114,9 +114,9 @@ describe('agent accounts', () => {
     });
 
     it('an operator calling from another organization issues its token (the gateway\'s meta names the operator\'s own organization)', async () => {
-        const agent = await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'dev' }, asOperator());
         // As the api's gateway calls: the operator's own organization in user.organizationId as well.
         const fromElsewhere = { meta: { user: { id: operatorId, tenant_id: otherOrgId, organizationId: otherOrgId } } };
+        const agent = await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'remote' }, fromElsewhere);
 
         const issued = await broker.call('identity.apiToken.issue', { name: 'dev-elsewhere', userId: agent.userId, organizationId: orgId, roles: ['agent'] }, fromElsewhere);
 
