@@ -113,6 +113,16 @@ describe('agent accounts', () => {
         await expect(broker.call('identity.apiToken.issue', { name: 'y', userId: agent.userId, organizationId: otherOrgId }, asOperator())).rejects.toThrow(/belongs to/);
     });
 
+    it('an operator calling from another organization issues its token (the gateway\'s meta names the operator\'s own organization)', async () => {
+        const agent = await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'dev' }, asOperator());
+        // As the api's gateway calls: the operator's own organization in user.organizationId as well.
+        const fromElsewhere = { meta: { user: { id: operatorId, tenant_id: otherOrgId, organizationId: otherOrgId } } };
+
+        const issued = await broker.call('identity.apiToken.issue', { name: 'dev-elsewhere', userId: agent.userId, organizationId: orgId, roles: ['agent'] }, fromElsewhere);
+
+        expect(issued).toMatchObject({ userId: agent.userId, roles: ['agent'] });
+    });
+
     it('never takes over an address that is not its organization\'s agent', async () => {
         await broker.call('identity.user.create', { email: agentEmail(otherOrgId, 'leader'), displayName: 'Squatter', roles: [], provisional: false });
         await expect(broker.call('identity.agent.ensure', { organizationId: otherOrgId, name: 'leader' }, asOperator())).rejects.toThrow(/not .*agent account/);

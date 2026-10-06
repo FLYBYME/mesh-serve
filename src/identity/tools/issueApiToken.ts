@@ -3,7 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/apiToken.contract.js';
 import { hashToken, issuedToken } from '../methods/hash.js';
-import { resolveEffectiveRoleKeys } from '../methods/roles.js';
+import { inOrganization, resolveEffectiveRoleKeys } from '../methods/roles.js';
 import { tokenOwner } from '../methods/tokenOwner.js';
 
 /**
@@ -26,7 +26,7 @@ export async function issueApiToken(
     }
 
     if (input.organizationId !== undefined) {
-        const membership = await ctx.db('identity.membership', { organization_id: input.organizationId })
+        const membership = await ctx.db('identity.membership', inOrganization(ctx, input.organizationId))
             .findOne({ query: { userId, organizationId: input.organizationId } });
         if (membership === undefined) {
             throw new MeshError({
