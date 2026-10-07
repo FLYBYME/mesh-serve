@@ -212,6 +212,23 @@ export class ApiGateway {
                 callerID: null,
             };
 
+            // The trace's root: the request itself, recorded when its response closes (an event
+            // stream's, when the subscriber leaves). Not for health probes, every 10 s from each proxy.
+            const path = (req.url ?? '/').split('?')[0] ?? '/';
+            if (path !== '/health') {
+                const startedMs = performance.now();
+                const startedAt = Date.now();
+                res.once('close', () => {
+                    const failed = res.statusCode >= 500;
+                    this.broker.recordSpan?.({
+                        traceId: trace.traceId, spanId, ...(trace.parentSpanId !== undefined ? { parentId: trace.parentSpanId } : {}),
+                        kind: 'call', name: `${req.method ?? 'GET'} ${path}`, nodeID: this.broker.nodeID,
+                        startedAt, durationMs: performance.now() - startedMs, outcome: failed ? 'error' : 'ok',
+                        ...(failed ? { error: `HTTP ${res.statusCode}` } : {}),
+                    });
+                });
+            }
+
             try {
                 this.broker.logger.debug(`${req.method} ${req.url}`);
                 if (await answerHealth(this.broker, req, res)) return;

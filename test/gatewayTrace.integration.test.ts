@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
     BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
-import type { IServiceBroker } from '@flybyme/mesh';
+import type { IServiceBroker, Span } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { ApiGateway } from '../src/api/gateway.js';
@@ -33,6 +33,27 @@ describe('a response says where it came from', () => {
     afterAll(async () => {
         await gateway.stop();
         await app.stop();
+    });
+
+    it('records the request as its trace\'s root span, and no span for a health probe', async () => {
+        const spans: Span[] = [];
+        app.getProvider<IServiceBroker>('broker').setSpanSink?.((s) => spans.push(s));
+
+        const sent = formatTraceparent('4bf92f3577b34da6a3ce929d0e0e4736', '00f067aa0ba902b7');
+        const res = await fetch(`${base}/api/no-such-thing?x=1`, { headers: { traceparent: sent } });
+        await res.text();
+        await fetch(`${base}/health`).then((r) => r.text());
+        await new Promise((r) => setTimeout(r, 50));
+        app.getProvider<IServiceBroker>('broker').setSpanSink?.(undefined);
+
+        const request = spans.find((s) => s.name === 'GET /api/no-such-thing');
+        expect(request).toMatchObject({ traceId: '4bf92f3577b34da6a3ce929d0e0e4736', parentId: '00f067aa0ba902b7', kind: 'call', nodeID: 'trace-gw' });
+        // Everything the request did is under it: here, its lookup of the api by host.
+        const inner = spans.filter((s) => s !== request);
+        expect(inner.length).toBeGreaterThan(0);
+        expect(inner.every((s) => s.traceId === request?.traceId && s.parentId === request?.spanId)).toBe(true);
+        expect(spans.some((s) => s.name.includes('/health'))).toBe(false);
+        expect(readTraceparent(res.headers.get('traceparent') ?? undefined)?.traceId).toBe(request?.traceId);
     });
 
     it('names a new trace, the node and its release, and lets a browser read them', async () => {
