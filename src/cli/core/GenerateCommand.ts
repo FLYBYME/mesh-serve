@@ -249,7 +249,8 @@ export class GenerateCommand extends BaseCommand {
 
             code += `        '${m.domain}.created': ${createdType};\n`;
             code += `        '${m.domain}.updated': { id: string; patch: Record<string, unknown>; item: ${updatedItemType} };\n`;
-            code += `        '${m.domain}.deleted': { id: string };\n`;
+            // The row as it was (mesh v4.10.24); absent from a node on an older mesh, so optional.
+            code += `        '${m.domain}.deleted': { id: string; item?: ${updatedItemType} };\n`;
         }
 
         code += `    }\n}\n`;
