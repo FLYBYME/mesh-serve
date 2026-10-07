@@ -130,12 +130,22 @@ describe('CDN HTML synthesis', () => {
         it('generates valid HTML structure with charset, title, and body elements', () => {
             const html = maintenancePage(sampleSite);
 
-            expect(html.startsWith('<!DOCTYPE html><html><head>')).toBe(true);
+            expect(html.startsWith('<!DOCTYPE html><html lang="en"><head>')).toBe(true);
             expect(html.endsWith('</body></html>')).toBe(true);
             expect(html).toContain('<meta charset="UTF-8">');
             expect(html).toContain('<title>Customer Dashboard -- under maintenance</title>');
             expect(html).toContain('<body><h1>Customer Dashboard</h1>');
             expect(html).toContain('<p>This site is temporarily down for maintenance. Please check back shortly.</p>');
+        });
+
+        it('respects custom lang property when present', () => {
+            const html = maintenancePage({
+                title: 'Site',
+                application: 'app',
+                lang: 'fr',
+            });
+
+            expect(html.startsWith('<!DOCTYPE html><html lang="fr"><head>')).toBe(true);
         });
 
         it('uses site.title when present', () => {

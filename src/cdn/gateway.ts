@@ -145,9 +145,10 @@ export const contentSecurityPolicy = (
 
 /** siteSchema.maintenance's own description says what this is: "redirect all traffic to
  * /.well-known/maintenance" -- previously just a thrown 503 with no redirect and no page. */
-export const maintenancePage = (site: Pick<Site, 'title' | 'application'>): string => {
+export const maintenancePage = (site: Pick<Site, 'title' | 'application'> & { lang?: string }): string => {
     const title = escapeHtml(site.title || site.application);
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title} -- under maintenance</title></head>`
+    const lang = escapeHtml(site.lang || 'en');
+    return `<!DOCTYPE html><html lang="${lang}"><head><meta charset="UTF-8"><title>${title} -- under maintenance</title></head>`
         + `<body><h1>${title}</h1><p>This site is temporarily down for maintenance. Please check back shortly.</p></body></html>`;
 };
 
@@ -167,7 +168,7 @@ export class CdnGateway {
 
     private streamAsset: boolean = true;
 
-    constructor(private readonly broker: IServiceBroker) {}
+    constructor(private readonly broker: IServiceBroker) { }
 
     /** Binds and resolves once listening -- the returned address is what the contract reports. */
     public async start(port?: number, host?: string): Promise<string> {
@@ -448,16 +449,31 @@ export class CdnGateway {
         bootLines.push('});');
         const boot = inlineScript(bootLines.join('\n'));
 
+        const lang = escapeHtml(site.lang || 'en');
+        const favicon = escapeHtml(site.favicon || '/favicon.ico');
+        const siteTitle = site.title || site.application;
+        const siteName = escapeHtml(site.title ? (site.title.split(/ [—–-] /)[0]?.trim() || site.title) : site.application);
+
         html.push(`<!DOCTYPE html>`);
-        html.push(`<html>`);
+        html.push(`<html lang="${lang}">`);
         html.push(`
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${escapeHtml(site.title || site.application)}</title>
+      <title>${escapeHtml(siteTitle)}</title>
       ${site.description ? `<meta name="description" content="${escapeHtml(site.description)}">` : ''}
       ${site.canonical ? `<link rel="canonical" href="${escapeHtml(site.canonical)}">` : ''}
+      <link rel="icon" href="${favicon}">
+      <meta property="og:type" content="website">
+      <meta property="og:title" content="${escapeHtml(siteTitle)}">
+      ${site.description ? `<meta property="og:description" content="${escapeHtml(site.description)}">` : ''}
+      ${site.canonical ? `<meta property="og:url" content="${escapeHtml(site.canonical)}">` : ''}
       ${site.image ? `<meta property="og:image" content="${escapeHtml(site.image)}">` : ''}
+      <meta property="og:site_name" content="${siteName}">
+      <meta name="twitter:card" content="${site.image ? 'summary_large_image' : 'summary'}">
+      <meta name="twitter:title" content="${escapeHtml(siteTitle)}">
+      ${site.description ? `<meta name="twitter:description" content="${escapeHtml(site.description)}">` : ''}
+      ${site.image ? `<meta name="twitter:image" content="${escapeHtml(site.image)}">` : ''}
       ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
       ${apiHost ? `<link rel="preconnect" href="${apiOrigin(apiHost)}">` : ''}
       <link rel="preconnect" href="${publicScheme()}://${site.mcpHost}">
@@ -703,6 +719,32 @@ export class CdnGateway {
 
         if (assetPath) {
             return this.serveAssets(site, req, res);
+        }
+
+        if (pathname === '/robots.txt') {
+            const sitemapLine = site.canonical ? `Sitemap: ${new URL('/sitemap.xml', site.canonical).href}\n` : '';
+            const robots = site.indexable
+                ? `User-agent: *\nAllow: /\n${sitemapLine}`
+                : `User-agent: *\nDisallow: /\n`;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('Content-Length', Buffer.byteLength(robots));
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.statusCode = 200;
+            res.end(robots);
+            return;
+        }
+
+        if (pathname === '/sitemap.xml' && site.canonical) {
+            const base = site.canonical.replace(/\/+$/, '');
+            const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${escapeHtml(base)}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>`;
+            res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+            res.setHeader('Content-Length', Buffer.byteLength(sitemap));
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.statusCode = 200;
+            res.end(sitemap);
+            return;
         }
 
         const apiHost = await this.resolveApiHost(site);

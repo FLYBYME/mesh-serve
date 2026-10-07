@@ -20,6 +20,8 @@ export const siteSchema = z.object({
   description: z.string().describe('Empty means no description meta tags'),
   canonical: z.string().optional().describe('The canonical URL for this page'),
   image: z.string().optional().describe('An og:image URL'),
+  lang: z.string().default('en').describe('The language attribute for the <html> element; defaults to "en"'),
+  favicon: z.string().optional().describe('Path or URL to the favicon; defaults to /favicon.ico when absent'),
   indexable: z.boolean().describe('False adds a noindex, nofollow meta tag'),
   maintenance: z.boolean().default(false).describe('True means the site is under maintenance; redirect all traffic to /.well-known/maintenance'),
 }).describe('A hostname, what it composes, and how the page it serves looks');
