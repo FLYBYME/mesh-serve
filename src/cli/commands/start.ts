@@ -163,6 +163,12 @@ export class StartCommand extends BaseCommand {
         const broker = node.getProvider<IServiceBroker>('broker');
         // What this node runs, with every presence: serve.node.serving reads it, beside each contract's hash.
         broker.registry.setLocalSoftware({ 'mesh-serve': runningVersion(), mesh: meshFrameworkVersion() });
+        // Spans, when asked for: one JSON line each on stdout, which the logs agent already ships
+        // to VictoriaLogs. Off unless MESH_SPANS=1 -- a line per call is real volume on a small server.
+        if (process.env.MESH_SPANS === '1') {
+            broker.setSpanSink?.((span) => { process.stdout.write(`${JSON.stringify({ type: 'span', ...span })}\n`); });
+            this.logger.info('Spans on: one JSON line per call, event and database operation (MESH_SPANS=1).');
+        }
         if (metricsPort !== undefined) {
             // Who this is, and the process/event-loop gauges. Until now a scrape had only the
             // broker's and transport's own counters.
