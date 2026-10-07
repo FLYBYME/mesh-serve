@@ -176,6 +176,10 @@ describe('two nodes, one serving a domain it does not hold', () => {
         });
         expect(res.status).toBe(200);
         expect(typeof (await json(res)).token).toBe('string');
+        // The response says so: taken by B, answered by A.
+        expect(res.headers.get('x-mesh-gateway')).toBe('two-node-b');
+        expect(res.headers.get('x-mesh-node')).toBe('two-node-a');
+        expect(res.headers.get('x-mesh-version')).toMatch(/^v\d+\.\d+\.\d+$/);
     });
 
     it('accepts through A a ticket issued through B', async () => {

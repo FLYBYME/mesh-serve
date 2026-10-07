@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { isMeshError, MeshError } from '@flybyme/mesh';
+import { ContextStack, isMeshError, MeshError } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, IServiceToolRegistry, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import type { activitySchema } from './schema/activity.js';
@@ -13,6 +13,7 @@ import { EventHub, openStream, type Omitted, type Subscriber } from './methods/e
 import { matchPath, specificity } from './methods/route.js';
 import type { Api } from './contracts/api.contract.js';
 import { answerHealth } from './health.js';
+import { formatTraceparent, newSpanId, newTraceId, readTraceparent } from './methods/traceparent.js';
 import { Recent } from './recent.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
@@ -139,6 +140,13 @@ export class ApiGateway {
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
     private readonly unsubscribes: (() => void)[] = [];
 
+    /**
+     * This node's mesh-serve release, said on every response: asked of the node itself once the
+     * server starts. Not read from package.json here -- this gateway runs bundled, with no package
+     * folder to find (importing the catalog's own reader stopped the api part loading at all).
+     */
+    private version = 'unknown';
+
     constructor(private readonly broker: IServiceBroker) {
         this.hub = new EventHub(broker);
     }
@@ -147,6 +155,12 @@ export class ApiGateway {
     public async start(port?: number, host?: string): Promise<string> {
         const SERVER_PORT = port ?? parseInt(process.env.API_PORT || '5005', 10);
         const SERVER_HOST = host ?? (process.env.SERVER_HOST || '::');
+
+        // Not awaited: the server listens whether or not the catalog answers, and says 'unknown' until it does.
+        void this.broker.call('serve.node.version', { nodeID: this.broker.nodeID }, { nodeID: this.broker.nodeID, timeout: 5000 })
+            .then((v) => { this.version = v.running; }, (err: unknown) => {
+                this.broker.logger.warn(`[api] responses will say version "unknown": serve.node.version did not answer (${err instanceof Error ? err.message : String(err)})`);
+            });
 
         this.server = http.createServer(async (req, res) => {
             /**
@@ -172,7 +186,7 @@ export class ApiGateway {
             // easy to miss live: it "looked" present while client.ts's own staleness check
             // (net/client.ts:166) never actually saw it, silently disabling the exact detection
             // that comment's own history says was already found broken once before, differently.
-            res.setHeader('Access-Control-Expose-Headers', 'x-exposure-shape');
+            res.setHeader('Access-Control-Expose-Headers', 'x-exposure-shape, traceparent, x-mesh-node, x-mesh-gateway, x-mesh-version');
             // A browser asks permission (OPTIONS) before each distinct cross-origin call; this lets
             // it keep the answer for 10 minutes instead of paying a second round trip every time.
             res.setHeader('Access-Control-Max-Age', '600');
@@ -182,10 +196,26 @@ export class ApiGateway {
                 return;
             }
 
+            // Each request in its own trace -- the caller's, from its traceparent, or a new one -- and
+            // its own empty context. The server was made inside the call that started it, and
+            // without this every request ran in that call's context: one trace for all of them,
+            // and its meta the base of every call they made (observability-review.md T1).
+            const trace = readTraceparent(req.headers.traceparent) ?? { traceId: newTraceId() };
+            const spanId = newSpanId();
+            res.setHeader('traceparent', formatTraceparent(trace.traceId, spanId));
+            res.setHeader('x-mesh-gateway', this.broker.nodeID);
+            res.setHeader('x-mesh-version', this.version);
+            const root = {
+                id: spanId, correlationID: trace.traceId, toolName: 'serve.api.request', params: {}, meta: {},
+                nodeID: this.broker.nodeID, traceId: trace.traceId, spanId,
+                ...(trace.parentSpanId !== undefined ? { parentId: trace.parentSpanId } : {}),
+                callerID: null,
+            };
+
             try {
                 this.broker.logger.debug(`${req.method} ${req.url}`);
                 if (await answerHealth(this.broker, req, res)) return;
-                await this.handleRequest(req, res);
+                await ContextStack.run(root, () => this.handleRequest(req, res));
             } catch (err) {
                 // isMeshError, not instanceof: this gateway runs from a precompiled .cjs part,
                 // which under tsx is a different copy of @flybyme/mesh than the broker handing it
@@ -921,7 +951,11 @@ export class ApiGateway {
         // The contract's own timeout, not the broker's 10 s default: machine.import (declared 30
         // minutes, running on surf) answered 500 here while the import carried on.
         const timeout = route.contract.timeout;
-        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, { meta, ...(timeout !== undefined ? { timeout } : {}) });
+        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, {
+            meta, ...(timeout !== undefined ? { timeout } : {}),
+            // Which node answered: two versions of identity answered differently and nothing said which (2026-10-06).
+            onRouted: (nodeID) => { if (!res.headersSent) res.setHeader('x-mesh-node', nodeID); },
+        });
 
         // A sign-out through this gateway ends the ticket here at once, not after the 15 s it is kept.
         if (route.row.contract === 'identity.ticket.signOut') {
