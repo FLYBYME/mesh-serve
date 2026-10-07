@@ -161,6 +161,8 @@ export class StartCommand extends BaseCommand {
         // so the list of its domains is written out here, and this is the only place in the
         // codebase that names a part's domains by hand.
         const broker = node.getProvider<IServiceBroker>('broker');
+        // What this node runs, with every presence: serve.node.serving reads it, beside each contract's hash.
+        broker.registry.setLocalSoftware({ 'mesh-serve': runningVersion(), mesh: meshFrameworkVersion() });
         if (metricsPort !== undefined) {
             // Who this is, and the process/event-loop gauges. Until now a scrape had only the
             // broker's and transport's own counters.

@@ -231,6 +231,29 @@ export const nodeVersionContract = defineContract({
     timeout: 15_000,
 });
 
+export const nodeServingOutputSchema = z.object({
+    tool: z.string(),
+    servers: z.array(z.object({
+        nodeID: z.string(),
+        available: z.boolean(),
+        hash: z.string().optional().describe('The contract and handler it serves, fingerprinted: equal hashes, the same code'),
+        meshServe: z.string().optional().describe('The mesh-serve release it runs'),
+        mesh: z.string().optional().describe('The mesh framework version it runs'),
+    })),
+    agree: z.boolean().describe('Every server has the same hash and release'),
+});
+
+/** Who serves a contract, with what -- what would have shown the 2026-10-06 identity split at once. */
+export const nodeServingContract = defineContract({
+    domain: 'serve.node', action: 'serving',
+    description: 'Which nodes serve a contract, with which code (its hash) and which release: two nodes answering one call differently show here.',
+    inputSchema: z.object({ tool: z.string().min(1).describe('domain.action, e.g. identity.apiToken.issue') }),
+    outputSchema: nodeServingOutputSchema,
+    rest: { method: 'GET', path: '/nodes/serving' },
+    visibility: 'public', filePath: 'src/catalog/tools/nodeServing.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.tool}: ${o.servers.length} server(s)${o.agree ? '' : ' -- NOT ALIKE'}\n${o.servers.map((s) => `  ${s.nodeID}  ${s.hash ?? '?'}  ${s.meshServe ?? '?'}${s.available ? '' : '  (unavailable)'}`).join('\n')}`,
+});
+
 /**
  * Moves a node to another mesh-serve release through the api -- what used to be `docker pull`, a
  * `sed` on the unit and `systemctl restart` over SSH on each box. The node asks its host (see

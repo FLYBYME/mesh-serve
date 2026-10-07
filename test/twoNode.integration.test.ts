@@ -245,4 +245,12 @@ describe('two nodes, one serving a domain it does not hold', () => {
         expect(b.calls.length).toBe(a.calls.length);
         expect(b.exposure).toBe(a.exposure);
     });
+
+    it('says who serves a contract, with which code -- asked on the node that does not', async () => {
+        const answer = await brokerB.call('serve.node.serving', { tool: 'identity.whoami' });
+
+        expect(answer.servers.map((s) => s.nodeID)).toEqual(['two-node-a']);
+        expect(answer.servers[0]?.hash).toMatch(/^[0-9a-f]{14}$/);
+        expect(answer.agree).toBe(true);
+    });
 });
