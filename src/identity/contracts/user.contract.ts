@@ -50,6 +50,42 @@ export const userRegisterContract = defineContract({
     print: (o) => `registered ${o.userId}`,
 });
 
+export const userRemoveInputSchema = z.object({
+    userId: z.string().min(1).describe('The account to remove'),
+}).describe('Remove an account');
+
+export const userRemoveOutputSchema = z.object({
+    userId: z.string(),
+    email: z.string(),
+    memberships: z.number().int().describe('Memberships removed with it'),
+    sessions: z.number().int().describe('Sign-in tickets removed'),
+    apiTokens: z.number().int().describe('Api tokens removed'),
+    links: z.number().int().describe('Unused verification and password links removed'),
+}).describe('The removed account');
+
+/**
+ * identity.user.remove -- an account taken away with everything that lets it act: its memberships,
+ * sign-ins, api tokens and unused links. For junk (a bot's sign-up, 10-08), not for people leaving
+ * an organization. Refuses an account that still owns an organization (remove or hand it over
+ * first), one holding a platform role (take it away first), and the caller's own. Operator-only.
+ */
+export const userRemoveContract = defineContract({
+    domain: 'identity.user',
+    action: 'remove',
+    description: 'Operator: removes an account with its memberships, sign-ins, api tokens and links. Not one that owns an organization, holds a platform role, or is your own.',
+    inputSchema: userRemoveInputSchema,
+    outputSchema: userRemoveOutputSchema,
+    rest: { method: 'POST', path: '/identity/users/remove' },
+    dependencies: ['identity.user', 'identity.organization', 'identity.membership', 'identity.ticket', 'identity.apiToken', 'identity.userToken'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/removeUser.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `${o.email} removed, with ${o.memberships} memberships, ${o.sessions} sign-ins, ${o.apiTokens} api tokens, ${o.links} links`,
+});
+
+export type UserRemoveInput = z.infer<typeof userRemoveInputSchema>;
+export type UserRemoveOutput = z.infer<typeof userRemoveOutputSchema>;
+
 export type RegisterInput = z.infer<typeof userRegisterContract.inputSchema>;
 export type RegisterOutput = z.infer<typeof userRegisterContract.outputSchema>;
 
