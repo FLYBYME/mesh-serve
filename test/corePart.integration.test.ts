@@ -111,8 +111,8 @@ describe('a bare node, loading its own core parts', () => {
 
     it('seeds the builtin roles when asked, and only then', async () => {
         const first = await broker.call('identity.role.ensureBuiltins', {});
-        // `agent` since v0.10.31 (agent accounts): it inherits nothing.
-        expect(first.created).toEqual(['operator', 'owner', 'admin', 'member', 'agent']);
+        // `agent` since v0.10.31 (agent accounts): it inherits nothing. `backup` since v0.10.36.
+        expect(first.created).toEqual(['operator', 'owner', 'admin', 'member', 'agent', 'backup']);
 
         const keys = (await broker.call('identity.role.find', { query: {} })).map((r) => r.key);
         expect(keys).toContain('operator');
@@ -120,12 +120,13 @@ describe('a bare node, loading its own core parts', () => {
         expect(keys).toContain('admin');
         expect(keys).toContain('member');
         expect(keys).toContain('agent');
+        expect(keys).toContain('backup');
 
         // Idempotent: create-if-missing, so an operator's own customization of a builtin role
         // survives a second call.
         const second = await broker.call('identity.role.ensureBuiltins', {});
         expect(second.created).toEqual([]);
-        expect(second.existing).toHaveLength(5);
+        expect(second.existing).toHaveLength(6);
     });
 
     it('a part with no hand-written registration at all is fully functional through the same load path', async () => {

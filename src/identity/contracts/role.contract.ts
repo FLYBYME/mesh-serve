@@ -55,7 +55,7 @@ export const ensureBuiltinsOutputSchema = z.object({
 export const roleEnsureBuiltinsContract = defineContract({
     domain: 'identity.role',
     action: 'ensureBuiltins',
-    description: 'Create any of the four builtin roles that do not exist yet, leaving existing ones untouched.',
+    description: 'Create any of the builtin roles that do not exist yet (builtinRoles.ts), leaving existing ones untouched.',
     inputSchema: z.object({}),
     outputSchema: ensureBuiltinsOutputSchema,
     rest: { method: 'POST', path: '/identity/roles/ensure-builtins' },

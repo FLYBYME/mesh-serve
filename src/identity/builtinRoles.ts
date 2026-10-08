@@ -24,6 +24,9 @@ export const BuiltinRoles: readonly RoleType[] = [
     // An organization's agent account (identity.agent.ensure): inherits nothing, so an exposure for
     // `member` does not admit it. What it may call is exposed for `agent` by name, one call at a time.
     { key: 'agent', name: 'Agent', scope: 'organization', builtin: true, inherits: [], permissions: [] },
+    // The platform's backup account (compute's backup.watch): the git server lets this role read
+    // every repository and push to none. Global, and nothing else: no contract permissions at all.
+    { key: 'backup', name: 'Backup', scope: 'global', builtin: true, inherits: [], permissions: [] },
 ];
 
 /**
