@@ -45,13 +45,22 @@ export interface Omitted {
 
 export const DEFAULT_HEARTBEAT_MS = 20_000;
 
+/**
+ * What one stream may hold written but not yet taken by its reader. A reader that stops reading (a
+ * page left open behind a proxy that never closed it) made every event pile up in the api's memory:
+ * edge1 grew 100 MB an hour on 2026-10-08. 1 MiB is thousands of events -- far more than a reader
+ * that is reading ever leaves waiting -- and past it the stream is dropped; the page reconnects.
+ */
+export const MAX_UNSENT_BYTES = 1024 * 1024;
+
 export interface StreamOptions {
     readonly res: http.ServerResponse;
     readonly events: readonly string[];
     readonly omitted: readonly Omitted[];
     readonly subscriber: Subscriber;
-    readonly hub: EventHub;
+    readonly hub: Pick<EventHub, 'subscribe'>;
     readonly heartbeatMs?: number;
+    readonly maxUnsentBytes?: number;
     /** Re-resolves the subscriber each heartbeat; `undefined` means the credential is no longer valid. */
     readonly recheck: () => Promise<Subscriber | undefined>;
 }
@@ -83,6 +92,12 @@ export function openStream(options: StreamOptions): { close(reason?: string): vo
         if (closed) return;
         id += 1;
         res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+        // A reader that is not reading: dropped, which frees what waits for it and its subscriptions.
+        if (res.writableLength > (options.maxUnsentBytes ?? MAX_UNSENT_BYTES)) {
+            close();
+            res.destroy();
+        }
     };
 
     // Before anything is delivered, so a client knows what it will never hear on this connection.
