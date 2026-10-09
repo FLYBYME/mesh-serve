@@ -15,6 +15,7 @@ import type { Api } from './contracts/api.contract.js';
 import { answerHealth } from './health.js';
 import { formatTraceparent, newSpanId, newTraceId, readTraceparent } from './methods/traceparent.js';
 import { Recent } from './recent.js';
+import { clientAddress, FormLimiter } from './methods/formLimit.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -136,6 +137,8 @@ export class ApiGateway {
     private readonly roles = new Recent<boolean>(15_000);
     /** Each account's organizations (callOrganization), as briefly as a role. */
     private readonly memberOf = new Recent<readonly string[]>(15_000);
+    /** Public forms per client address (methods/formLimit.ts). */
+    private readonly formLimits = new FormLimiter();
     /** Each target's descriptor, built once rather than on every request (it hashes every schema). */
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
     private readonly unsubscribes: (() => void)[] = [];
@@ -942,6 +945,11 @@ export class ApiGateway {
             : organization;
         trace.organizationId = effectiveTenantId;
         const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
+
+        // Public forms, per client address (methods/formLimit.ts): before anything is done or mailed.
+        if (!this.formLimits.allow(route.row.contract, clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress))) {
+            throw new MeshError({ message: 'Too many tries from your address. Try again in an hour.', code: 'RATE_LIMITED', status: 429 });
+        }
 
         // The agent surface: a destructive call made by an api token (never by a signed-in person's
         // ticket -- viaApiToken is exactly that distinction) is frozen and held instead of run.
