@@ -41,6 +41,15 @@ export async function add(
         if (ungated && contract.permissions.length === 0) refuseAccidentallyPublic(input, 'the contract demands no role itself');
     }
 
+    // A role nobody can hold makes a row nobody can call -- and, one row per contract, it blocks the
+    // right one: "oporator" was accepted and the contract answered 'Requires role "oporator"' (10-09).
+    if (input.role !== undefined) {
+        const role = await ctx.call('identity.role.find_one', { query: { key: input.role } });
+        if (role === undefined || role === null) {
+            throw new MeshError({ message: `No role "${input.role}". Roles are identity.role keys (operator, owner, admin, member, ...).`, code: 'BAD_REQUEST', status: 400 });
+        }
+    }
+
     // The target api can belong to any tenant, unrelated to the caller's own, so its tenant isn't
     // known yet -- serve.api.resolveById is api's own anonymous-lookup tool for exactly this, same
     // pattern as serve.cdn.resolveById.

@@ -246,6 +246,14 @@ describe('a contract permission floor an expose row cannot lower', () => {
             const m = await meta();
             await expect(broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.stopped' }, m)).rejects.toThrow(/callable by anyone/);
         });
+
+        it('refuses a role nobody can hold, which would block the right row (10-09: "oporator")', async () => {
+            const m = await meta();
+            await broker.call('serve.expose.remove', { apiId, contract: 'identity.organization.get' }, m).catch(() => undefined);
+
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', role: 'oporator' }, m)).rejects.toThrow(/No role "oporator"/);
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', role: 'operator' }, m)).resolves.toMatchObject({ role: 'operator' });
+        });
     });
 
     /**
