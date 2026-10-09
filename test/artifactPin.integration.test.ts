@@ -161,11 +161,15 @@ describe('serve.part.artifactId: which build a service runs', () => {
         const repo = await broker.call('serve.repo.create', {
             tenantId, name: 'pin-repo-unnamed', url: '/tmp/nonexistent-unnamed.git', defaultBranch: 'master',
         }, meta());
+        // The typed input requires tenantId although the caller's scope fills it in; the CLI's JSON
+        // (the stand-up check) leaves it out. If the type ever allows that, drop these two lines.
+        // @ts-expect-error -- a create naming no organization, as untyped callers send it
         const part = await broker.call('serve.part.create', {
             repoId: repo.id, key: `${ORG_SLUG}/unnamed-org`, kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [],
         }, meta());
         expect(part.tenantId).toBe(tenantId);
 
+        // @ts-expect-error -- as above
         await expect(broker.call('serve.part.create', {
             repoId: repo.id, key: 'someone-else/unnamed-org', kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [],
         }, meta())).rejects.toThrow(/key must be/);

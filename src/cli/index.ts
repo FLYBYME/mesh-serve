@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 
 import { StartCommand } from './commands/start.js';
 import { BootstrapCommand } from './commands/bootstrap.js';
@@ -59,9 +59,22 @@ function buildProgram(session: Session, writeErr: (text: string) => void): Comma
 }
 
 function commanderCode(err: unknown): string | undefined {
-    return typeof err === 'object' && err !== null && 'code' in err && typeof (err as { code: unknown }).code === 'string'
-        ? (err as { code: string }).code
-        : undefined;
+    return err instanceof CommanderError ? err.code : undefined;
+}
+
+/**
+ * How a failed parse or command ends the process. Commander has already printed its own errors, and
+ * says how to exit: 0 for --help and --version, 1 for an unknown command or option. Taking every
+ * commander error as success let `mesh-serve processGroup.get` (not exposed) exit 0, and a deploy
+ * script carried on as though it had run (2026-10-09).
+ */
+function failed(err: unknown): void {
+    if (err instanceof CommanderError) {
+        process.exitCode = err.exitCode;
+        return;
+    }
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
 }
 
 async function refreshed(session: Session): Promise<Session | undefined> {
@@ -102,10 +115,7 @@ async function main(): Promise<void> {
             }
         }
         process.stderr.write(errors);
-        if (code === undefined || !code.startsWith('commander.')) {
-            console.error(err instanceof Error ? err.message : String(err));
-            process.exitCode = 1;
-        }
+        failed(err);
     }
 }
 
@@ -113,11 +123,7 @@ async function run(program: Command): Promise<void> {
     try {
         await program.parseAsync(process.argv.slice(2), { from: 'user' });
     } catch (err) {
-        const code = commanderCode(err);
-        if (code === undefined || !code.startsWith('commander.')) {
-            console.error(err instanceof Error ? err.message : String(err));
-            process.exitCode = 1;
-        }
+        failed(err);
     }
 }
 
