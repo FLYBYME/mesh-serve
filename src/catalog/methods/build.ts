@@ -176,9 +176,15 @@ function checkoutDir(repo: BuildableRepo): string {
 async function ensureRepoCheckout(repo: BuildableRepo, ref: string): Promise<string> {
     const dir = checkoutDir(repo);
 
+    // A url or ref starting with "-" would be read by git as an option (`--upload-pack=...` runs a
+    // command). Neither is ever one; refused, and `--` ends git's options where it can (review 09-18).
+    if (repo.url.startsWith('-') || ref.startsWith('-')) {
+        throw new Error(`Refusing to build: ${repo.url.startsWith('-') ? `repo url "${repo.url}"` : `ref "${ref}"`} starts with "-".`);
+    }
+
     if (!(await exists(dir))) {
         await fs.mkdir(repoWorkdir, { recursive: true });
-        await git(['clone', repo.url, dir]);
+        await git(['clone', '--', repo.url, dir]);
     } else {
         await git(['fetch', '--all', '--tags'], dir);
     }

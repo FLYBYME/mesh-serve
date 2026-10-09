@@ -1,3 +1,14 @@
+import { MeshError } from '@flybyme/mesh';
+
+/** A path segment, decoded: a malformed `%` is the caller's mistake, a 400 -- not a URIError's 500. */
+function decodePart(part: string): string {
+    try {
+        return decodeURIComponent(part);
+    } catch {
+        throw new MeshError({ message: `Malformed path segment "${part.slice(0, 80)}".`, code: 'BAD_REQUEST', status: 400 });
+    }
+}
+
 /**
  * Matches a REST path pattern (":param" segments) against an actual request path, extracting
  * params on a match. Segment-count mismatch or a literal-segment mismatch both fail outright --
@@ -16,7 +27,7 @@ export function matchPath(pattern: string, actual: string): Record<string, strin
         const patternPart = patternParts[i]!;
         const actualPart = actualParts[i]!;
         if (patternPart.startsWith(':')) {
-            params[patternPart.slice(1)] = decodeURIComponent(actualPart);
+            params[patternPart.slice(1)] = decodePart(actualPart);
         } else if (patternPart !== actualPart) {
             return undefined;
         }

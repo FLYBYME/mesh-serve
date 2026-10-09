@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { routeShape, specificity } from '../../../src/api/methods/route.js';
+import { matchPath, routeShape, specificity } from '../../../src/api/methods/route.js';
+
+describe('matchPath', () => {
+    it('decodes a parameter', () => {
+        expect(matchPath('/repos/:id', '/repos/a%20b')).toEqual({ id: 'a b' });
+    });
+
+    it('answers a malformed % with a 400, not a URIError (a 500)', () => {
+        expect(() => matchPath('/repos/:id', '/repos/%E0%A4%A')).toThrow(expect.objectContaining({ status: 400, message: expect.stringMatching(/Malformed path segment/) }));
+    });
+});
 
 describe('routeShape', () => {
     it('is the same route whatever the parameters are called', () => {
