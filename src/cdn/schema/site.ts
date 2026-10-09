@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+export const sitePageSchema = z.object({
+  path: z.string().describe('The URL path for this page (e.g. /pricing)'),
+  title: z.string().describe('The title for this page'),
+  description: z.string().describe('The description meta tag for this page'),
+  index: z.boolean().describe('False serves noindex robots meta tag and omits from sitemap'),
+});
+
 export const siteSchema = z.object({
   host: z.string().describe('The frontend hostname that resolves to this site\'s cdn; normalized by lowercasing, stripping port and trailing dot'),
   apiId: z.string().optional().describe('The serve.api backing this site, if any -- absent means this site calls no exposed contracts of its own'),
@@ -20,6 +27,8 @@ export const siteSchema = z.object({
   description: z.string().describe('Empty means no description meta tags'),
   canonical: z.string().optional().describe('The canonical URL for this page'),
   image: z.string().optional().describe('An og:image URL'),
+  organization: z.string().optional().describe('Organization name for Schema.org Organization JSON-LD'),
+  pages: z.array(sitePageSchema).optional().describe('Public pages of the site with their own head and sitemap entries'),
   lang: z.string().default('en').describe('The language attribute for the <html> element; defaults to "en"'),
   favicon: z.string().optional().describe('Path or URL to the favicon; defaults to /favicon.ico when absent'),
   indexable: z.boolean().describe('False adds a noindex, nofollow meta tag'),

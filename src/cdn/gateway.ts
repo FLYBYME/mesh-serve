@@ -211,7 +211,9 @@ export class CdnGateway {
             this.server?.once('error', reject);
         });
 
-        return `${SERVER_HOST}:${SERVER_PORT}`;
+        const bound = this.server?.address();
+        const boundPort = bound !== null && typeof bound === 'object' ? bound.port : SERVER_PORT;
+        return `${SERVER_HOST}:${boundPort}`;
     }
 
     /** Called from `serve.cdn.listen`'s abort handler -- nothing else stops this. */
@@ -388,7 +390,7 @@ export class CdnGateway {
     }
 
     private async generateHtml(
-        site: Site, apiHost: string | undefined,
+        site: Site, apiHost: string | undefined, pathname: string = '/',
     ): Promise<{ html: string; scriptHashes: string }> {
         const html: string[] = [];
 
@@ -454,27 +456,57 @@ export class CdnGateway {
         const siteTitle = site.title || site.application;
         const siteName = escapeHtml(site.title ? (site.title.split(/ [—–-] /)[0]?.trim() || site.title) : site.application);
 
+        const matchingPage = site.pages?.find(
+            (p) => p.path === pathname || (pathname.length > 1 && p.path === pathname.replace(/\/+$/, '')),
+        );
+
+        const pageTitle = matchingPage ? matchingPage.title : siteTitle;
+        const pageDescription = matchingPage ? matchingPage.description : site.description;
+
+        const base = site.canonical?.replace(/\/+$/, '');
+        let pageCanonical: string | undefined = site.canonical;
+        if (matchingPage && base) {
+            const pPath = matchingPage.path.startsWith('/') ? matchingPage.path : `/${matchingPage.path}`;
+            pageCanonical = (matchingPage.path === '/' || matchingPage.path === '') ? `${base}/` : `${base}${pPath}`;
+        }
+
+        let robotsTag = '';
+        if (!site.indexable) {
+            robotsTag = '<meta name="robots" content="noindex, nofollow">';
+        } else if (matchingPage && !matchingPage.index) {
+            robotsTag = '<meta name="robots" content="noindex">';
+        }
+
+        const orgJson = site.organization ? {
+            '@context': 'https://schema.org',
+            '@type': 'Organization',
+            name: site.organization,
+            url: site.canonical ? (site.canonical.endsWith('/') ? site.canonical : `${site.canonical}/`) : `${publicScheme()}://${site.host}/`,
+            ...(site.image ? { logo: site.image } : {}),
+        } : undefined;
+
         html.push(`<!DOCTYPE html>`);
         html.push(`<html lang="${lang}">`);
         html.push(`
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${escapeHtml(siteTitle)}</title>
-      ${site.description ? `<meta name="description" content="${escapeHtml(site.description)}">` : ''}
-      ${site.canonical ? `<link rel="canonical" href="${escapeHtml(site.canonical)}">` : ''}
+      <title>${escapeHtml(pageTitle)}</title>
+      ${pageDescription ? `<meta name="description" content="${escapeHtml(pageDescription)}">` : ''}
+      ${pageCanonical ? `<link rel="canonical" href="${escapeHtml(pageCanonical)}">` : ''}
       <link rel="icon" href="${favicon}">
       <meta property="og:type" content="website">
-      <meta property="og:title" content="${escapeHtml(siteTitle)}">
-      ${site.description ? `<meta property="og:description" content="${escapeHtml(site.description)}">` : ''}
-      ${site.canonical ? `<meta property="og:url" content="${escapeHtml(site.canonical)}">` : ''}
+      <meta property="og:title" content="${escapeHtml(pageTitle)}">
+      ${pageDescription ? `<meta property="og:description" content="${escapeHtml(pageDescription)}">` : ''}
+      ${pageCanonical ? `<meta property="og:url" content="${escapeHtml(pageCanonical)}">` : ''}
       ${site.image ? `<meta property="og:image" content="${escapeHtml(site.image)}">` : ''}
       <meta property="og:site_name" content="${siteName}">
       <meta name="twitter:card" content="${site.image ? 'summary_large_image' : 'summary'}">
-      <meta name="twitter:title" content="${escapeHtml(siteTitle)}">
-      ${site.description ? `<meta name="twitter:description" content="${escapeHtml(site.description)}">` : ''}
+      <meta name="twitter:title" content="${escapeHtml(pageTitle)}">
+      ${pageDescription ? `<meta name="twitter:description" content="${escapeHtml(pageDescription)}">` : ''}
       ${site.image ? `<meta name="twitter:image" content="${escapeHtml(site.image)}">` : ''}
-      ${site.indexable ? '' : '<meta name="robots" content="noindex, nofollow">'}
+      ${robotsTag}
+      ${orgJson ? `<script type="application/ld+json">${JSON.stringify(orgJson).replace(/</g, '\\u003c')}</script>` : ''}
       ${apiHost ? `<link rel="preconnect" href="${apiOrigin(apiHost)}">` : ''}
       <link rel="preconnect" href="${publicScheme()}://${site.mcpHost}">
       ${themeVars ? `<style>:root { ${themeVars} }</style>` : ''}
@@ -737,7 +769,22 @@ export class CdnGateway {
 
         if (pathname === '/sitemap.xml' && site.canonical) {
             const base = site.canonical.replace(/\/+$/, '');
-            const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${escapeHtml(base)}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>`;
+            let sitemap: string;
+            if (site.pages && site.pages.length > 0) {
+                const indexable = site.pages.filter((p) => p.index);
+                const home = indexable.find((p) => p.path === '/' || p.path === '');
+                const others = indexable.filter((p) => p !== home);
+                const ordered = home ? [home, ...others] : others;
+                const urls = ordered.map((p) => {
+                    const pPath = p.path.startsWith('/') ? p.path : `/${p.path}`;
+                    const loc = (p.path === '/' || p.path === '') ? `${base}/` : `${base}${pPath}`;
+                    const priority = (p.path === '/' || p.path === '') ? '1.0' : '0.8';
+                    return `  <url><loc>${escapeHtml(loc)}</loc><changefreq>weekly</changefreq><priority>${priority}</priority></url>`;
+                });
+                sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>`;
+            } else {
+                sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${escapeHtml(base)}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>`;
+            }
             res.setHeader('Content-Type', 'application/xml; charset=utf-8');
             res.setHeader('Content-Length', Buffer.byteLength(sitemap));
             res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -748,7 +795,7 @@ export class CdnGateway {
         }
 
         const apiHost = await this.resolveApiHost(site);
-        const { html, scriptHashes } = await this.generateHtml(site, apiHost);
+        const { html, scriptHashes } = await this.generateHtml(site, apiHost, pathname);
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Content-Length', Buffer.byteLength(html));
         res.setHeader('Content-Security-Policy', contentSecurityPolicy(site, apiHost, scriptHashes));
