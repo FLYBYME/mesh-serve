@@ -2,12 +2,12 @@ import { defineContract, defineCrud, defineEvent, MeshError, z } from '@flybyme/
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { partSchema } from '../schema/part.js';
-import { validatePartKey } from '../methods/partKey.js';
+import { organizationOfCreate, validatePartKey } from '../methods/partKey.js';
 import { resolvePinnedArtifact } from '../methods/partArtifact.js';
 
 /** The fields the hooks below read, parsed out of what the CRUD layer hands them; the rest pass through untouched. */
 const partCreateHookInput = z.object({
-    tenantId: z.string(),
+    tenantId: z.string().optional(),
     key: z.string(),
     artifactId: z.string().optional(),
 });
@@ -34,7 +34,7 @@ export const partCrud = defineCrud('serve.part', partSchema, {
         create: {
             before: async (input: unknown, ctx: IServiceContext) => {
                 const record = partCreateHookInput.parse(input);
-                await validatePartKey(record, record.tenantId, ctx);
+                await validatePartKey(record, organizationOfCreate(record, ctx), ctx);
                 if (record.artifactId !== undefined) {
                     // A pin names a build *of this part*, and no build of a part can exist before
                     // the part does. Build it, then pin it with serve.part.update.

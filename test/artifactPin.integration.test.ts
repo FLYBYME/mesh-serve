@@ -155,6 +155,22 @@ describe('serve.part.artifactId: which build a service runs', () => {
         }, meta())).rejects.toThrow(/cannot be created with an artifactId/);
     });
 
+    it('creates a part for the caller\'s own organization when the input names none, its key still checked against it', async () => {
+        // The create hook used to parse tenantId out of the input before the caller's scope was
+        // filled in: no tenantId was a bare 500 (the stand-up check, 2026-10-08).
+        const repo = await broker.call('serve.repo.create', {
+            tenantId, name: 'pin-repo-unnamed', url: '/tmp/nonexistent-unnamed.git', defaultBranch: 'master',
+        }, meta());
+        const part = await broker.call('serve.part.create', {
+            repoId: repo.id, key: `${ORG_SLUG}/unnamed-org`, kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [],
+        }, meta());
+        expect(part.tenantId).toBe(tenantId);
+
+        await expect(broker.call('serve.part.create', {
+            repoId: repo.id, key: 'someone-else/unnamed-org', kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [],
+        }, meta())).rejects.toThrow(/key must be/);
+    });
+
     it('reports which artifact each running service actually loaded', async () => {
         const partId = await newPart();
         markServiceRunning(NODE, partId, 'svc.domain', '/tmp/svc.cjs', 'artifact-loaded');
