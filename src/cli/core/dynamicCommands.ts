@@ -4,6 +4,14 @@ import { ApiError, callApi } from './apiClient.js';
 import { JsonSchemaToCli } from './JsonSchemaToCli.js';
 import { isLive, type Session } from './session.js';
 
+/** All of stdin, for `--json -`. */
+export async function readStdin(stream: AsyncIterable<unknown> = process.stdin): Promise<string> {
+    let text = '';
+    for await (const chunk of stream) text += typeof chunk === 'string' ? chunk : Buffer.from(chunk instanceof Uint8Array ? chunk : []).toString('utf8');
+
+    return text;
+}
+
 /**
  * Turns the api's own described surface into commands.
  *
@@ -55,7 +63,7 @@ export function registerDiscoveredCommands(program: Command, session: Session): 
             .addHelpText('after', `\n  ${call.method} ${descriptor.base}${call.path}  on ${descriptor.host}`);
 
         JsonSchemaToCli.applyOptions(sub, input);
-        sub.option('--json <object>', 'The whole input as one JSON object, instead of the flags');
+        sub.option('--json <object>', 'The whole input as one JSON object, instead of the flags; "-" reads it from stdin (for a secret: never on the command line)');
         if (JsonSchemaToCli.takesOnlyJson(input)) {
             sub.addHelpText('after', '\n  This call\'s input has more than one shape: pass it whole with --json \'{...}\'.');
         }
@@ -72,7 +80,7 @@ export function registerDiscoveredCommands(program: Command, session: Session): 
                     return;
                 }
                 try {
-                    params = JsonSchemaToCli.parseJsonInput(json);
+                    params = JsonSchemaToCli.parseJsonInput(json === '-' ? await readStdin() : json);
                 } catch (err) {
                     console.error(err instanceof Error ? err.message : String(err));
                     process.exitCode = 1;
