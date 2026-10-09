@@ -123,6 +123,11 @@ export class StartCommand extends BaseCommand {
         // regardless of when a given service actually gets loaded onto it.
         process.env.API_PORT = String(args.apiPort);
         process.env.SERVER_PORT = String(args.cdnPort);
+        // A node told to listen on loopback (install.sh's pass 1, before it is claimed) keeps its api
+        // and cdn there too: they bound every address, so an unclaimed node's api answered the
+        // internet (the stand-up check, 10-08). Other addresses keep the old wildcard -- edge1's
+        // proxy reaches its api locally -- and an explicit SERVER_HOST still wins.
+        if (isLoopback(args.host) && process.env.SERVER_HOST === undefined) process.env.SERVER_HOST = args.host;
         // Same pattern, and both left unset (CdnService's own defaults apply) unless given --
         // there is no correct universal default for either, only a correct default per deployment.
         if (args.publicScheme !== undefined) process.env.PUBLIC_SCHEME = args.publicScheme;
@@ -229,4 +234,9 @@ export class StartCommand extends BaseCommand {
         }
         return labels;
     }
+}
+
+/** 127.0.0.0/8, ::1 or localhost: an address only this machine can reach. */
+export function isLoopback(host: string): boolean {
+    return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
