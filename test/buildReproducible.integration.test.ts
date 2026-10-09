@@ -52,4 +52,39 @@ describe('the builder is reproducible', () => {
         expect(second.hash).toBe(first.hash);
         expect(second.assets).toEqual(first.assets);
     }, 120000);
+
+    it('builds a commit that adds a file an earlier build left untracked in the shared checkout (10-09)', () => {
+        const repo = path.join(home, 'lockrepo');
+        fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repo, 'package.json'), '{ "name": "lock", "version": "1.0.0", "type": "module" }\n');
+        fs.writeFileSync(path.join(repo, 'src', 'register.ts'), 'export default async function register(): Promise<string> { return "lock"; }\n');
+        const git = (...args: string[]): string => execFileSync('git', args, { cwd: repo, encoding: 'utf-8' }).trim();
+        git('init', '-q', '-b', 'master');
+        git('add', '-A');
+        git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'no lockfile');
+        const before = git('rev-parse', 'HEAD');
+        fs.writeFileSync(path.join(repo, 'package-lock.json'), '{ "lockfileVersion": 3, "from": "the repo" }\n');
+        git('add', '-A');
+        git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'a lockfile');
+        const after = git('rev-parse', 'HEAD');
+
+        // The first build, then what an install leaves in the shared working copy: an untracked
+        // package-lock.json -- the one the next commit adds.
+        const checkout = path.join(home, '.mesh', 'repos', 'shared-lock');
+        const script = path.join(home, 'build-lock.mts');
+        fs.writeFileSync(script,
+            `import fs from 'node:fs';\n`
+            + `import { buildService } from ${JSON.stringify(path.join(ROOT, 'src/catalog/methods/build.ts'))};\n`
+            + `const part = { path: '.', entryPoint: 'src/register.ts' };\n`
+            + `const repo = { id: 'shared-lock', url: ${JSON.stringify(`file://${repo}`)} };\n`
+            + `await buildService(part, repo, ${JSON.stringify(before)});\n`
+            + `fs.writeFileSync(${JSON.stringify(path.join(checkout, 'package-lock.json'))}, '{ "from": "npm install" }');\n`
+            + `const built = await buildService(part, repo, ${JSON.stringify(after)});\n`
+            + `console.log(JSON.stringify({ commit: built.commit }));\n`);
+        const out = execFileSync(path.join(ROOT, 'node_modules/.bin/tsx'), [script], {
+            cwd: ROOT, encoding: 'utf-8', env: { ...process.env, HOME: home },
+        });
+
+        expect(JSON.parse(out.trim().split('\n').pop() ?? '{}')).toEqual({ commit: after });
+    }, 120000);
 });

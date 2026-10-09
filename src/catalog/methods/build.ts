@@ -187,6 +187,12 @@ async function ensureRepoCheckout(repo: BuildableRepo, ref: string): Promise<str
         await git(['clone', '--', repo.url, dir]);
     } else {
         await git(['fetch', '--all', '--tags'], dir);
+        // The working copy is shared and the last build ran `npm install` in it: a repo with no
+        // lockfile was left an untracked package-lock.json, and the commit that added one could
+        // never be checked out ("would be overwritten", surfdns-intel 10-09). Back to exactly the
+        // last commit, untracked files gone; ignored ones (node_modules) kept as the install cache.
+        await git(['reset', '--hard'], dir);
+        await git(['clean', '-fd'], dir);
     }
 
     const hasRemoteBranch = await git(['rev-parse', '--verify', `origin/${ref}`], dir).then(() => true, () => false);
