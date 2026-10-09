@@ -1,7 +1,9 @@
-# syntax=docker/dockerfile:1
+# Base images from Google's mirror of Docker Hub, and no `# syntax=` line (that pulls its frontend
+# from Docker Hub too): GitHub's runners share addresses, and Docker Hub answered 429 and then 504
+# to four publishes of v0.10.43 in a row (10-09).
 
 # Build stage: full toolchain (typescript, tsx, esbuild devDeps -- npm run build needs them).
-FROM node:22-bookworm-slim AS build
+FROM mirror.gcr.io/library/node:22-bookworm-slim AS build
 WORKDIR /app
 # The whole source tree has to be present before `npm ci`, not after: package.json's own
 # `prepare` script (`npm run build`) fires as part of `ci`, and it needs real source to build --
@@ -18,7 +20,7 @@ RUN npm prune --omit=dev
 # (src/catalog/methods/build.ts) shells out to real `git`/`npm` *from inside the running process*
 # to build a service part on demand (serve.artifact.requestBuild) -- the container needs those
 # binaries and a real shell to exec them from, not just node.
-FROM node:22-bookworm-slim
+FROM mirror.gcr.io/library/node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
