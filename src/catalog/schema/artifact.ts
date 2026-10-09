@@ -19,6 +19,7 @@ export const artifactSchema = z.object({
   error: z.string().optional().describe('What went wrong; set once status is failed'),
   duration: z.number().optional().describe('How long this build took in seconds'),
   builtOn: z.string().optional().describe('nodeID that produced this build\'s files; set once status is success. ~/.mesh/artifacts is node-local disk, never replicated -- serve.part.start fetches from this node (serve.artifact.fetchAssetBytes) the first time a different node needs to load it'),
+  heldBy: z.array(z.string()).optional().describe('Other nodes holding a full copy of this build on their own disk (methods/spreadArtifact.ts): builds live on node disks, at least two, and nowhere else. A pull tries the builder, then these'),
   pinOnSuccess: z.boolean().optional().describe('Whether to automatically pin the part to this artifact when the build succeeds'),
   imported: z.boolean().optional().describe('Built outside with the builder\'s own code (mesh-serve artifact-build) and brought in by serve.artifact.importBuild, its files checked against its hash -- otherwise the same as a build the queue ran'),
 }).describe('One attempt to build a part at a git ref, and its output once it succeeds');

@@ -233,45 +233,95 @@ describe('a service part started on a node that never built it', () => {
             const part = await brokerA.call('serve.part.resolve', { id: partId }, onA);
             expect(part).toMatchObject({ artifactId: artifact.id, wants: ['identity.whoami'] });
 
-            // Exactly like a queue build from here on: port-b pulls it from the node that stored it.
+            // Already copied to a second node by the import itself (methods/spreadArtifact.ts).
             expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
-                .toEqual({ artifactHash: hash, from: 'port-a' });
+                .toEqual({ artifactHash: hash, from: 'local' });
         }, 20000);
 
-        describe('kept in the database as well as on disk', () => {
+        describe('on two node disks, and out of the database (10-09)', () => {
+            const onNode = (nodeID: string) => ({ nodeID, meta: { tenant_id: tenantId } });
             const bucket = (): GridFSBucket => {
                 const db = brokerA.getProvider<Database>('database').getDb();
                 if (!db) throw new Error('no database');
                 return new GridFSBucket(db, { bucketName: 'artifactFiles' });
             };
+            const inDatabase = async (hash: string): Promise<string[]> => (await bucket().find({ 'metadata.hash': hash }).toArray()).map((x) => x.filename).sort();
             const importOn = async (name: string, f: Record<string, string>): Promise<string> => {
                 const partId = await newPart(name);
                 const hash = await hashOf(f);
-                await brokerA.call('serve.artifact.importBuild', { partId, ref: 'master', commit, hash, files: asInput(f) },
-                    { nodeID: 'port-a', meta: { tenant_id: tenantId } });
+                await brokerA.call('serve.artifact.importBuild', { partId, ref: 'master', commit, hash, files: asInput(f) }, onNode('port-a'));
                 return hash;
             };
+            /** A build from before 10-09: on port-a's disk and in the database, on no other node. Pinned, so retention keeps it. */
+            const storedOnly = async (name: string, f: Record<string, string>): Promise<{ hash: string; id: string }> => {
+                const partId = await newPart(name);
+                const { hashOutput } = await import('../src/catalog/methods/build.js');
+                const { storeArtifact } = await import('../src/catalog/methods/artifactStore.js');
+                const made = hashOutput(new Map(Object.entries(f).map(([p, c]) => [p, Buffer.from(c)])));
+                for (const [p, c] of Object.entries(f)) {
+                    await fs.mkdir(path.join(dirA, made.hash), { recursive: true });
+                    await fs.writeFile(path.join(dirA, made.hash, p), c);
+                }
+                await storeArtifact(brokerA, made.hash, Object.keys(f), 'port-a');
+                const record = await brokerA.call('serve.artifact.create', {
+                    tenantId, partId, ref: 'master', commit, status: 'success', hash: made.hash, assets: made.assets, builtOn: 'port-a',
+                }, { meta: { tenant_id: tenantId } });
+                await brokerA.call('serve.part.update', { id: partId, artifactId: record.id }, { meta: { tenant_id: tenantId } });
+                return { hash: made.hash, id: record.id };
+            };
+            const recordOf = async (id: string) => brokerA.call('serve.artifact.resolve', { id }, { meta: { tenant_id: tenantId } });
 
-            it('keeps every file of an imported build in the database', async () => {
+            it('copies an imported build to a second node, records it, and writes nothing to the database', async () => {
                 const f = { 'kept.js': 'export default "kept";\n', 'kept.css': '.k{}' };
                 const hash = await importOn('kept', f);
-                const names = (await bucket().find({ 'metadata.hash': hash }).toArray()).map((x) => x.filename).sort();
-                expect(names).toEqual([`${hash}/kept.css`, `${hash}/kept.js`]);
+
+                expect(await fs.readFile(path.join(dirB, hash, 'kept.js'), 'utf8')).toBe(f['kept.js']);
+                const [record] = await brokerA.call('serve.artifact.find', { query: { hash } }, { meta: { tenant_id: tenantId } });
+                expect(record).toMatchObject({ builtOn: 'port-a', heldBy: ['port-b'] });
+                expect(await inDatabase(hash)).toEqual([]);
             }, 20000);
 
-            it('still gets a build to another node when the disk that had it is gone', async () => {
+            it('gets a build back from the other holder when the builder\'s disk is gone', async () => {
                 const f = { 'lost.js': 'export default "lost disk";\n' };
                 const hash = await importOn('lostdisk', f);
                 await fs.rm(path.join(dirA, hash), { recursive: true, force: true });
 
-                expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, { nodeID: 'port-b', meta: { tenant_id: tenantId } }))
-                    .toEqual({ artifactHash: hash, from: 'database' });
-                expect(await fs.readFile(path.join(dirB, hash, 'lost.js'), 'utf8')).toBe(f['lost.js']);
+                expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onNode('port-a'))).toEqual({ artifactHash: hash, from: 'port-b' });
+                expect(await fs.readFile(path.join(dirA, hash, 'lost.js'), 'utf8')).toBe(f['lost.js']);
             }, 20000);
+
+            it('moves a build from the database onto two nodes, and only then removes its database files', async () => {
+                const f = { 'old.js': 'export default "from before";\n' };
+                const { hash, id } = await storedOnly('moved', f);
+                expect(await inDatabase(hash)).toEqual([`${hash}/old.js`]);
+
+                const dry = await brokerA.call('serve.artifact.moveOffDatabase', { dryRun: true, limit: 200 }, onNode('port-a'));
+                expect(dry).toMatchObject({ dryRun: true, short: [] });
+                expect(await inDatabase(hash)).toEqual([`${hash}/old.js`]);
+
+                const moved = await brokerA.call('serve.artifact.moveOffDatabase', { limit: 200 }, onNode('port-a'));
+                expect(moved).toMatchObject({ dryRun: false, short: [], left: 0 });
+                expect(await fs.readFile(path.join(dirB, hash, 'old.js'), 'utf8')).toBe(f['old.js']);
+                expect(await recordOf(id)).toMatchObject({ heldBy: ['port-b'] });
+                expect(await inDatabase(hash)).toEqual([]);
+            }, 30000);
+
+            it('a build only the database has is put back onto two nodes before it leaves the database', async () => {
+                const f = { 'only.js': 'export default "database only";\n' };
+                const { hash, id } = await storedOnly('dbonly', f);
+                await fs.rm(path.join(dirA, hash), { recursive: true, force: true });
+
+                const moved = await brokerA.call('serve.artifact.moveOffDatabase', { limit: 200 }, onNode('port-a'));
+                expect(moved.short).toEqual([]);
+                expect(await fs.readFile(path.join(dirA, hash, 'only.js'), 'utf8')).toBe(f['only.js']);
+                expect(await fs.readFile(path.join(dirB, hash, 'only.js'), 'utf8')).toBe(f['only.js']);
+                expect(await recordOf(id)).toMatchObject({ builtOn: 'port-a', heldBy: ['port-b'] });
+                expect(await inDatabase(hash)).toEqual([]);
+            }, 30000);
 
             it('never uses a copy in the database that does not match the build\'s record -- it rebuilds instead', async () => {
                 const f = { 'tamper.js': 'export default "original";\n' };
-                const hash = await importOn('tamperdb', f);
+                const { hash } = await storedOnly('tamperdb', f);
                 const meta = { meta: { tenant_id: tenantId } };
                 const [record] = await brokerA.call('serve.artifact.find', { query: { hash } }, meta);
                 await fs.rm(path.join(dirA, hash), { recursive: true, force: true });

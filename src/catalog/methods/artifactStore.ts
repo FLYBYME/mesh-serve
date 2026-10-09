@@ -8,11 +8,12 @@ import type { Database, IServiceBroker } from '@flybyme/mesh';
 import { artifactFolder } from './artifacts.js';
 
 /**
- * Every build's files, kept in the database as well as on the disks that have them (GridFS,
- * bucket `artifactFiles`, one file per asset named `<hash>/<path>`). A build used to live only on
- * the node that made it and on nodes that had copied it: lose that disk and every build nobody had
- * copied was gone while its record said it existed. The database is the one store every node
- * reaches, and Atlas backs it up. Builds are small (a few MB).
+ * Builds kept in the database (GridFS, bucket `artifactFiles`, one file per asset named
+ * `<hash>/<path>`), from 09-28 to 10-09 -- **no longer written**. By 10-09 they were 136 of the
+ * database's 169 MB (owner: "mesh-serve needs a better way of moving files around the network
+ * that is not my DB"). A build now lives on two node disks (spreadArtifact.ts);
+ * `serve.artifact.moveOffDatabase` moves the old ones out. What is left here: reading them back
+ * (a pull's fallback while any remain), listing and dropping them. Delete once the bucket is empty.
  */
 const BUCKET = 'artifactFiles';
 

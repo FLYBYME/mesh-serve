@@ -10,6 +10,8 @@ import { restoreArtifact } from './artifactStore.js';
 /** What pulling needs to know of one build record: who built it, and which files it has. */
 export interface PullSource {
     readonly builtOn?: string | undefined;
+    /** Other nodes keeping a copy (methods/spreadArtifact.ts). */
+    readonly heldBy?: readonly string[] | undefined;
     readonly assets?: ReadonlyArray<{ readonly url: string; readonly integrity?: string | undefined }> | undefined;
     /** What a rebuild needs: the part, the exact commit it was built from, and a kernel's drivers. */
     readonly partId?: string | undefined;
@@ -52,8 +54,9 @@ export async function pullArtifact(
 async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly PullSource[], meta: Record<string, unknown>): Promise<string> {
     const tried = new Set<string>();
     const failures: string[] = [];
-    for (const source of sources) {
-        const from = source.builtOn;
+    // Every node recorded as holding it: who built it, then who keeps copies (methods/spreadArtifact.ts).
+    const holders = sources.flatMap((s) => [s.builtOn, ...(s.heldBy ?? [])].map((from) => ({ from, assets: s.assets })));
+    for (const { from, assets } of holders) {
         if (from === undefined || from === ctx.nodeID || tried.has(from)) continue;
         tried.add(from);
         // A builder that has left the mesh is skipped, not called: the call would only time out,
@@ -63,7 +66,7 @@ async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly
             continue;
         }
         try {
-            for (const asset of source.assets ?? []) {
+            for (const asset of assets ?? []) {
                 const { contentBase64 } = await ctx.call('serve.artifact.fetchAssetBytes', { artifactHash: hash, path: asset.url }, { nodeID: from, meta });
                 const destination = artifactAssetPath(hash, asset.url, ctx.nodeID);
                 await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -77,8 +80,8 @@ async function pullFromAny(ctx: IServiceContext, hash: string, sources: readonly
         }
     }
 
-    // No node could give it: the copy every build keeps in the database (methods/artifactStore.ts),
-    // checked against the record's integrity file by file.
+    // No node could give it: a copy in the database, for a build from before 10-09 not yet moved
+    // out (methods/artifactStore.ts), checked against the record's integrity file by file.
     const withAssets = sources.find((s) => (s.assets ?? []).length > 0);
     if (withAssets?.assets !== undefined) {
         try {

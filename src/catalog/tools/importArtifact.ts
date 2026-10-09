@@ -8,7 +8,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { ImportArtifactInput, RequestBuildOutput } from '../contracts/artifact.contract.js';
 import { artifactFolder } from '../methods/artifacts.js';
 import { hashOutput } from '../methods/build.js';
-import { storeArtifact } from '../methods/artifactStore.js';
+import { keepCopies } from '../methods/spreadArtifact.js';
 
 /** A path inside a build: relative, forward slashes, no way out of the build's folder. */
 function safeRelative(p: string): boolean {
@@ -64,9 +64,6 @@ export async function importBuild(input: ImportArtifactInput, ctx: IServiceConte
         }
     }
 
-    // Kept in the database too, like a queue build (methods/artifactStore.ts).
-    await storeArtifact(ctx.broker, hash, assets.map((a) => a.url), ctx.nodeID);
-
     const artifact = await ctx.db('serve.artifact').create({
         tenantId: part.tenantId,
         partId: part.id,
@@ -79,6 +76,8 @@ export async function importBuild(input: ImportArtifactInput, ctx: IServiceConte
         builtOn: ctx.nodeID,
         imported: true,
     });
+    // A second copy on another node's disk, as a queue build gets (methods/spreadArtifact.ts).
+    await keepCopies(ctx.broker, { id: artifact.id, tenantId: part.tenantId, hash, builtOn: ctx.nodeID });
     if (input.wants !== undefined) await ctx.db('serve.part').update({ id: part.id, wants: input.wants });
     if (input.pin) await ctx.db('serve.part').update({ id: part.id, artifactId: artifact.id });
 

@@ -1,7 +1,7 @@
 import { Database } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
-import { artifactCrud } from '../contracts/artifact.contract.js';
+import { artifactCrud, type Artifact } from '../contracts/artifact.contract.js';
 import type { PruneArtifactsOutput } from '../contracts/artifact.contract.js';
 import { partCrud } from '../contracts/part.contract.js';
 import { releaseCrud } from '../contracts/release.contract.js';
@@ -12,7 +12,8 @@ import { dropStoredBuild, storedBuilds } from '../methods/artifactStore.js';
  * Removes stored build files nothing needs (methods/artifactRetention.ts). Cross-tenant, as
  * watchRelease is: builds of every tenant share the one bucket. `dryRun` reports what would go.
  */
-async function pruneStored(ctx: IServiceContext, dryRun: boolean): Promise<PruneArtifactsOutput> {
+/** Every build record of every tenant, and the hashes retention keeps (methods/artifactRetention.ts). */
+export async function retention(ctx: IServiceContext): Promise<{ artifacts: Artifact[]; keep: Set<string> }> {
     const db = ctx.broker.getProvider<Database>('database');
     const parts = (await db.repo(partCrud.get.outputSchema, 'serve.part').find({ query: {} })).map((p) => partCrud.get.outputSchema.parse(p));
     const artifacts = (await db.repo(artifactCrud.get.outputSchema, 'serve.artifact').find({ query: {} })).map((a) => artifactCrud.get.outputSchema.parse(a));
@@ -24,6 +25,12 @@ async function pruneStored(ctx: IServiceContext, dryRun: boolean): Promise<Prune
         releases: releases.map((r) => ({ compositionId: r.compositionId, createdAt: r.createdAt, artifacts: r.artifacts.map((a) => ({ ...(a.hash !== undefined ? { hash: a.hash } : {}) })) })),
         now: new Date(),
     });
+
+    return { artifacts, keep };
+}
+
+async function pruneStored(ctx: IServiceContext, dryRun: boolean): Promise<PruneArtifactsOutput> {
+    const { keep } = await retention(ctx);
     const stored = await storedBuilds(ctx.broker);
     const drop = hashesToDrop(stored.keys(), keep);
 

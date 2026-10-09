@@ -333,6 +333,42 @@ export const artifactPruneContract = defineContract({
     timeout: 300_000,
 });
 
+const moveOffDatabaseOutputSchema = z.object({
+    dryRun: z.boolean(),
+    moved: z.number().int().describe('Builds now on enough node disks, their database files removed (or, dry run, that would be tried)'),
+    dropped: z.number().int().describe('Builds nothing keeps, their database files removed'),
+    short: z.array(z.string()).describe('Builds left in the database: not on enough nodes, with why'),
+    left: z.number().int().describe('Builds still in the database after this call (call again)'),
+    bytes: z.number().int().describe('Database bytes freed'),
+});
+export type MoveOffDatabaseOutput = z.infer<typeof moveOffDatabaseOutputSchema>;
+
+/**
+ * Builds out of the database, onto node disks (owner, 10-09: 136 of 169 MB of it was build files).
+ * For each build still in GridFS: one retention keeps is copied to ARTIFACT_COPIES nodes, each
+ * holder checked by asking it to pull (methods/spreadArtifact.ts), and only then are its database
+ * files removed; one nothing keeps just loses its files, as prune would. `limit` builds per call.
+ */
+export const artifactMoveOffDatabaseContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'moveOffDatabase',
+    description: 'Moves stored builds out of the database onto node disks: each kept build onto two nodes (checked) before its database files go; builds nothing keeps just lose their files. limit builds per call; dryRun says what it would do.',
+    inputSchema: z.object({
+        dryRun: z.boolean().optional().describe('Report, move nothing'),
+        limit: z.number().int().min(1).max(200).default(20).describe('Builds handled in this call'),
+    }),
+    outputSchema: moveOffDatabaseOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/move-off-database' },
+    destructive: true,
+    visibility: 'public',
+    dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
+    filePath: 'src/catalog/tools/moveOffDatabase.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.dryRun ? 'would move' : 'moved'} ${o.moved}, dropped ${o.dropped}, ${o.short.length} short, ${o.left} left (${Math.round(o.bytes / 1e6)} MB freed)${o.short.length > 0 ? `\n${o.short.join('\n')}` : ''}`,
+    timeout: 1_800_000,
+});
+
 /**
  * The same, every hour, on the leader. Still named pruneDaily (renaming moves its contract key);
  * it ran daily until a day's builds alone filled the database (2026-10-01).
