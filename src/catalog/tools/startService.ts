@@ -63,7 +63,9 @@ async function loadPart(
     const { artifact, hash } = runnable;
     onArtifact(artifact.id);
 
-    const jsAsset = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
+    // .cjs since 10-09 (builds are CommonJS, so they can be unloaded); .js for a build from before.
+    const jsAsset = (artifact.assets ?? []).find((asset) => asset.fileExtension === '.cjs')
+        ?? (artifact.assets ?? []).find((asset) => asset.fileExtension === '.js');
     if (jsAsset === undefined) {
         throw new MeshError({ message: `Artifact ${hash} for "${part.key}" has no .js entry.`, code: 'NOT_FOUND', status: 404 });
     }

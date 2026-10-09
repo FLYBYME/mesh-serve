@@ -51,6 +51,8 @@ describe('the builder is reproducible', () => {
         expect(first.commit).toBe(commit);
         expect(second.hash).toBe(first.hash);
         expect(second.assets).toEqual(first.assets);
+        // CommonJS, so a stopped part's code can be dropped (loadModule.ts; ESM never can, 10-09).
+        expect(JSON.stringify(first.assets)).toContain('register.cjs"');
     }, 120000);
 
     it('builds a commit that adds a file an earlier build left untracked in the shared checkout (10-09)', () => {

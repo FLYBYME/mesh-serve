@@ -482,7 +482,11 @@ export async function buildService(part: BuildablePart, repo: BuildableRepo, ref
 
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
-            await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node');
+            // CommonJS, so stopping the part frees its code (loadModule.ts: require.cache can be
+            // dropped, an ES module never can). Built as ESM, every redeploy or restart of a part kept
+            // the old build's whole module -- and anything it started outside the broker -- for the
+            // life of the node (owner, 10-09: "still in memory right now").
+            await runEsbuild([entry], buildTmpDir, ['@flybyme/mesh'], 'node', 'cjs');
             return { ...await hashAndStoreOutput(buildTmpDir, repoDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
