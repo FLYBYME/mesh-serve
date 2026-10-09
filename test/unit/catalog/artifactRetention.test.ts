@@ -21,6 +21,12 @@ describe('hashesToKeep', () => {
         expect([...keep].sort()).toEqual(['h4', 'h5', 'h6']);
     });
 
+    it('keeps every build in a release a site serves, however old', () => {
+        const releases = [4, 5, 6, 7, 30].map((d) => ({ compositionId: 'site', createdAt: daysAgo(d), hash: `r${d}`, artifacts: [{ hash: `h${d}` }] }));
+        const keep = hashesToKeep({ parts: [], artifacts: [], releases, served: ['r30'], now });
+        expect([...keep].sort()).toEqual(['h30', 'h4', 'h5', 'h6']);
+    });
+
     it('keeps anything just built, and never a failed build\'s (it has none)', () => {
         const fresh = build('n', 'p2', 'hn', 0);
         expect(now.getTime() - fresh.updatedAt.getTime()).toBeLessThan(KEEP_RECENT_MS);

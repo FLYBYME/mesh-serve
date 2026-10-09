@@ -43,10 +43,24 @@ export function contentTypeFor(assetPath: string): string {
     return contentTypes[path.extname(assetPath).toLowerCase()] ?? 'application/octet-stream';
 }
 
-/** The folder one build's files live in on this node: `~/.mesh/artifacts/<hash>`. */
+/** The folder all of this node's builds live in (one folder per build, named by its hash). */
+export function artifactsRoot(nodeID?: string): string {
+    return (nodeID !== undefined ? testArtifactDirs.get(nodeID) : undefined) ?? artifactDir;
+}
+
+/** What a build's hash looks like: letters, digits, `-` and `_` -- never a path (`../`, `/`). */
+export const ARTIFACT_HASH = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The folder one build's files live in on this node: `~/.mesh/artifacts/<hash>`. A hash that is not
+ * one is refused: `../..` resolved outside the artifacts folder, and every asset check below was
+ * relative to that already-escaped folder (review, 09-18).
+ */
 export function artifactFolder(artifactHash: string, nodeID?: string): string {
-    const dir = (nodeID !== undefined ? testArtifactDirs.get(nodeID) : undefined) ?? artifactDir;
-    return path.resolve(dir, artifactHash);
+    if (!ARTIFACT_HASH.test(artifactHash)) {
+        throw new MeshError({ message: `"${artifactHash.slice(0, 80)}" is not a build hash.`, code: 'BAD_REQUEST', status: 400 });
+    }
+    return path.resolve(artifactsRoot(nodeID), artifactHash);
 }
 
 /**

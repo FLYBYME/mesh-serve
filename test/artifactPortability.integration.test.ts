@@ -319,6 +319,35 @@ describe('a service part started on a node that never built it', () => {
                 expect(await inDatabase(hash)).toEqual([]);
             }, 30000);
 
+            it('prunes a node\'s disk: an old build nothing keeps goes, a pinned one and a fresh one stay', async () => {
+                const pinned = await storedOnly('diskkept', { 'k.js': 'export default "kept on disk";\n' });
+                const orphan = path.join(dirA, 'orphan-build-hash');
+                const fresh = path.join(dirA, 'fresh-build-hash');
+                for (const dir of [orphan, fresh]) {
+                    await fs.mkdir(dir, { recursive: true });
+                    await fs.writeFile(path.join(dir, 'x.js'), 'export default 0;\n');
+                }
+                const old = new Date(Date.now() - 2 * 3600_000);
+                await fs.utimes(orphan, old, old);
+                await fs.utimes(path.join(dirA, pinned.hash), old, old);
+                await fs.mkdir(path.join(dirA, `${pinned.hash}.restoring-x`), { recursive: true });
+
+                const dry = await brokerA.call('serve.artifact.pruneDisk', { dryRun: true }, onNode('port-a'));
+                expect(dry).toMatchObject({ nodeID: 'port-a', dryRun: true, removed: 1 });
+                await expect(fs.access(orphan)).resolves.toBeUndefined();
+
+                const done = await brokerA.call('serve.artifact.pruneDisk', {}, onNode('port-a'));
+                expect(done).toMatchObject({ removed: 1 });
+                await expect(fs.access(orphan)).rejects.toThrow();
+                await expect(fs.access(fresh)).resolves.toBeUndefined();
+                await expect(fs.access(path.join(dirA, pinned.hash))).resolves.toBeUndefined();
+                await expect(fs.access(path.join(dirA, `${pinned.hash}.restoring-x`))).resolves.toBeUndefined();
+            }, 30000);
+
+            it('refuses a hash that is a path', async () => {
+                await expect(brokerA.call('serve.artifact.getAsset', { artifactHash: '..', path: 'etc/passwd' }, onNode('port-a'))).rejects.toThrow(/not a build hash/);
+            });
+
             it('never uses a copy in the database that does not match the build\'s record -- it rebuilds instead', async () => {
                 const f = { 'tamper.js': 'export default "original";\n' };
                 const { hash } = await storedOnly('tamperdb', f);

@@ -32,7 +32,13 @@ export interface RetentionArtifact {
 export interface RetentionInput {
     readonly parts: ReadonlyArray<{ readonly artifactId?: string }>;
     readonly artifacts: readonly RetentionArtifact[];
-    readonly releases: ReadonlyArray<{ readonly compositionId: string; readonly createdAt: Date; readonly artifacts: ReadonlyArray<{ readonly hash?: string }> }>;
+    readonly releases: ReadonlyArray<{ readonly compositionId: string; readonly createdAt: Date; readonly hash?: string; readonly artifacts: ReadonlyArray<{ readonly hash?: string }> }>;
+    /**
+     * The releases sites serve now (`serve.cdn` `releaseHash`): every build in them is kept, however
+     * old. A site can serve a release older than its composition's newest three, and once builds
+     * live only on node disks, dropping one takes the site down (10-09).
+     */
+    readonly served?: readonly string[];
     readonly now: Date;
 }
 
@@ -62,6 +68,12 @@ export function hashesToKeep(input: RetentionInput): Set<string> {
             for (const a of r.artifacts) add(a.hash);
         }
     }
+
+    const served = new Set(input.served ?? []);
+    for (const r of input.releases) {
+        if (r.hash !== undefined && served.has(r.hash)) for (const a of r.artifacts) add(a.hash);
+    }
+
     return keep;
 }
 

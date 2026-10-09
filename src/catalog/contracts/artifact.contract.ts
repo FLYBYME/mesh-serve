@@ -369,6 +369,55 @@ export const artifactMoveOffDatabaseContract = defineContract({
     timeout: 1_800_000,
 });
 
+const pruneDiskOutputSchema = z.object({
+    nodeID: z.string(),
+    dryRun: z.boolean(),
+    kept: z.number().int().describe('Builds on this node\'s disk that stay'),
+    removed: z.number().int().describe('Builds removed from this node\'s disk (or, dry run, that would be)'),
+    bytes: z.number().int(),
+});
+export type PruneDiskOutput = z.infer<typeof pruneDiskOutputSchema>;
+
+/**
+ * Builds live on node disks now (methods/spreadArtifact.ts), so each disk is pruned as the database
+ * was: what retention does not keep goes -- never a build in a release a site serves, never a
+ * folder changed in the last hour. The node is taken off those builds' `heldBy`.
+ */
+export const artifactPruneDiskContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'pruneDisk',
+    description: 'Removes builds nothing keeps from the disk of the node that takes the call (pinned, each part\'s newest 3, the newest 3 releases of each composition, every release a site serves, the last hour\'s stay). dryRun reports without removing.',
+    inputSchema: z.object({ dryRun: z.boolean().optional().describe('Report what would go, remove nothing') }),
+    outputSchema: pruneDiskOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/prune-disk' },
+    destructive: true,
+    visibility: 'public',
+    dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
+    filePath: 'src/catalog/tools/pruneDisk.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.nodeID}: ${o.dryRun ? 'would remove' : 'removed'} ${o.removed} builds (${Math.round(o.bytes / 1e6)} MB), kept ${o.kept}`,
+    timeout: 300_000,
+});
+
+/** The same, hourly, on every node: each keeps its own disk. */
+export const artifactPruneDiskHourlyContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'pruneDiskHourly',
+    description: 'Runs serve.artifact.pruneDisk on this node every ARTIFACT_PRUNE_INTERVAL_MS (default 1 h).',
+    inputSchema: z.object({}),
+    outputSchema: pruneDiskOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/prune-disk-hourly' },
+    destructive: true,
+    dependencies: ['serve.artifact', 'serve.part', 'serve.release'],
+    filePath: 'src/catalog/tools/pruneDisk.ts',
+    concurrency: 'interval',
+    intervalMs: Number(process.env.ARTIFACT_PRUNE_INTERVAL_MS ?? 3600_000),
+    permissions: ['operator'],
+    print: (o) => `${o.nodeID}: removed ${o.removed} builds (${Math.round(o.bytes / 1e6)} MB)`,
+    timeout: 300_000,
+});
+
 /**
  * The same, every hour, on the leader. Still named pruneDaily (renaming moves its contract key);
  * it ran daily until a day's builds alone filled the database (2026-10-01).
