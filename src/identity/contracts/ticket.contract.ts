@@ -23,7 +23,7 @@ export type Ticket = z.infer<typeof ticketCrud.outputSchema>;
 export const TicketRevokedEventSchema = z.object({
     id: z.string().describe('The id of the ticket that was revoked'),
     userId: z.string().describe('Whose ticket this is'),
-    tokenId: z.string().describe('The token that was revoked'),
+    tokenId: z.string().describe('sha256 of the token that was revoked (what the ticket stores) -- never the token: this event used to carry the bearer credential itself'),
     revokedAt: z.number().describe('When the ticket was revoked, as a unix timestamp in milliseconds'),
     revokedReason: z.string().optional().describe('The reason for revocation'),
 });

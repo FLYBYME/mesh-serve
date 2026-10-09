@@ -1,12 +1,13 @@
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { TicketResolveInput, TicketResolveOutput } from '../contracts/ticket.contract.js';
+import { hashToken } from '../methods/hash.js';
 
 export async function resolveTicket(
     input: TicketResolveInput,
     ctx: IServiceContext
 ): Promise<TicketResolveOutput> {
-    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: input.token } });
+    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: hashToken(input.token) } });
     if (ticket === undefined) {
         // Never the ticket itself -- it is a bearer credential.
         ctx.logger.debug('ticket not found');

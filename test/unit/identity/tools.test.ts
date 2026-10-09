@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MeshError } from '@flybyme/mesh';
 import { createMockContext } from '../helpers/mockContext.js';
-import { hashPassword } from '../../../src/identity/methods/hash.js';
+import { hashPassword, hashToken } from '../../../src/identity/methods/hash.js';
 import { hasRole } from '../../../src/identity/tools/hasRole.js';
 import { permits } from '../../../src/identity/tools/permits.js';
 import { issueTicket } from '../../../src/identity/tools/issueTicket.js';
@@ -443,7 +443,9 @@ describe('identity tools', () => {
                 // identity.ticket.create call verification
                 expect(createdTickets).toHaveLength(1);
                 const created = createdTickets[0];
-                expect(created.token).toBe(result.token);
+                // Stored hashed: whoever reads the database cannot sign in as anyone (10-09).
+                expect(created.token).toBe(hashToken(result.token));
+                expect(created.token).not.toBe(result.token);
                 expect(created.userId).toBe('u-123');
                 expect(created.roles).toEqual(['operator', 'admin']);
                 expect(created.issuedAt).toBeInstanceOf(Date);
@@ -548,7 +550,7 @@ describe('identity tools', () => {
         it('returns valid: true with userId and roles for an active unrevoked ticket', async () => {
             const activeTicket = {
                 id: 'tick-1',
-                token: 'tok-abc-123',
+                token: hashToken('tok-abc-123'),
                 userId: 'u-456',
                 roles: ['operator', 'member'],
                 issuedAt: new Date(Date.now() - 1000),
@@ -559,7 +561,7 @@ describe('identity tools', () => {
             const { ctx } = createMockContext({
                 handlers: {
                     'identity.ticket.find_one': async ({ query }) => {
-                        if (query.token === 'tok-abc-123') return activeTicket;
+                        if (query.token === activeTicket.token) return activeTicket;
                         return undefined;
                     },
                 },
@@ -572,6 +574,9 @@ describe('identity tools', () => {
                 userId: 'u-456',
                 roles: ['operator', 'member'],
             });
+
+            // What the database holds is not a credential: presented as a token, it is refused.
+            expect(await validateTicket({ token: activeTicket.token }, ctx)).toEqual({ valid: false });
         });
 
         it('returns valid: false when ticket does not exist in store', async () => {
@@ -658,7 +663,7 @@ describe('identity tools', () => {
         it('revokes a single ticket by token, emits event, and returns count', async () => {
             const activeTicket = {
                 id: 'tick-1',
-                token: 'tok-target',
+                token: hashToken('tok-target'),
                 userId: 'u-1',
                 revokedAt: undefined,
             };
@@ -667,7 +672,7 @@ describe('identity tools', () => {
             const { ctx, emitted } = createMockContext({
                 handlers: {
                     'identity.ticket.find_one': async ({ query }) => {
-                        if (query.token === 'tok-target') return activeTicket;
+                        if (query.token === activeTicket.token) return activeTicket;
                         return undefined;
                     },
                     'identity.ticket.update': async (params) => {
@@ -695,7 +700,8 @@ describe('identity tools', () => {
             expect(emitted[0]?.params).toEqual({
                 id: 'tick-1',
                 userId: 'u-1',
-                tokenId: 'tok-target',
+                // The hash, never the bearer token itself.
+                tokenId: hashToken('tok-target'),
                 revokedAt: result.epoch,
                 revokedReason: 'User requested logout',
             });
@@ -810,7 +816,7 @@ describe('identity tools', () => {
         it('revokes active ticket and emits identity.user.signed_out event', async () => {
             const activeTicket = {
                 id: 'tick-signout',
-                token: 'tok-signout-1',
+                token: hashToken('tok-signout-1'),
                 userId: 'u-999',
                 revokedAt: undefined,
             };
@@ -819,7 +825,7 @@ describe('identity tools', () => {
             const { ctx, emitted } = createMockContext({
                 handlers: {
                     'identity.ticket.find_one': async ({ query }) => {
-                        if (query.token === 'tok-signout-1') return activeTicket;
+                        if (query.token === activeTicket.token) return activeTicket;
                         return undefined;
                     },
                     'identity.ticket.update': async (params) => {

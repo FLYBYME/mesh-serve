@@ -1,12 +1,13 @@
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { SignOutInput, SignOutOutput } from '../contracts/ticket.contract.js';
+import { hashToken } from '../methods/hash.js';
 
 export async function signOut(
     input: SignOutInput,
     ctx: IServiceContext
 ): Promise<SignOutOutput> {
-    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: input.token } });
+    const ticket = await ctx.db('identity.ticket').findOne({ query: { token: hashToken(input.token) } });
     if (ticket !== undefined && ticket.revokedAt === undefined) {
         await ctx.db('identity.ticket').update({ id: ticket.id, revokedAt: new Date() });
 

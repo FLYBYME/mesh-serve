@@ -2,7 +2,7 @@ import { MeshError } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/ticket.contract.js';
-import { verifyPassword, issuedToken } from '../methods/hash.js';
+import { hashToken, verifyPassword, issuedToken } from '../methods/hash.js';
 import { findUserByEmail } from '../methods/findByEmail.js';
 
 const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -27,7 +27,7 @@ export async function issueTicket(
     const issuedAt = new Date();
     const expiresAt = new Date(issuedAt.getTime() + TICKET_TTL_MS);
     await ctx.db('identity.ticket').create({
-        token,
+        token: hashToken(token),
         userId: user.id,
         roles: user.roles,
         issuedAt,

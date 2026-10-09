@@ -1,6 +1,7 @@
 import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RevokeInput, RevokeOutput } from '../contracts/ticket.contract.js';
+import { hashToken } from '../methods/hash.js';
 
 export async function revokeTicket(
     input: RevokeInput,
@@ -10,7 +11,7 @@ export async function revokeTicket(
     let revoked = 0;
 
     const tickets = input.token !== undefined
-        ? [await ctx.db('identity.ticket').findOne({ query: { token: input.token } })].filter((t) => t !== undefined)
+        ? [await ctx.db('identity.ticket').findOne({ query: { token: hashToken(input.token) } })].filter((t) => t !== undefined)
         : input.userId !== undefined
             ? await ctx.db('identity.ticket').find({ query: { userId: input.userId } })
             : [];
