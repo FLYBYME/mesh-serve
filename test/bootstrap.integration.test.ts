@@ -241,7 +241,8 @@ describe('a fresh install, booted for real', () => {
         const registerRes = await fetch(`${API_ORIGIN}/api/identity/register`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ email: 'nobody@example.com', password: 'not-an-operator-12', displayName: 'Nobody' }),
+            // As the sign-up page sends it: how long the form was on screen (public forms refuse none, 10-10).
+            body: JSON.stringify({ email: 'nobody@example.com', password: 'not-an-operator-12', displayName: 'Nobody', shownForMs: 8000 }),
         });
         expect(registerRes.status).toBe(200);
         const issueRes = await fetch(`${API_ORIGIN}/api/identity/ticket`, {
