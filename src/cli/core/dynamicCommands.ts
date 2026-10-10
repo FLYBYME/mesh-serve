@@ -29,9 +29,13 @@ export async function readStdin(stream: AsyncIterable<unknown> = process.stdin):
 /** Built-in names the api must never shadow, however an expose row is spelled. */
 const RESERVED = new Set(['start', 'bootstrap', 'generate', 'sync', 'login', 'switch', 'apis', 'help']);
 
+/**
+ * A call's answer, as JSON a script can read. Nothing back is `null` -- a find_one that found
+ * nothing, or an action with no output -- never "ok" (10-10), which read as success and was not JSON.
+ */
 function renderResult(value: unknown): void {
-    if (value === undefined) {
-        console.log('ok');
+    if (value === undefined || value === null) {
+        console.log('null');
         return;
     }
     if (typeof value === 'string') {
