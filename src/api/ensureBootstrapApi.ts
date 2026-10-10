@@ -29,6 +29,8 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'identity.ticket.issue' },
     // Public as issue is: the ticket sent is the credential. A client renews before 24 hours end.
     { contract: 'identity.ticket.renew' },
+    // Public too: ends the ticket sent, so a copied one stops working (found 10-10).
+    { contract: 'identity.ticket.signOut' },
     { contract: 'identity.whoami' },
     { contract: 'identity.user.setPassword' },
     { contract: 'serve.api.resolveByHost' },

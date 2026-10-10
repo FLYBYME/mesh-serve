@@ -6,6 +6,7 @@ import { BootstrapCommand } from './commands/bootstrap.js';
 import { GenerateCommand } from './commands/generate.js';
 import { SyncCommand } from './commands/sync.js';
 import { LoginCommand } from './commands/login.js';
+import { LogoutCommand } from './commands/logout.js';
 import { SwitchCommand } from './commands/switch.js';
 import { ApisCommand } from './commands/apis.js';
 import { WatchCommand } from './commands/watch.js';
@@ -48,6 +49,7 @@ function buildProgram(session: Session, writeErr: (text: string) => void): Comma
     new GenerateCommand().register(program);
     new SyncCommand().register(program);
     new LoginCommand().register(program);
+    new LogoutCommand().register(program);
     new SwitchCommand().register(program);
     new ApisCommand().register(program);
     new WatchCommand().register(program);
