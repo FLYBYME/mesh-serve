@@ -27,6 +27,8 @@ export const BOOTSTRAP_API_HOST = process.env.DEFAULT_API_HOST ?? 'api.localhost
 export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: string }[] = [
     { contract: 'identity.user.register' },
     { contract: 'identity.ticket.issue' },
+    // Public as issue is: the ticket sent is the credential. A client renews before 24 hours end.
+    { contract: 'identity.ticket.renew' },
     { contract: 'identity.whoami' },
     { contract: 'identity.user.setPassword' },
     { contract: 'serve.api.resolveByHost' },

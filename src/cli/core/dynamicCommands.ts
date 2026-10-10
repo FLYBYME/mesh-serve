@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 
 import { ApiError, callApi } from './apiClient.js';
 import { JsonSchemaToCli } from './JsonSchemaToCli.js';
+import { renewIfDue } from './renew.js';
 import { isLive, type Session } from './session.js';
 
 /** All of stdin, for `--json -`. */
@@ -111,8 +112,12 @@ export function registerDiscoveredCommands(program: Command, session: Session): 
                 return;
             }
 
+            // Renewed first when it ends within hours, so a CLI in use never lapses.
+            const current = await renewIfDue(apiUrl, session);
+
             try {
-                renderResult(await callApi(apiUrl, call, params, session.token));
+                const result = await callApi(apiUrl, call, params, current.token);
+                renderResult(result);
             } catch (err) {
                 if (err instanceof ApiError) {
                     console.error(err.message);

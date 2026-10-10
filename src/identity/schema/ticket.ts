@@ -5,6 +5,7 @@ export const ticketSchema = z.object({
   userId: z.string().describe('The user holding this ticket'),
   roles: z.array(z.string()).describe('Resolved roles at the time of issue'),
   issuedAt: z.coerce.date().describe('When the ticket was issued'),
+  signedInAt: z.coerce.date().optional().describe('When its holder last gave their password: kept through every renewal, which stops 30 days after it. Absent on tickets from before 10-10: their issuedAt'),
   expiresAt: z.coerce.date().describe('When the ticket expires'),
   via: z.string().describe('How the ticket was issued (e.g., login, password_reset)'),
   revokedAt: z.coerce.date().optional().describe('When the ticket was revoked, if applicable'),

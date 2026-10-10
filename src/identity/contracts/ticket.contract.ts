@@ -116,6 +116,32 @@ export const ticketRevokeContract = defineContract({
 export type RevokeInput = z.infer<typeof ticketRevokeContract.inputSchema>;
 export type RevokeOutput = z.infer<typeof ticketRevokeContract.outputSchema>;
 
+export const renewInputSchema = z.object({
+    token: z.string().min(1).describe('The caller\'s own ticket, still valid'),
+}).describe('Exchange a ticket that has not expired for a fresh one');
+
+/**
+ * identity.ticket.renew -- a ticket that has not expired, exchanged for a fresh one (a new token, 24
+ * hours more), the old one revoked at once. Clients renew a few hours before the end, so a signed-in
+ * tab or CLI never lapses (owner, 10-10). Renewal stops 30 days after the password was last given:
+ * then the holder signs in again, so a stolen ticket cannot be kept alive for ever.
+ */
+export const ticketRenewContract = defineContract({
+    domain: 'identity.ticket',
+    action: 'renew',
+    description: 'Exchange a ticket that has not expired for a fresh one; the old one stops working.',
+    inputSchema: renewInputSchema,
+    outputSchema: issueOutputSchema,
+    rest: { method: 'POST', path: '/identity/ticket/renew' },
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/renewTicket.ts', concurrency: 'on-demand', permissions: [],
+    print: (o) => `renewed, until ${new Date(o.expiresAt).toISOString()}`,
+});
+
+export type RenewInput = z.infer<typeof ticketRenewContract.inputSchema>;
+export type RenewOutput = z.infer<typeof ticketRenewContract.outputSchema>;
+
 export const signOutInputSchema = z.object({
     token: z.string().min(1).describe('The caller\'s own ticket. Yours by definition: you had to hold it to send it'),
 }).describe('End the calling session');

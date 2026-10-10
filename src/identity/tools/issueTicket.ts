@@ -5,7 +5,8 @@ import type { IssueInput, IssueOutput } from '../contracts/ticket.contract.js';
 import { hashToken, verifyPassword, issuedToken } from '../methods/hash.js';
 import { findUserByEmail } from '../methods/findByEmail.js';
 
-const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
+/** How long a ticket lasts: from its sign-in, or its renewal (identity.ticket.renew). */
+export const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
 
 export async function issueTicket(
     input: IssueInput,
@@ -31,6 +32,7 @@ export async function issueTicket(
         userId: user.id,
         roles: user.roles,
         issuedAt,
+        signedInAt: issuedAt,
         expiresAt,
         via: input.via ?? 'login',
     });

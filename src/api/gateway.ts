@@ -991,8 +991,9 @@ export class ApiGateway {
             onRouted: (nodeID) => { if (!res.headersSent) res.setHeader('x-mesh-node', nodeID); },
         });
 
-        // A sign-out through this gateway ends the ticket here at once, not after the 15 s it is kept.
-        if (route.row.contract === 'identity.ticket.signOut') {
+        // A sign-out or a renewal through this gateway ends the old ticket here at once, not after
+        // the 15 s it is kept.
+        if (route.row.contract === 'identity.ticket.signOut' || route.row.contract === 'identity.ticket.renew') {
             if (typeof input.token === 'string') this.callers.forget(input.token);
             const token = this.bearer(req);
             if (token !== undefined) this.callers.forget(token);
