@@ -21,11 +21,11 @@ const WINDOW_MS = 3600_000;
 export const FORM_MIN_SHOWN_MS = 3000;
 
 /**
- * Whether a form with no measure at all is refused. Off for one release: the site can only send
- * `shownForMs` once the live api describes it (its client is generated from the api). A form
- * without it is still allowed and said (`unmeasured`) until the site sends it; then this is on.
+ * Whether a form with no measure at all is refused. Off in v0.10.48 only, because the site could
+ * send `shownForMs` only once the live api described it. The site has sent it since 66a864a
+ * (10-10); from here a public form without it is refused.
  */
-export const FORM_MEASURE_REQUIRED = false;
+export const FORM_MEASURE_REQUIRED = true;
 
 /**
  * Whether this call is one of the public forms sent too fast. Returns the input without
