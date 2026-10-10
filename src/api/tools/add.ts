@@ -34,8 +34,13 @@ export async function add(
     } else {
         // This node's definition, or what the node that runs it advertises: the api publishes
         // contracts that run elsewhere (smtp.capture_list runs on surf, the api on edge1).
+        // Two refusals, said apart: right after a deploy the part has not advertised it yet, and
+        // "not a public contract" sent an operator looking at its visibility (10-10).
         const contract = ctx.broker.contractDeclaration(input.contract);
-        if (contract === undefined || contract.visibility !== 'public') {
+        if (contract === undefined) {
+            throw new MeshError({ message: `No node serves "${input.contract}" (yet): a part just deployed takes a few seconds to advertise it. Try again, or check the name.`, code: 'NOT_FOUND', status: 404 });
+        }
+        if (contract.visibility !== 'public') {
             throw new MeshError({ message: `"${input.contract}" is not a public contract.`, code: 'BAD_REQUEST', status: 400 });
         }
         if (ungated && contract.permissions.length === 0) refuseAccidentallyPublic(input, 'the contract demands no role itself');

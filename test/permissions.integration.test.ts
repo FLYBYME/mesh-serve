@@ -254,6 +254,12 @@ describe('a contract permission floor an expose row cannot lower', () => {
             await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', role: 'oporator' }, m)).rejects.toThrow(/No role "oporator"/);
             await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', role: 'operator' }, m)).resolves.toMatchObject({ role: 'operator' });
         });
+
+        it('says a contract no node serves (yet) apart from one that is not public (10-10)', async () => {
+            const m = await meta();
+
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'nothing.served_here', role: 'operator' }, m)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+        });
     });
 
     /**
