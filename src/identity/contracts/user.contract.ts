@@ -31,6 +31,7 @@ export const registerInputSchema = z.object({
     email: z.string().email().describe('The email address for the new account'),
     password: z.string().min(8).describe('At least eight characters'),
     displayName: z.string().min(1).describe('The name shown for this account'),
+    shownForMs: z.number().int().min(0).optional().describe('How long the form was on screen before it was sent: through the api, one sent within seconds is refused (api/methods/formLimit.ts)'),
 }).describe('Create an account');
 
 export const registerOutputSchema = z.object({

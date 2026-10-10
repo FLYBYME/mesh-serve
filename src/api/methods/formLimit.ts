@@ -12,6 +12,41 @@ export const FORM_LIMITS: Readonly<Record<string, number>> = {
 
 const WINDOW_MS = 3600_000;
 
+/**
+ * A person reads a form before sending it; a bot posts it the moment it has the page, or without
+ * ever loading it (10-08: a contact message, a sign-up and a reset within 30 s). The page says how
+ * long the form was on screen (`shownForMs`, measured by the page itself, so no clock is compared);
+ * a public form sent without it, or within this, is refused. Only these forms, only through the api.
+ */
+export const FORM_MIN_SHOWN_MS = 3000;
+
+/**
+ * Whether a form with no measure at all is refused. Off for one release: the site can only send
+ * `shownForMs` once the live api describes it (its client is generated from the api). A form
+ * without it is still allowed and said (`unmeasured`) until the site sends it; then this is on.
+ */
+export const FORM_MEASURE_REQUIRED = false;
+
+/**
+ * Whether this call is one of the public forms sent too fast. Returns the input without
+ * `shownForMs` -- the service is never handed the page's own measure (an older build of it would not
+ * know the field).
+ */
+export function formTiming(
+    contract: string,
+    input: Readonly<Record<string, unknown>>,
+    required: boolean = FORM_MEASURE_REQUIRED,
+): { tooFast: boolean; unmeasured: boolean; input: Record<string, unknown> } {
+    const { shownForMs, ...rest } = input;
+    if (FORM_LIMITS[contract] === undefined) return { tooFast: false, unmeasured: false, input: { ...input } };
+
+    if (shownForMs === undefined) return { tooFast: required, unmeasured: true, input: rest };
+
+    const tooFast = typeof shownForMs !== 'number' || !Number.isFinite(shownForMs) || shownForMs < FORM_MIN_SHOWN_MS;
+
+    return { tooFast, unmeasured: false, input: rest };
+}
+
 export class FormLimiter {
     private readonly hits = new Map<string, number[]>();
 

@@ -15,7 +15,7 @@ import type { Api } from './contracts/api.contract.js';
 import { answerHealth } from './health.js';
 import { formatTraceparent, newSpanId, newTraceId, readTraceparent } from './methods/traceparent.js';
 import { Recent } from './recent.js';
-import { clientAddress, FormLimiter } from './methods/formLimit.js';
+import { clientAddress, FormLimiter, formTiming } from './methods/formLimit.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -920,7 +920,9 @@ export class ApiGateway {
         trace.organizationId = organization;
         await this.checkGate(route.row, route.contract, caller, organization);
 
-        const input = await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input);
+        // A public form's own measure of how long it was shown is the gateway's to check, never the service's.
+        const timing = formTiming(route.row.contract, await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input));
+        const input = timing.input;
         trace.input = input;
 
         // tenant_id is always known here -- it's the api's own owning tenant (or an operator's
@@ -946,7 +948,14 @@ export class ApiGateway {
         trace.organizationId = effectiveTenantId;
         const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
 
-        // Public forms, per client address (methods/formLimit.ts): before anything is done or mailed.
+        // Public forms (methods/formLimit.ts), before anything is done or mailed: one sent within
+        // seconds of being shown is refused -- before it counts against its address -- then per address.
+        if (timing.tooFast) {
+            throw new MeshError({ message: 'That was sent very fast. Take a moment, then send it again.', code: 'TOO_FAST', status: 400 });
+        }
+        if (timing.unmeasured) {
+            this.broker.logger.info(`[api] ${route.row.contract} from ${clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress)} without the form's shownForMs (allowed until the site sends it)`);
+        }
         if (!this.formLimits.allow(route.row.contract, clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress))) {
             throw new MeshError({ message: 'Too many tries from your address. Try again in an hour.', code: 'RATE_LIMITED', status: 429 });
         }
