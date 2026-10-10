@@ -228,6 +228,16 @@ describe('two nodes, one serving a domain it does not hold', () => {
         expect(await json(res)).toEqual({ waited: true });
     }, 30_000);
 
+    // email.attachment_get (declared 60 s) answered "RPC Timeout calling email.attachment_get
+    // locally after 10000ms" through edge1's api, which runs mail in the same process (10-10).
+    it('lets a call on the api\'s own node run as long as its contract declares', async () => {
+        const res = await fetch(`${originA}/api/slowsvc/wait`, {
+            method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: '{}',
+        });
+        expect(res.status).toBe(200);
+        expect(await json(res)).toEqual({ waited: true });
+    }, 30_000);
+
     it('applies the contract permission floor on the node that does not implement it', async () => {
         // The expose row names no role. The floor comes from the contract, which node B knows the
         // declaration of without running the implementation.
