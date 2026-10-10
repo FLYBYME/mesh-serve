@@ -168,25 +168,18 @@ describe('a member\'s call runs in their own organization, never another', () =>
         expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
     });
 
-    // design/organization-scoping.md (2026-10-03): operators see every organization only on
-    // operator rows; on a member row, naming an organization makes them a member like any other.
-    it('an operator naming one of their organizations on a member row gets exactly that one', async () => {
-        expect(await repos('operator', orgId.peera)).toEqual({ status: 403, error: expect.stringMatching(/not a member of that organization/) });
-
-        const operator = userId.operator;
-        const peera = orgId.peera;
-        if (operator === undefined || peera === undefined) throw new Error('the operator or Peera was not set up');
-
-        await broker.call('identity.membership.create', { userId: operator, organizationId: peera, roleKey: 'member', joinedAt: new Date() },
-            { meta: { user: { id: operator, tenant_id: peera, organizationId: peera } } });
-
-        await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] }), { timeout: 20_000, interval: 500 });
+    // Owner, 10-10: an operator acts in any organization the request names, member or not (to act
+    // for a client: approve its release). A non-operator still only in their own (tests above).
+    it('an operator naming an organization works in exactly that one, without being a member', async () => {
+        expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] });
         expect(await repos('operator', orgId.platform)).toEqual({ status: 200, names: ['platform-repo'] });
         // Naming none: the api's own, as before -- a client that never names one is unchanged.
         expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
+        // One that does not exist: refused, never the api's own instead.
+        expect((await repos('operator', '000000000000000000000000')).status).toBe(404);
     }, 30_000);
 
-    it('on an operator-only row an operator works in the api\'s own, whatever the request names', async () => {
+    it('on an operator-only row an operator works in the organization named too', async () => {
         const meta = { meta: { tenant_id: orgId.platform } };
         const api = await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
         if (api === undefined) throw new Error('no api');
@@ -194,7 +187,10 @@ describe('a member\'s call runs in their own organization, never another', () =>
         await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
         await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'operator' }, meta);
         try {
-            await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['platform-repo'] }), { timeout: 20_000, interval: 500 });
+            await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] }), { timeout: 20_000, interval: 500 });
+            expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
+            // A member is still refused an operator-only row in their own organization.
+            expect((await repos('ada', orgId.peera)).status).toBe(403);
         } finally {
             await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
             await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'member' }, meta);

@@ -372,12 +372,11 @@ export class ApiGateway {
      * platform's zones and mail. Now:
      * - anonymous, or a public call (no gate on the row or the contract): the api's own, as before
      *   -- a public call acts for the api's owner whoever makes it (login, the contact form);
-     * - an operator, on an operator-only row (the row's role, or the contract's permissions): the
-     *   api's own (resolveEffectiveTenantId may still redirect it);
-     * - an operator anywhere else: like anyone else when the request names an organization --
-     *   their own pages show the organization they chose (architecture
-     *   design/organization-scoping.md, 2026-10-03); the api's own when it names none, as before,
-     *   so a client that never names one (the CLI) is unchanged;
+     * - an operator: the organization the request names, any that exists, operator-only calls too
+     *   (owner, 10-10: an operator may act for a client, e.g. approve its release); the api's own
+     *   when it names none, as before, so a client that never names one (the CLI) is unchanged.
+     *   The site names Platform under /operator and the chosen organization elsewhere
+     *   (architecture design/organization-scoping.md, 2026-10-03);
      * - anyone else: one of their own organizations -- named by the `x-organization` header (or
      *   `?organization=`, for an EventSource, which cannot set headers), or their only one --
      *   checked against identity.membership on every call. Never one they are not a member of, and
@@ -388,13 +387,20 @@ export class ApiGateway {
         gated: boolean,
         caller: Caller | undefined,
         apiTenantId: string,
-        operatorOnly: boolean,
     ): Promise<string> {
         if (caller === undefined || !gated) return apiTenantId;
 
         const named = namedOrganization(req);
         if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
-            if (operatorOnly || named === undefined) return apiTenantId;
+            if (named === undefined) return apiTenantId;
+
+            // An operator acts in any organization the request names, operator-only calls too
+            // (owner, 10-10: "both" -- a client approves its own releases, and an operator may for
+            // them). One that does not exist is a 404, from identity. The activity log keeps the
+            // organization every call ran in.
+            await this.broker.call('identity.organization.get', { id: named }, { meta: { user: { id: caller.userId, tenant_id: apiTenantId, organizationId: apiTenantId } } });
+
+            return named;
         }
 
         const theirs = await this.organizationsOf(caller.userId);
@@ -578,6 +584,7 @@ export class ApiGateway {
         contract: ContractDeclaration,
         caller: Caller | undefined,
         tenantId: string,
+        apiTenantId: string,
     ): Promise<void> {
         // The contract's own floor, applied before the row's. This is the half that fails *safe*:
         // an expose row with no role is anonymous, so before this a destructive contract published
@@ -592,6 +599,12 @@ export class ApiGateway {
 
         if (caller === undefined) {
             throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
+        }
+
+        // An operator passes every gate, in whichever organization the call runs (callOrganization):
+        // acting for a client takes that client's member calls too (owner, 10-10).
+        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
+            return;
         }
 
         // identity.membership is scopedBy: 'organizationId', not 'tenantId' like every other
@@ -795,7 +808,7 @@ export class ApiGateway {
         // A member's stream is their own organization's, as a member's call is (callOrganization);
         // anonymous keep the api's own, and so do operators unless the stream names an
         // organization (their own pages; operator pages name Platform).
-        const scopeOf = (who: Caller | undefined): Promise<string> => this.callOrganization(req, true, who, target.tenantId, false)
+        const scopeOf = (who: Caller | undefined): Promise<string> => this.callOrganization(req, true, who, target.tenantId)
             .catch((err: unknown) => { if (who === undefined) return target.tenantId; throw err; });
         const scope = await scopeOf(caller);
         const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, scope);
@@ -915,10 +928,9 @@ export class ApiGateway {
         const caller = await this.resolveCaller(req);
         trace.caller = caller;
         const gated = route.contract.permissions.length > 0 || route.row.role !== undefined || route.row.permission !== undefined;
-        const operatorOnly = route.row.role === 'operator' || route.contract.permissions.includes('operator');
-        const organization = await this.callOrganization(req, gated, caller, target.tenantId, operatorOnly);
+        const organization = await this.callOrganization(req, gated, caller, target.tenantId);
         trace.organizationId = organization;
-        await this.checkGate(route.row, route.contract, caller, organization);
+        await this.checkGate(route.row, route.contract, caller, organization, target.tenantId);
 
         // A public form's own measure of how long it was shown is the gateway's to check, never the service's.
         const timing = formTiming(route.row.contract, await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input));
