@@ -33,7 +33,7 @@ export const artifactBuiltEventSchema = z.object({
 export const artifactBuiltEvent = defineEvent(
     'serve.artifact.built',
     artifactBuiltEventSchema,
-    { scopedBy: 'tenantId' },
+    { scopedBy: 'tenantId', permissions: ['operator'] },
 );
 
 export type ArtifactBuiltEvent = z.infer<typeof artifactBuiltEventSchema>;
@@ -47,7 +47,7 @@ export const artifactBuildFailedEventSchema = z.object({
 export const artifactBuildFailedEvent = defineEvent(
     'serve.artifact.buildFailed',
     artifactBuildFailedEventSchema,
-    { scopedBy: 'tenantId' },
+    { scopedBy: 'tenantId', permissions: ['operator'] },
 );
 
 export type ArtifactBuildFailedEvent = z.infer<typeof artifactBuildFailedEventSchema>;

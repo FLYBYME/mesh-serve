@@ -45,6 +45,18 @@ const PASSWORD = 'a-real-operator-password-12';
 // An event whose author never said who it belongs to -- it must never be streamable.
 defineEvent('eventstest.unscoped', z.object({ n: z.number() }));
 
+// An event of this test's own that declares no gate, so its row is the whole gate under test:
+// serve.part.* declare ['operator'] since 10-11, which a public row cannot lower.
+const startedEvent = defineEvent('eventstest.started', z.object({
+    tenantId: z.string(), partId: z.string(), key: z.string(), nodeID: z.string(),
+}), { scopedBy: 'tenantId' });
+
+declare module '@flybyme/mesh' {
+    interface EventRegistry {
+        'eventstest.started': z.infer<typeof startedEvent.schema>;
+    }
+}
+
 /** One open subscription: collects the raw stream until told what to wait for. */
 interface Subscription {
     readonly status: number;
@@ -151,7 +163,7 @@ describe('/api/events', () => {
 
         const meta = { meta: { tenant_id: org.id } };
         await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.failed', role: 'operator' }, meta);
-        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.started', public: true }, meta);
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'eventstest.started', public: true }, meta);
 
         for (const [email, target] of [['op@events.invalid', 'operator'], ['member@events.invalid', 'member']] as const) {
             const res = await fetch(`${ORIGIN}/api/identity/ticket`, {
@@ -184,10 +196,11 @@ describe('/api/events', () => {
 
     it('advertises its events, with their gates, in the descriptor', async () => {
         const descriptor = await (await fetch(`${ORIGIN}/api/_describe`)).json() as { events: unknown[]; calls: Array<{ key: string }> };
-        expect(descriptor.events).toEqual([
+        // Its two rows, among the events the bootstrap api streams by their definitions' gates.
+        expect(descriptor.events).toEqual(expect.arrayContaining([
             { name: 'serve.part.failed', gate: { kind: 'role', role: 'operator' } },
-            { name: 'serve.part.started' },
-        ]);
+            { name: 'eventstest.started' },
+        ]));
         // An event row is never routed as a call.
         expect(descriptor.calls.map((call) => call.key)).not.toContain('serve.part.failed');
     });
@@ -212,8 +225,8 @@ describe('/api/events', () => {
         await stream.waitFor('event: subscription.omitted');
         expect(stream.received()).toContain('requires role \\"operator\\"');
 
-        broker.emit('serve.part.started', lifecycle('another-org', 'not-yours'));
-        broker.emit('serve.part.started', lifecycle(orgId, 'yours'));
+        broker.emit('eventstest.started', lifecycle('another-org', 'not-yours'));
+        broker.emit('eventstest.started', lifecycle(orgId, 'yours'));
 
         await stream.waitFor('"key":"yours"');
         await settle();
@@ -235,12 +248,12 @@ describe('/api/events', () => {
     });
 
     it('delivers an event with no readable scope to nobody, operator included', async () => {
-        const stream = await subscribe('?events=serve.part.started', operatorToken);
+        const stream = await subscribe('?events=eventstest.started', operatorToken);
         await stream.waitFor(': open');
 
         // The definition says tenantId; this payload has none. A disagreement means nobody.
-        broker.emit('serve.part.started', { partId: 'p-x', key: 'no-tenant', nodeID: 'events-node', tenantId: '' });
-        broker.emit('serve.part.started', lifecycle(orgId, 'after'));
+        broker.emit('eventstest.started', { partId: 'p-x', key: 'no-tenant', nodeID: 'events-node', tenantId: '' });
+        broker.emit('eventstest.started', lifecycle(orgId, 'after'));
 
         await stream.waitFor('"key":"after"');
         expect(stream.received()).not.toContain('no-tenant');

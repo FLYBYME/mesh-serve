@@ -108,20 +108,20 @@ const partLifecycleFields = {
 export const partStartedEvent = defineEvent(
     'serve.part.started',
     z.object(partLifecycleFields).describe('A service part started on a node'),
-    { scopedBy: 'tenantId' },
+    { scopedBy: 'tenantId', permissions: ['operator'] },
 );
 
 export const partStoppedEvent = defineEvent(
     'serve.part.stopped',
     z.object(partLifecycleFields).describe('A service part was stopped on a node'),
-    { scopedBy: 'tenantId' },
+    { scopedBy: 'tenantId', permissions: ['operator'] },
 );
 
 export const partFailedEvent = defineEvent(
     'serve.part.failed',
     z.object({ ...partLifecycleFields, error: z.string().describe('Why it failed') })
         .describe('A service part failed to start on a node'),
-    { scopedBy: 'tenantId' },
+    { scopedBy: 'tenantId', permissions: ['operator'] },
 );
 
 export type PartLifecycleEvent = z.infer<typeof partStartedEvent.schema>;

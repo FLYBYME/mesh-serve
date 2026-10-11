@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { ContextStack, isMeshError, MeshError } from '@flybyme/mesh';
+import { ContextStack, eventPermissions, isMeshError, knownEvents, MeshError } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import type { activitySchema } from './schema/activity.js';
@@ -364,6 +364,9 @@ export class ApiGateway {
      * `permissions` with or without a row. A contract declaring none is not exposed this way; making
      * a call public stays a written-down row. Read with the target, so a part started or stopped
      * shows within the 10 s a target is kept.
+     *
+     * Events the same way: every event the cluster knows whose definition declares who may watch it
+     * (`eventPermissions`; a collection's events take its read gate), streamable from here.
      */
     private declaredRows(apiId: string, stored: readonly ExposeRow[]): ExposeRow[] {
         const named = new Set(stored.filter((row) => row.kind !== 'event').map((row) => row.contract));
@@ -377,6 +380,16 @@ export class ApiGateway {
             if (contract === undefined || contract.visibility !== 'public' || contract.permissions.length === 0) continue;
 
             rows.push({ apiId, kind: 'contract', contract: key });
+        }
+
+        const streamed = new Set(stored.filter((row) => row.kind === 'event').map((row) => row.contract));
+        for (const name of knownEvents()) {
+            if (streamed.has(name) || !streamableFrom(name)) continue;
+
+            const required = eventPermissions(name);
+            if (required === undefined || required.length === 0) continue;
+
+            rows.push({ apiId, kind: 'event', contract: name });
         }
         return rows;
     }
@@ -839,6 +852,13 @@ export class ApiGateway {
             .catch((err: unknown) => { if (who === undefined) return target.tenantId; throw err; });
         const scope = await scopeOf(caller);
         const holds = (who: Caller, role: string): Promise<boolean> => this.holdsRole(who.userId, role, scope);
+        const firstMissing = async (who: Caller, roles: readonly string[]): Promise<string | undefined> => {
+            for (const role of roles) {
+                const held = await holds(who, role);
+                if (!held) return role;
+            }
+            return undefined;
+        };
 
         for (const name of wanted ?? []) {
             if (!rows.some((row) => row.contract === name)) omitted.push({ name, reason: 'not streamed on this api' });
@@ -850,13 +870,18 @@ export class ApiGateway {
                 omitted.push({ name, reason: 'this node has no definition of it that can be scoped to a subscriber' });
                 continue;
             }
-            if (row.role !== undefined) {
+            // The definition's own gate and the row's, both -- as a call's contract floor and row.
+            // An operator passes every gate, as on a call (checkGate).
+            const required = [...new Set([...(eventPermissions(name) ?? []), ...(row.role !== undefined ? [row.role] : [])])];
+            if (required.length > 0) {
                 if (caller === undefined) {
-                    omitted.push({ name, reason: `requires role "${row.role}" -- not signed in` });
+                    omitted.push({ name, reason: `requires role "${required.join('" and "')}" -- not signed in` });
                     continue;
                 }
-                if (!(await holds(caller, row.role))) {
-                    omitted.push({ name, reason: `requires role "${row.role}"` });
+                const operator = await holds(caller, 'operator');
+                const missing = await firstMissing(caller, operator ? [] : required);
+                if (missing !== undefined) {
+                    omitted.push({ name, reason: `requires role "${missing}"` });
                     continue;
                 }
             }

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { eventScope } from '@flybyme/mesh';
+import { eventPermissions, eventScope } from '@flybyme/mesh';
 import type { ContractDeclaration } from '@flybyme/mesh';
 
 import type { ExposeRow } from '../contracts/expose.contract.js';
@@ -83,8 +83,10 @@ export function buildDescriptor(host: string, rows: readonly ExposeRow[], declar
         if (row.kind === 'event') {
             // Advertised only if deliverable from here -- the same check serve.expose.add made,
             // made again rather than trusted, like a contract row's public check below.
+            // The row's role, or the definition's own when the row names none (a row made from it).
+            const role = row.role ?? eventPermissions(row.contract)?.[0];
             if (streamableFrom(row.contract)) {
-                events.push({ name: row.contract, ...(row.role !== undefined ? { gate: { kind: 'role', role: row.role } } : {}) });
+                events.push({ name: row.contract, ...(role !== undefined ? { gate: { kind: 'role', role } } : {}) });
             }
             continue;
         }

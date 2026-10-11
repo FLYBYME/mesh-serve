@@ -127,7 +127,37 @@ describe('the platform api exposes what a contract gates, without a row', () => 
         expect(await get(PLATFORM, '/api/releases', 'operator')).toBe(404);
     });
 
+    // serve.part's events take its read gate, ['operator']; serve.release's declare none.
+    const stream = async (origin: string, events: string, who?: string): Promise<number> => {
+        const controller = new AbortController();
+        const res = await fetch(`${origin}/api/events?events=${events}`, {
+            headers: who !== undefined ? { authorization: `Bearer ${token[who]}` } : {},
+            signal: controller.signal,
+        });
+        controller.abort();
+
+        return res.status;
+    };
+
+    it('streams an event its definition gates, with no row, to who holds the gate', async () => {
+        expect(await stream(PLATFORM, 'serve.part.updated', 'operator')).toBe(200);
+        expect(await stream(PLATFORM, 'serve.part.updated', 'ada')).toBe(403);
+        expect(await stream(PLATFORM, 'serve.part.updated')).toBe(401);
+    });
+
+    it('does not stream an event whose definition declares no gate', async () => {
+        expect(await stream(PLATFORM, 'serve.release.created', 'operator')).toBe(403);
+    });
+
+    it('describes a streamed event with its definition\'s gate', async () => {
+        const res = await fetch(`${PLATFORM}/api/_describe`);
+        const described = await res.json() as { events: { name: string; gate?: { role: string } }[] };
+
+        expect(described.events.find((event) => event.name === 'serve.part.updated')?.gate?.role).toBe('operator');
+    });
+
     it('exposes nothing this way on an api that does not say exposeDeclared', async () => {
+        expect(await stream(CUSTOMER, 'serve.part.updated', 'operator')).toBe(404);
         expect(await get(CUSTOMER, '/api/nodes', 'operator')).toBe(404);
     });
 });
