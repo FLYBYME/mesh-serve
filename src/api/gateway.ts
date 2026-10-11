@@ -6,7 +6,7 @@ import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from
 import type { activitySchema } from './schema/activity.js';
 import './contracts/activity.contract.js';
 
-import { type Expose } from './contracts/expose.contract.js';
+import { type Expose, type ExposeRow } from './contracts/expose.contract.js';
 import { buildDescriptor, streamableFrom, API_BASE } from './methods/descriptor.js';
 import { firstOperator } from './methods/queryRule.js';
 import { EventHub, openStream, type Omitted, type Subscriber } from './methods/events.js';
@@ -91,7 +91,7 @@ export function typedQueryValues(input: Record<string, unknown>, inputSchema: Re
 }
 
 interface Route {
-    readonly row: Expose;
+    readonly row: ExposeRow;
     readonly contract: ContractDeclaration;
     readonly params: Record<string, string>;
 }
@@ -107,7 +107,7 @@ interface CallTrace {
 interface Target {
     readonly host: string;
     readonly tenantId: string;
-    readonly rows: readonly Expose[];
+    readonly rows: readonly ExposeRow[];
 }
 
 /**
@@ -350,8 +350,35 @@ export class ApiGateway {
     private resolveTarget(hostname: string): Promise<Target> {
         return this.targets.get(hostname, async () => {
             const api = await this.resolveApi(hostname);
-            return { host: api.apiHost, tenantId: api.tenantId, rows: await this.resolveExposeRows(api.id, api.tenantId) };
+            const stored = await this.resolveExposeRows(api.id, api.tenantId);
+            const rows = api.exposeDeclared === true ? [...stored, ...this.declaredRows(api.id, stored)] : stored;
+
+            return { host: api.apiHost, tenantId: api.tenantId, rows };
         });
+    }
+
+    /**
+     * A row for every public contract the cluster advertises whose own `permissions` gate it and
+     * that no stored row names -- on an api that says `exposeDeclared` (owner, 10-11: ~600 rows by
+     * hand was the alternative). The contract's gate is the whole gate: checkGate applies
+     * `permissions` with or without a row. A contract declaring none is not exposed this way; making
+     * a call public stays a written-down row. Read with the target, so a part started or stopped
+     * shows within the 10 s a target is kept.
+     */
+    private declaredRows(apiId: string, stored: readonly ExposeRow[]): ExposeRow[] {
+        const named = new Set(stored.filter((row) => row.kind !== 'event').map((row) => row.contract));
+        const keys = new Set(this.broker.registry.getNodes().flatMap((node) => node.services.flatMap((service) => Object.keys(service.tools ?? {}))));
+
+        const rows: ExposeRow[] = [];
+        for (const key of keys) {
+            if (named.has(key)) continue;
+
+            const contract = this.broker.contractDeclaration(key);
+            if (contract === undefined || contract.visibility !== 'public' || contract.permissions.length === 0) continue;
+
+            rows.push({ apiId, kind: 'contract', contract: key });
+        }
+        return rows;
     }
 
     private describe(target: Target): ReturnType<typeof buildDescriptor> {
@@ -540,7 +567,7 @@ export class ApiGateway {
      * before matchPath compares them, or every generated client's calls would 404 while only the
      * hardcoded "/api/_describe" special case worked.
      */
-    private findRoute(rows: readonly Expose[], req: http.IncomingMessage): Route | undefined {
+    private findRoute(rows: readonly ExposeRow[], req: http.IncomingMessage): Route | undefined {
         const method = (req.method ?? 'GET').toUpperCase();
         const fullPath = (req.url ?? '/').split('?')[0] ?? '/';
         if (!fullPath.startsWith(API_BASE)) return undefined;
@@ -580,7 +607,7 @@ export class ApiGateway {
      * once the row actually demands one.
      */
     private async checkGate(
-        row: Expose,
+        row: ExposeRow,
         contract: ContractDeclaration,
         caller: Caller | undefined,
         tenantId: string,

@@ -163,8 +163,10 @@ export async function ensureBootstrapApi(broker: IServiceBroker, apiHost: string
     }
 
     broker.logger.info(`Creating bootstrap api "${apiHost}"...`);
+    // The platform's own api exposes what its contracts gate (exposeDeclared); the rows below are
+    // what declares no gate yet, and the public calls.
     const api = await broker.call('serve.api.create', {
-        tenantId: organization.id, apiHost,
+        tenantId: organization.id, apiHost, exposeDeclared: true,
     }, { meta });
 
     for (const { contract, role } of BOOTSTRAP_EXPOSED_CONTRACTS) {

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { eventScope } from '@flybyme/mesh';
 import type { ContractDeclaration } from '@flybyme/mesh';
 
-import type { Expose } from '../contracts/expose.contract.js';
+import type { ExposeRow } from '../contracts/expose.contract.js';
 
 /**
  * How a contract is called and who may call it, whether it runs on this node or another --
@@ -50,7 +50,7 @@ export interface ExposureDescriptor {
  * `public` now means genuinely ungated. Before the contract floor existed it meant only "this row
  * names no role", which was the same string for a contract nobody should reach anonymously.
  */
-function gateOf(row: Expose, contract: ContractDeclaration): string {
+function gateOf(row: ExposeRow, contract: ContractDeclaration): string {
     const parts: string[] = [...contract.permissions];
     if (row.role !== undefined && !parts.includes(row.role)) parts.push(row.role);
     if (row.permission !== undefined) parts.push(`permission:${row.permission}`);
@@ -75,7 +75,7 @@ function withoutDefaults(value: unknown): unknown {
     return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'default').map(([key, v]) => [key, withoutDefaults(v)]));
 }
 
-export function buildDescriptor(host: string, rows: readonly Expose[], declare: DeclarationLookup): ExposureDescriptor {
+export function buildDescriptor(host: string, rows: readonly ExposeRow[], declare: DeclarationLookup): ExposureDescriptor {
     const calls: DescribedCall[] = [];
     const events: DescribedEvent[] = [];
 

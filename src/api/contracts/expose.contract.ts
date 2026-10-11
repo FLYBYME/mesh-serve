@@ -18,6 +18,13 @@ export const exposeCrud = defineCrud('serve.expose', exposeSchema, {
 
 export type Expose = z.infer<typeof exposeCrud.outputSchema>;
 
+/**
+ * What the gateway routes by: a stored row, or one it makes for a contract whose own `permissions`
+ * gate it, on an api that exposes those (`exposeDeclared`) -- such a row was never stored, so it has
+ * no id.
+ */
+export type ExposeRow = Pick<Expose, 'apiId' | 'kind' | 'contract' | 'role' | 'permission' | 'unheld'>;
+
 export const addInputSchema = z.object({
     apiId: z.string().min(1).describe('The serve.api to expose this contract on'),
     kind: z.enum(['contract', 'event']).default('contract').describe('"event" streams an event over /events instead of exposing a contract'),
