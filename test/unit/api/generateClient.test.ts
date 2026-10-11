@@ -1,3 +1,4 @@
+import * as esbuild from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import type { ContractDeclaration } from '@flybyme/mesh';
 import { buildDescriptor } from '../../../src/api/methods/descriptor.js';
@@ -74,5 +75,33 @@ describe('the generated client', () => {
     it('writes no events entry for an api that streams none', async () => {
         const source = await generateClient('api.test', 'api.test', [row], () => declaration);
         expect(source).not.toContain('events:');
+    });
+
+    it('ships only the schemas a bundle reads at run time: the rest are dropped', async () => {
+        const unusedRow: Expose = { ...row, id: 'row-2', contract: 'note.find' };
+        const unused: ContractDeclaration = {
+            ...declaration, key: 'note.find', domain: 'note', rest: { method: 'GET', path: '/notes' },
+            input: { type: 'object', properties: { neverReadMarker: { type: 'string' } } },
+        };
+        const source = await generateClient('api.test', 'api.test', [row, unusedRow], (key) => (key === 'note.find' ? unused : declaration));
+
+        const bundle = await esbuild.build({
+            stdin: { contents: "import { domainFindInputSchema } from 'client'; console.log(domainFindInputSchema);", loader: 'ts' },
+            bundle: true,
+            write: false,
+            format: 'esm',
+            external: ['zod', '@flybyme/mesh-web/net'],
+            plugins: [{
+                name: 'client',
+                setup(build) {
+                    build.onResolve({ filter: /^client$/ }, () => ({ path: 'client', namespace: 'client' }));
+                    build.onLoad({ filter: /.*/, namespace: 'client' }, () => ({ contents: source, loader: 'ts' }));
+                },
+            }],
+        });
+        const text = bundle.outputFiles[0]?.text ?? '';
+
+        expect(text).toContain('domainFindInputSchema');
+        expect(text).not.toContain('neverReadMarker');
     });
 });

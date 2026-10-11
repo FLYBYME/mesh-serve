@@ -39,6 +39,19 @@ function camelIdentifier(raw: string): string {
     return /^[0-9]/.test(identifier) ? `_${identifier}` : identifier;
 }
 
+/**
+ * One schema and its type. The schema is built inside a `/* @__PURE__ *\/` call, so a bundler drops
+ * every one nothing reads at run time: the client's calls only name them in types. A bare
+ * `z.object(...)` at the top level is a call the bundler cannot prove free of effects, so all of
+ * them shipped -- the company site carried 1,400 schemas (about 1.5 MB) to use five (10-11).
+ */
+function schemaDeclaration(schemaName: string, typeName: string, schema: Record<string, unknown>): string {
+    const expression = jsonSchemaToZod(schema);
+
+    return `export const ${schemaName} = /* @__PURE__ */ (() => ${expression})()\n`
+        + `export type ${typeName} = z.infer<typeof ${schemaName}>\n`;
+}
+
 function isEmptyObjectSchema(schema: unknown): boolean {
     if (typeof schema !== 'object' || schema === null) return false;
     const s = schema as { type?: string; properties?: Record<string, unknown> };
@@ -85,13 +98,8 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         let inputType = 'void';
         if (!isEmptyObjectSchema(call.input)) {
             const schemaName = `${lowerFirst(name)}InputSchema`;
-            schemas.push(jsonSchemaToZod(call.input as Record<string, unknown>, {
-                name: schemaName,
-                module: 'esm',
-                // `XInput` stays what it was — the parsed shape (`z.infer`), which the server sees.
-                type: `${name}Input`,
-                noImport: true,
-            }));
+            // `XInput` stays what it was — the parsed shape (`z.infer`), which the server sees.
+            schemas.push(schemaDeclaration(schemaName, `${name}Input`, call.input as Record<string, unknown>));
             // A *caller* passes the schema's input side: a field with a default may be left out.
             // Typing the call with `z.infer` made every defaulted field required at every call site
             // (`domain.find` demanded `offset`, found by the company site's dashboard).
@@ -99,12 +107,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         }
 
         const outputType = `${name}Output`;
-        schemas.push(jsonSchemaToZod(call.output as Record<string, unknown>, {
-            name: `${lowerFirst(name)}OutputSchema`,
-            module: 'esm',
-            type: outputType,
-            noImport: true,
-        }));
+        schemas.push(schemaDeclaration(`${lowerFirst(name)}OutputSchema`, outputType, call.output as Record<string, unknown>));
 
         const gate = gateLiteral(call.gate);
         const doc = [
