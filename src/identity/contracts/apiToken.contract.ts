@@ -42,7 +42,7 @@ export const apiTokenIssueContract = defineContract({
     // theoretical: nothing could ever authenticate as `viaApiToken` in the first place.
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/tools/issueApiToken.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/identity/tools/issueApiToken.ts', concurrency: 'on-demand', permissions: ['member'],
     print: (o) => `issued api token "${o.name}" for ${o.userId}`,
 });
 
@@ -78,7 +78,7 @@ export const apiTokenListContract = defineContract({
     rest: { method: 'GET', path: '/identity/apiToken/list' },
     dependencies: ['identity.user'],
     visibility: 'public',
-    filePath: 'src/identity/tools/listApiTokens.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/identity/tools/listApiTokens.ts', concurrency: 'on-demand', permissions: ['member'],
     print: (o) => o.tokens.map((t) => `${t.name}${t.revokedAt ? ' (revoked)' : ''}`).join('\n') || 'no tokens',
 });
 
@@ -105,7 +105,7 @@ export const apiTokenRevokeContract = defineContract({
     dependencies: ['identity.user'],
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/tools/revokeApiToken.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/identity/tools/revokeApiToken.ts', concurrency: 'on-demand', permissions: ['member'],
     print: (o) => `revoked ${o.revoked} token(s)`,
 });
 

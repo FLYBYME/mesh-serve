@@ -58,7 +58,10 @@ export const organizationCrud = defineCrud('identity.organization', organization
     },
     dependencies: ['identity.user', 'identity.membership'],
     filePath: 'src/identity/contracts/organization.contract.ts',
+    // Operators' -- but a member reads one by id, as the cloud console's row lets them (the
+    // collection is not scoped: any organization, by its id).
     permissions: ['operator'],
+    actionPermissions: { get: ['member'] },
 });
 
 export type Organization = z.infer<typeof organizationCrud.outputSchema>;

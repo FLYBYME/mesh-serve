@@ -39,7 +39,11 @@ export const membershipCrud = defineCrud('identity.membership', membershipSchema
     },
     dependencies: ['identity.organization', 'identity.user'],
     filePath: 'src/identity/contracts/membership.contract.ts',
-    permissions: ['operator'],
+    // The lowest gate any api needs, each api's rows adding to it: the cloud console lets a member
+    // read their organization's team and an admin remove one; adding or changing one stays an
+    // operator's (api.surfdns.net and the console both say so).
+    permissions: ['member'],
+    actionPermissions: { create: ['operator'], update: ['operator'], replace: ['operator'], createMany: ['operator'], delete: ['admin'] },
 });
 
 export type Membership = z.infer<typeof membershipCrud.outputSchema>;
