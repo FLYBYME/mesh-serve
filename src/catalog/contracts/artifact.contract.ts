@@ -14,7 +14,7 @@ export const artifactCrud = defineCrud('serve.artifact', artifactSchema, {
     },
     dependencies: ['serve.part'],
     filePath: 'src/catalog/contracts/artifact.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Artifact = z.infer<typeof artifactCrud.outputSchema>;
