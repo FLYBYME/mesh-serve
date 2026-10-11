@@ -17,7 +17,7 @@ export const repoCrud = defineCrud('serve.repo', repoSchema, {
     },
     dependencies: [],
     filePath: 'src/catalog/contracts/repo.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Repo = z.infer<typeof repoCrud.outputSchema>;

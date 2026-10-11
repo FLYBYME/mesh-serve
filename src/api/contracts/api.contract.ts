@@ -12,7 +12,7 @@ export const apiCrud = defineCrud('serve.api', apiSchema, {
     },
     dependencies: [],
     filePath: 'src/api/contracts/api.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Api = z.infer<typeof apiCrud.outputSchema>;

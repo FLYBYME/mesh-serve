@@ -16,7 +16,7 @@ export const queueCrud = defineCrud('serve.queue', queueSchema, {
     },
     dependencies: [],
     filePath: 'src/queue/contracts/queue.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type QueueJob = z.infer<typeof queueCrud.outputSchema>;

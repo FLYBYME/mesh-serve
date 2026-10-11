@@ -229,10 +229,12 @@ describe('a contract permission floor an expose row cannot lower', () => {
 
         it('refuses a row with no gate, on a contract that demands none, unless public is said', async () => {
             const m = await meta();
-            await broker.call('serve.expose.remove', { apiId, contract: 'identity.organization.get' }, m).catch(() => undefined);
+            // serve.release.get declares no gate (identity.organization.get, used here before 10-11,
+            // is operator-only on the contract now).
+            await broker.call('serve.expose.remove', { apiId, contract: 'serve.release.get' }, m).catch(() => undefined);
 
-            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get' }, m)).rejects.toThrow(/callable by anyone.*public: true/);
-            await expect(broker.call('serve.expose.add', { apiId, contract: 'identity.organization.get', public: true }, m)).resolves.toMatchObject({ contract: 'identity.organization.get' });
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'serve.release.get' }, m)).rejects.toThrow(/callable by anyone.*public: true/);
+            await expect(broker.call('serve.expose.add', { apiId, contract: 'serve.release.get', public: true }, m)).resolves.toMatchObject({ contract: 'serve.release.get' });
         });
 
         it('allows a row with no gate when the contract has its own floor', async () => {

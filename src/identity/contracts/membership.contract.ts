@@ -39,7 +39,7 @@ export const membershipCrud = defineCrud('identity.membership', membershipSchema
     },
     dependencies: ['identity.organization', 'identity.user'],
     filePath: 'src/identity/contracts/membership.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Membership = z.infer<typeof membershipCrud.outputSchema>;

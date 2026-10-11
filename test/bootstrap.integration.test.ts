@@ -383,7 +383,10 @@ describe('a fresh install, booted for real', () => {
         expect(site.apiId).toBe(apiId);
     });
 
-    it('a non-operator\'s explicit tenantId is silently ignored, not honored or rejected', async () => {
+    // Before 10-11 this proved a non-operator's explicit tenantId was ignored on serve.cdn.create
+    // through an ungated row. serve.cdn now declares ['operator'] itself, so the row cannot open it:
+    // what is left to prove is that the contract's gate holds whatever the row says.
+    it('a non-operator cannot create a site through an ungated row: the contract\'s own gate holds', async () => {
         const issueRes = await fetch(`${API_ORIGIN}/api/identity/ticket`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -419,9 +422,7 @@ describe('a fresh install, booted for real', () => {
                 indexable: false,
             }),
         });
-        expect(createSiteRes.status).toBe(200);
-        const site = await json(createSiteRes) as { tenantId: string };
-        expect(site.tenantId).toBe(organizationId);
+        expect(createSiteRes.status).toBe(403);
     });
 
     it('a scoped collection exposed with no role/permission gate is readable with no credential at all', async () => {
@@ -438,9 +439,11 @@ describe('a fresh install, booted for real', () => {
         // under test is about a gate-free row, so it needs a contract no bootstrap row has already
         // gated -- which is the honest version of the original test, since a site wanting anonymous
         // reads would be a different api entirely.
-        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.repo.count');
+        //
+        // serve.release, not serve.repo, since 10-11: serve.repo declares ['operator'] on the contract.
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'serve.release.count');
 
-        const anonRes = await fetch(`${API_ORIGIN}/api/sourceRepos/count`);
+        const anonRes = await fetch(`${API_ORIGIN}/api/releases/count`);
         expect(anonRes.status).toBe(200);
         // Reached the database and resolved a scope rather than 401ing for having no caller. The
         // count itself is whatever earlier tests left behind; that it answered at all is the point.

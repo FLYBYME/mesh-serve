@@ -13,7 +13,7 @@ export const exposeCrud = defineCrud('serve.expose', exposeSchema, {
     },
     dependencies: ['serve.api'],
     filePath: 'src/api/contracts/expose.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Expose = z.infer<typeof exposeCrud.outputSchema>;

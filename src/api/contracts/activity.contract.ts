@@ -50,7 +50,7 @@ export const activityMineContract = defineContract({
     rest: { method: 'GET', path: '/activity/mine' },
     visibility: 'public',
     dependencies: ['serve.activity'],
-    filePath: 'src/api/tools/activityMine.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/api/tools/activityMine.ts', concurrency: 'on-demand', permissions: ['member'],
     print: (o) => o.rows.map((r) => `${r.at.toISOString()} ${r.outcome} ${r.contract}`).join('\n'),
 });
 

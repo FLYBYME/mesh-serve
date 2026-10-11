@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
-    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
+    BrokerModule, DatabaseModule, defineCrud, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule, z,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
@@ -43,6 +43,20 @@ const API_PORT = 15571;
 const ORIGIN = `http://api.localhost:${API_PORT}`;
 const PASSWORD = 'a-real-password-for-tests-12';
 
+/**
+ * Each organization's own rows, readable by whoever an exposure row lets in: a collection of this
+ * test's own, declaring no gate, so the row is the whole gate under test. (mesh-serve's own
+ * collections declare theirs since 10-11 -- serve.repo is operator-only whatever a row says.)
+ */
+const noteCrud = defineCrud('tenancyNote', z.object({ tenantId: z.string(), name: z.string() }), {
+    pluralPath: 'tenancyNotes',
+    scopedBy: 'tenantId',
+    visibility: { find: 'public' },
+    dependencies: [],
+    filePath: 'test/tenancy.integration.test.ts',
+    permissions: [],
+});
+
 describe('a member\'s call runs in their own organization, never another', () => {
     let app: MeshApp;
     let broker: IServiceBroker;
@@ -51,7 +65,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
     const userId: Record<string, string> = {};
 
     const repos = async (who: string, organization?: string): Promise<{ status: number; names?: string[]; error?: string }> => {
-        const res = await fetch(`${ORIGIN}/api/sourceRepos`, {
+        const res = await fetch(`${ORIGIN}/api/tenancyNotes`, {
             headers: { authorization: `Bearer ${token[who]}`, ...(organization !== undefined ? { 'x-organization': organization } : {}) },
         });
         const body = await res.json() as { error?: string } | { name: string }[];
@@ -78,6 +92,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
         await broker.loadDomain('serve.api', {}, { resolve: resolveHandler });
         await broker.loadDomain('serve.expose', {}, { resolve: resolveHandler });
         await broker.loadDomain('serve.activity', {}, { resolve: resolveHandler });
+        broker.registerCrud(noteCrud);
         await broker.call('identity.role.ensureBuiltins', {});
 
         const user = async (key: string, roles: string[]): Promise<string> => (await broker.call('identity.user.create', {
@@ -103,13 +118,11 @@ describe('a member\'s call runs in their own organization, never another', () =>
         expect(api.tenantId).toBe(orgId.platform);
 
         for (const [org, name] of [['platform', 'platform-repo'], ['peera', 'peera-repo'], ['other', 'other-repo']] as const) {
-            await broker.call('serve.repo.create', { tenantId: orgId[org]!, url: `https://example.invalid/${name}.git`, defaultBranch: 'main', name },
-                { meta: { tenant_id: orgId[org] } });
+            await broker.callNamed('tenancyNote.create', { tenantId: orgId[org]!, name }, { meta: { tenant_id: orgId[org] } });
         }
         // A customer-facing row: any member of the organization the call runs in.
         const meta = { meta: { tenant_id: orgId.platform } };
-        await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta).catch(() => undefined);
-        await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'member' }, meta);
+        await broker.call('serve.expose.add', { apiId: api.id, contract: 'tenancyNote.find', role: 'member' }, meta);
 
         for (const who of ['operator', 'ada', 'two', 'stranger']) {
             const res = await fetch(`${ORIGIN}/api/identity/ticket`, {
@@ -131,7 +144,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
     // A browser on another origin asks first; a header it may not send fails the whole call, which
     // the page reports only as "could not reach the server" (surfdns.net, 2026-10-03).
     it('lets a browser on another origin send the organization header', async () => {
-        const res = await fetch(`${ORIGIN}/api/sourceRepos`, {
+        const res = await fetch(`${ORIGIN}/api/tenancyNotes`, {
             method: 'OPTIONS',
             headers: { origin: 'https://site.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization,x-organization' },
         });
@@ -184,16 +197,16 @@ describe('a member\'s call runs in their own organization, never another', () =>
         const api = await broker.call('serve.api.resolveByHost', { apiHost: 'api.localhost' });
         if (api === undefined) throw new Error('no api');
 
-        await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
-        await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'operator' }, meta);
+        await broker.call('serve.expose.remove', { apiId: api.id, contract: 'tenancyNote.find' }, meta);
+        await broker.call('serve.expose.add', { apiId: api.id, contract: 'tenancyNote.find', role: 'operator' }, meta);
         try {
             await vi.waitFor(async () => expect(await repos('operator', orgId.peera)).toEqual({ status: 200, names: ['peera-repo'] }), { timeout: 20_000, interval: 500 });
             expect(await repos('operator')).toEqual({ status: 200, names: ['platform-repo'] });
             // A member is still refused an operator-only row in their own organization.
             expect((await repos('ada', orgId.peera)).status).toBe(403);
         } finally {
-            await broker.call('serve.expose.remove', { apiId: api.id, contract: 'serve.repo.find' }, meta);
-            await broker.call('serve.expose.add', { apiId: api.id, contract: 'serve.repo.find', role: 'member' }, meta);
+            await broker.call('serve.expose.remove', { apiId: api.id, contract: 'tenancyNote.find' }, meta);
+            await broker.call('serve.expose.add', { apiId: api.id, contract: 'tenancyNote.find', role: 'member' }, meta);
         }
     }, 30_000);
 
@@ -221,7 +234,7 @@ describe('a member\'s call runs in their own organization, never another', () =>
             return found;
         }, { timeout: 5000, interval: 100 });
 
-        const refused = rows.find((r) => r.outcome === 'refused' && r.contract === 'serve.repo.find');
+        const refused = rows.find((r) => r.outcome === 'refused' && r.contract === 'tenancyNote.find');
         expect(refused?.actor.userId).not.toBe('');
         const change = rows.find((r) => r.contract === 'identity.user.setPassword');
         expect(change).toMatchObject({ outcome: 'ok' });

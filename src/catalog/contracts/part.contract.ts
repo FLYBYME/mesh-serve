@@ -71,7 +71,7 @@ export const partCrud = defineCrud('serve.part', partSchema, {
     },
     dependencies: ['serve.repo'],
     filePath: 'src/catalog/contracts/part.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Part = z.infer<typeof partCrud.outputSchema>;

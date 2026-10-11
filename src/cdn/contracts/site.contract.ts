@@ -28,7 +28,7 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
     },
     dependencies: [],
     filePath: 'src/cdn/contracts/site.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Site = z.infer<typeof siteCrud.outputSchema>;

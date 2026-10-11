@@ -26,7 +26,7 @@ export const holdCrud = defineCrud('serve.hold', holdSchema, {
     },
     dependencies: [],
     filePath: 'src/hold/contracts/hold.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Hold = z.infer<typeof holdCrud.outputSchema>;

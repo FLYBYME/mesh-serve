@@ -10,7 +10,7 @@ export const roleCrud = defineCrud('identity.role', roleSchema, {
     },
     dependencies: [],
     filePath: 'src/identity/contracts/role.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Role = z.infer<typeof roleCrud.outputSchema>;

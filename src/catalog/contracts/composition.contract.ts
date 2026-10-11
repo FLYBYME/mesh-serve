@@ -16,7 +16,7 @@ export const compositionCrud = defineCrud('serve.composition', compositionSchema
     },
     dependencies: ['serve.part'],
     filePath: 'src/catalog/contracts/composition.contract.ts',
-    permissions: [],
+    permissions: ['operator'],
 });
 
 export type Composition = z.infer<typeof compositionCrud.outputSchema>;

@@ -64,7 +64,7 @@ export const userVerifyRequestContract = defineContract({
     visibility: 'public',
     destructive: true,
     dependencies: ['identity.user', 'identity.userToken'],
-    filePath: 'src/identity/tools/userToken.ts', concurrency: 'on-demand', permissions: [],
+    filePath: 'src/identity/tools/userToken.ts', concurrency: 'on-demand', permissions: ['member'],
     print: (o) => (o.alreadyVerified ? 'already verified' : o.sent ? 'link sent' : 'not sent'),
 });
 
