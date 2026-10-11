@@ -39,6 +39,7 @@ const WS_PORT = 16573;
 const API_PORT = 15573;
 const PLATFORM = `http://api.localhost:${API_PORT}`;
 const CUSTOMER = `http://customer.localhost:${API_PORT}`;
+const MEMBERS = `http://members.localhost:${API_PORT}`;
 const PASSWORD = 'a-real-password-for-tests-12';
 
 describe('the platform api exposes what a contract gates, without a row', () => {
@@ -86,6 +87,9 @@ describe('the platform api exposes what a contract gates, without a row', () => 
 
         await ensureBootstrapApi(broker);
         await broker.call('serve.api.create', { tenantId: platform.id, apiHost: 'customer.localhost' }, { meta: { tenant_id: platform.id } });
+        await broker.call('serve.api.create', {
+            tenantId: platform.id, apiHost: 'members.localhost', exposeDeclared: true, exposeRoles: ['member'],
+        }, { meta: { tenant_id: platform.id } });
 
         for (const who of ['operator', 'ada']) {
             const res = await fetch(`${PLATFORM}/api/identity/ticket`, {
@@ -154,6 +158,20 @@ describe('the platform api exposes what a contract gates, without a row', () => 
         const described = await res.json() as { events: { name: string; gate?: { role: string } }[] };
 
         expect(described.events.find((event) => event.name === 'serve.part.updated')?.gate?.role).toBe('operator');
+    });
+
+    it('on an api limited to members, serves a member\'s call and not an operator\'s, nor its name', async () => {
+        expect(await get(MEMBERS, '/api/activity/mine', 'ada')).toBe(200);
+        expect(await get(MEMBERS, '/api/nodes', 'operator')).toBe(404);
+        // 404 here: no member event is streamed on this test's api at all; with one, 403.
+        expect(await stream(MEMBERS, 'serve.part.updated', 'operator')).not.toBe(200);
+
+        const res = await fetch(`${MEMBERS}/api/_describe`);
+        const described = await res.json() as { calls: { key: string }[]; events: { name: string }[] };
+
+        expect(described.calls.map((call) => call.key)).toContain('serve.activity.mine');
+        expect(described.calls.map((call) => call.key)).not.toContain('serve.node.find');
+        expect(described.events.map((event) => event.name)).not.toContain('serve.part.updated');
     });
 
     it('exposes nothing this way on an api that does not say exposeDeclared', async () => {

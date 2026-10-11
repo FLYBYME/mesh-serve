@@ -351,7 +351,7 @@ export class ApiGateway {
         return this.targets.get(hostname, async () => {
             const api = await this.resolveApi(hostname);
             const stored = await this.resolveExposeRows(api.id, api.tenantId);
-            const rows = api.exposeDeclared === true ? [...stored, ...this.declaredRows(api.id, stored)] : stored;
+            const rows = api.exposeDeclared === true ? [...stored, ...this.declaredRows(api.id, stored, api.exposeRoles)] : stored;
 
             return { host: api.apiHost, tenantId: api.tenantId, rows };
         });
@@ -367,10 +367,15 @@ export class ApiGateway {
      *
      * Events the same way: every event the cluster knows whose definition declares who may watch it
      * (`eventPermissions`; a collection's events take its read gate), streamable from here.
+     *
+     * `roles` (the api's `exposeRoles`) narrows both to what every required role is one of: a
+     * customers' api says ["member"] and never shows an operator's call or event (owner, 10-11:
+     * the site downloaded every operator call's types).
      */
-    private declaredRows(apiId: string, stored: readonly ExposeRow[]): ExposeRow[] {
+    private declaredRows(apiId: string, stored: readonly ExposeRow[], roles?: readonly string[]): ExposeRow[] {
         const named = new Set(stored.filter((row) => row.kind !== 'event').map((row) => row.contract));
         const keys = new Set(this.broker.registry.getNodes().flatMap((node) => node.services.flatMap((service) => Object.keys(service.tools ?? {}))));
+        const allowed = (required: readonly string[]): boolean => roles === undefined || required.every((role) => roles.includes(role));
 
         const rows: ExposeRow[] = [];
         for (const key of keys) {
@@ -378,6 +383,7 @@ export class ApiGateway {
 
             const contract = this.broker.contractDeclaration(key);
             if (contract === undefined || contract.visibility !== 'public' || contract.permissions.length === 0) continue;
+            if (!allowed(contract.permissions)) continue;
 
             rows.push({ apiId, kind: 'contract', contract: key });
         }
@@ -387,7 +393,7 @@ export class ApiGateway {
             if (streamed.has(name) || !streamableFrom(name)) continue;
 
             const required = eventPermissions(name);
-            if (required === undefined || required.length === 0) continue;
+            if (required === undefined || required.length === 0 || !allowed(required)) continue;
 
             rows.push({ apiId, kind: 'event', contract: name });
         }
