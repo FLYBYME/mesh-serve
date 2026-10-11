@@ -1,4 +1,4 @@
-import type { IServiceContext, IServiceToolRegistry } from '@flybyme/mesh';
+import type { IServiceContext } from '@flybyme/mesh';
 
 import { QUEUE_MAX_CONCURRENCY, type QueueJob, type QueueTickOutput } from '../contracts/queue.contract.js';
 
@@ -139,11 +139,8 @@ async function run(job: QueueJob, ctx: IServiceContext): Promise<void> {
     ctx.logger.debug(`serve.queue: running ${job.id} (${job.contract}), attempt ${job.attempts}/${job.maxAttempts}`);
 
     try {
-        await ctx.call(
-            job.contract as keyof IServiceToolRegistry,
-            job.payload as never,
-            { meta, timeout: job.timeoutMs },
-        );
+        // Named in the job, not in code: callNamed checks the name and the contract checks the payload.
+        await ctx.callNamed(job.contract, job.payload, { meta, timeout: job.timeoutMs });
         await ctx.call('serve.queue.update', { id: job.id, status: 'completed' }, tenantMeta);
         ctx.logger.debug(`serve.queue: completed ${job.id}`);
     } catch (err) {

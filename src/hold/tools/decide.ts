@@ -1,5 +1,5 @@
 import { MeshError } from '@flybyme/mesh';
-import type { IServiceContext, IServiceToolRegistry } from '@flybyme/mesh';
+import type { IServiceContext } from '@flybyme/mesh';
 
 import type { HoldDecideInput, HoldDecideOutput } from '../contracts/hold.contract.js';
 
@@ -44,11 +44,7 @@ export async function decide(
         const replayMeta = { user: { id: row.requestedBy.userId, tenant_id: row.tenantId } };
 
         try {
-            const result: unknown = await ctx.call(
-                row.call as keyof IServiceToolRegistry,
-                row.input as never,
-                { meta: replayMeta },
-            );
+            const result = await ctx.callNamed(row.call, row.input, { meta: replayMeta });
             await ctx.db('serve.hold').update({
                 id: input.holdId, status: 'released', decidedBy, decidedAt, reason: input.reason, result,
             });

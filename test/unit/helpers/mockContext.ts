@@ -55,6 +55,7 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
 
     const broker = {
         call: callFn,
+        callNamed: callFn,
         callOnLeader: callOnLeaderFn,
         acquire: (key: string, lockOptions?: any) => lockBroker.acquire(key, lockOptions),
         release: (key: string, token: string) => lockBroker.release(key, token),
@@ -79,6 +80,7 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
         correlationId: 'mock-correlation-id',
         meta: options.meta ?? {},
         call: callFn,
+        callNamed: callFn,
         callOnLeader: callOnLeaderFn,
         acquire: (key: string, lockOptions?: any) => lockBroker.acquire(key, lockOptions),
         release: (key: string, token: string) => lockBroker.release(key, token),

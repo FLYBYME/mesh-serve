@@ -1,7 +1,7 @@
 import http from 'node:http';
 
 import { ContextStack, isMeshError, MeshError } from '@flybyme/mesh';
-import type { ContractDeclaration, Database, IServiceBroker, IServiceToolRegistry, z } from '@flybyme/mesh';
+import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import type { activitySchema } from './schema/activity.js';
 import './contracts/activity.contract.js';
@@ -997,7 +997,7 @@ export class ApiGateway {
         // The contract's own timeout, not the broker's 10 s default: machine.import (declared 30
         // minutes, running on surf) answered 500 here while the import carried on.
         const timeout = route.contract.timeout;
-        const result = await this.broker.call(route.row.contract as keyof IServiceToolRegistry, input as never, {
+        const result = await this.broker.callNamed(route.row.contract, input, {
             meta, ...(timeout !== undefined ? { timeout } : {}),
             // Which node answered: two versions of identity answered differently and nothing said which (2026-10-06).
             onRouted: (nodeID) => { if (!res.headersSent) res.setHeader('x-mesh-node', nodeID); },

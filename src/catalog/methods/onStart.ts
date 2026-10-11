@@ -1,5 +1,5 @@
 import { MeshError } from '@flybyme/mesh';
-import type { IServiceContext, IServiceToolRegistry } from '@flybyme/mesh';
+import type { IServiceContext } from '@flybyme/mesh';
 
 import { clearServiceRunning } from './services.js';
 import { unloadAndEvictModule } from './loadModule.js';
@@ -32,9 +32,9 @@ export async function runOnStart(
 ): Promise<void> {
     for (const entry of part.onStart ?? []) {
         try {
-            // The key is operator-declared data, validated by the call itself (unknown contract or
-            // bad params both throw) -- the broker's generic can only be satisfied by a cast here.
-            await ctx.call(entry.contract as keyof IServiceToolRegistry, entry.params as never, { meta });
+            // The key is operator-declared data: callNamed refuses an unknown contract (404), and the
+            // contract's own schema refuses bad params.
+            await ctx.callNamed(entry.contract, entry.params, { meta });
         } catch (err) {
             await unloadAndEvictModule(ctx, modulePath);
             clearServiceRunning(ctx.nodeID, part.id);

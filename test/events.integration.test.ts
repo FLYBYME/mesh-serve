@@ -285,6 +285,12 @@ describe('/api/events', () => {
             asked.push(action);
             return (call as (a: string, ...r: unknown[]) => unknown)(action, ...rest);
         }) as typeof broker.call);
+        // The gateway calls the exposed contract itself by name (callNamed, mesh v4.12).
+        const callNamed = broker.callNamed.bind(broker);
+        const namedSpy = vi.spyOn(broker, 'callNamed').mockImplementation((action, params, options) => {
+            asked.push(action);
+            return callNamed(action, params, options);
+        });
         try {
             expect((await whoami()).status).toBe(200);
             expect(asked.filter((a) => a.startsWith('identity.ticket') || a.startsWith('identity.apiToken') || a === 'identity.hasRole'
@@ -292,12 +298,13 @@ describe('/api/events', () => {
             expect(asked).toContain('identity.whoami');
         } finally {
             spy.mockRestore();
+            namedSpy.mockRestore();
         }
     });
 
     // Last: it ends the member's ticket.
     it('forgets a signed-out ticket at once, not after the moment it is kept', async () => {
-        await broker.call('serve.expose.add', { apiId, contract: 'identity.ticket.signOut', public: true }, { meta: { tenant_id: orgId } });
+        // Sign-out is exposed by the bootstrap api itself since 10-10 (public, as issue and renew).
         const whoami = (): Promise<Response> => fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${memberToken}` } });
         expect((await whoami()).status).toBe(200);
         const out = await fetch(`${ORIGIN}/api/identity/signOut`, {

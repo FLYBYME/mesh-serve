@@ -48,6 +48,7 @@ describe('a service that declares onStart', () => {
             broker,
             nodeID: broker.nodeID,
             call: (tool: never, params: never, options?: never) => broker.call(tool, params, options),
+            callNamed: (tool: string, params: Record<string, unknown>, options?: never) => broker.callNamed(tool, params, options),
         } as unknown as IServiceContext;
     });
 
