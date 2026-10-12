@@ -96,10 +96,9 @@ export function matchesContract(pattern: string, contract: string): boolean {
 
 ## First-Boot Bootstrapping
 
-During [`IdentityService.onStart`](file:///home/ubuntu/code/mesh-serve/src/identity/identity.service.ts#L89):
-1. **Operator Role**: Ensures the `operator` role exists with permissions `["identity.*", "serve.*"]`.
-2. **Platform Organization**: Creates the root `platform` organization (slug `platform`) if not present.
-3. **Provisional Operator Account**: When no operator exists, generates a provisional account and prints a one-time claim token to the console:
-   ```bash
-   Claim operator with: mesh-serve login --claim <token>
-   ```
+Nothing happens at identity's start. A fresh node is claimed once, by `mesh-serve bootstrap`
+(`src/cli/commands/bootstrap.ts`; how to run it: [getting-started.md](getting-started.md) section 3):
+it seeds the built-in roles (`identity.role.ensureBuiltins`), creates the operator account (role
+`operator`), the `platform` organization it owns, and the bootstrap api. A second run is refused
+while a `platform` organization exists. (There was once a one-time claim token printed at start and a
+`login --claim`; neither exists.)
