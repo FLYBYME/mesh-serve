@@ -38,8 +38,8 @@ The system is organized around four core services mounted on a shared [`MeshApp`
 1. **[System Architecture](file:///home/ubuntu/code/mesh-serve/docs/architecture.md)**
    Comprehensive conceptual model, service boundaries, data flows, and multi-tenancy design.
 
-2. **[End-to-End Operational Walkthrough](file:///home/ubuntu/code/mesh-serve/docs/walkthrough.md)**
-   Full recipe for standing up a new node, claiming operator, compiling parts, composing releases, deploying sites, and calling exposed APIs.
+2. **[Getting Started](getting-started.md)**
+   A local node: start it, claim it (`mesh-serve bootstrap`), sign in, and the CLI -- its own commands and one per exposed contract. Checked against the code 2026-10-12.
 
 3. **[Catalog Service & Build Engine](file:///home/ubuntu/code/mesh-serve/docs/catalog-service.md)**
    Repositories (`serve.repo`), buildable parts (`serve.part`), esbuild compilation, content-addressed artifacts (`serve.artifact`), composition, and release pinning (`serve.release`).
@@ -58,6 +58,3 @@ The system is organized around four core services mounted on a shared [`MeshApp`
 
 8. **[Configuration & Environment Reference](file:///home/ubuntu/code/mesh-serve/docs/configuration.md)**
    Complete reference for all environment variables, CLI options, local vs. production networking profiles, and filesystem locations.
-
-9. **[CLI & Operations Guide](file:///home/ubuntu/code/mesh-serve/docs/cli-reference.md)**
-   Node startup (`mesh-serve start`), interactive REPL, session management, and dynamic CLI commands.
