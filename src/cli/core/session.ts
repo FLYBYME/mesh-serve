@@ -48,7 +48,13 @@ export interface Session {
     readonly descriptor?: CachedDescriptor;
 }
 
-const SESSION_DIR = path.join(os.homedir(), '.mesh-serve');
+/**
+ * Where the session lives: MESH_SERVE_HOME when set, else ~/.mesh-serve. One session per folder --
+ * a second api (a local node, a rehearsal platform) gets its own folder this way, instead of a
+ * changed HOME, which also hides git's and gh's own settings (a private repo then asks for a
+ * password, 10-12).
+ */
+const SESSION_DIR = process.env.MESH_SERVE_HOME ?? path.join(os.homedir(), '.mesh-serve');
 const SESSION_FILE = path.join(SESSION_DIR, 'session.json');
 
 export function sessionPath(): string {

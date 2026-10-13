@@ -77,9 +77,17 @@ node bin/mesh-serve.mjs identity.whoami
 The password is asked for, or read from `MESH_PASSWORD`. `*.localhost` resolves to 127.0.0.1 on most
 systems; if `api.localhost` does not, add `127.0.0.1 api.localhost` to `/etc/hosts`.
 
-**The CLI keeps one session**, in `~/.mesh-serve/session.json`: the api it talks to, your ticket,
-and that api's command list. Signing in to a local node replaces a session you had with another
-api. To keep both, give one of them its own home: `HOME=~/.mesh-dev-home node bin/mesh-serve.mjs ...`.
+**The CLI keeps one session per folder**: `$MESH_SERVE_HOME`, else `~/.mesh-serve` -- the api it
+talks to, your ticket, and that api's command list. Signing in to a local node replaces a session
+you had with another api in the same folder. To keep both, give one its own folder:
+
+```sh
+MESH_SERVE_HOME=~/.mesh-serve-dev node bin/mesh-serve.mjs login --api http://api.localhost:5005 --email you@example.com
+MESH_SERVE_HOME=~/.mesh-serve-dev node bin/mesh-serve.mjs identity.whoami
+```
+
+Not `HOME=...`: that also hides git's and gh's settings, so a private GitHub repo (a `sync` that
+builds from one) asks for a password.
 
 ## 5. The CLI
 
