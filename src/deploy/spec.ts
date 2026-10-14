@@ -18,6 +18,8 @@ export const repoSpecSchema = z.object({
     kernel: z.boolean().optional().describe('Marks the repo that hosts the kernel part'),
     local: z.boolean().optional()
         .describe('This checkout: its parts build at the commit deploy checked (HEAD, which must be on origin), never a moving branch'),
+    credential: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/).optional()
+        .describe('A private repo: the name of the credential its builds clone with (serve.repo.credential; SurfDNS: a vault secret) -- a name, never the token'),
 }).describe("A git repository the site's parts are sourced from");
 export type RepoSpec = z.infer<typeof repoSpecSchema>;
 

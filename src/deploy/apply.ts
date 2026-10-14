@@ -98,10 +98,11 @@ export async function repos(api: ApiSession, spec: SiteSpec, tenantId: string): 
 
     for (const repo of spec.repos) {
         const found = await ask(api, 'serve.repo.find_one', { query: { tenantId, url: repo.url } }, maybe(RepoRow));
+        const credential = repo.credential !== undefined ? { credential: repo.credential } : {};
 
         const row = found !== null && found !== undefined
-            ? await ask(api, 'serve.repo.update', { id: found.id, name: repo.name, defaultBranch: repo.ref }, RepoRow)
-            : await ask(api, 'serve.repo.create', { tenantId, name: repo.name, url: repo.url, defaultBranch: repo.ref }, RepoRow);
+            ? await ask(api, 'serve.repo.update', { id: found.id, name: repo.name, defaultBranch: repo.ref, ...credential }, RepoRow)
+            : await ask(api, 'serve.repo.create', { tenantId, name: repo.name, url: repo.url, defaultBranch: repo.ref, ...credential }, RepoRow);
 
         ids.set(repo.name, row.id);
     }
