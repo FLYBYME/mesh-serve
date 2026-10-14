@@ -61,8 +61,25 @@ export class WatchCommand extends BaseCommand {
             console.log(`${new Date().toISOString().slice(11, 19)}  ${event}  ${describe(parse(data))}`);
         };
 
+        // The api may move while this runs (a rehearsal hands the bootstrap api off to the public
+        // one): on a lost connection, if the CLI now points elsewhere, follow it. A connection that
+        // stays lost is said once, not on every retry ("fetch failed" forever, 10-13).
+        let lost = false;
+        let following = false;
+        const followIfMoved = async (): Promise<void> => {
+            const now = await readSession();
+            if (following || now.apiUrl === undefined || now.apiUrl === apiUrl) return;
+
+            following = true;
+            source.close();
+            console.error(`${descriptor.host} is gone and the CLI now points at ${now.apiUrl}: following it`);
+            await this.execute(requested, options);
+        };
+
         source.addEventListener('open', () => {
-            if (!options.json) console.error(`watching ${names.join(', ')} on ${descriptor.host}`);
+            if (lost) console.error(`back on ${descriptor.host}`);
+            else if (!options.json) console.error(`watching ${names.join(', ')} on ${descriptor.host}`);
+            lost = false;
         });
         for (const name of names) {
             source.addEventListener(name, (event) => print(name, event.data));
@@ -77,7 +94,9 @@ export class WatchCommand extends BaseCommand {
             source.close();
         });
         source.addEventListener('error', (event) => {
-            console.error(`${event.data ?? 'connection error'}`);
+            if (!lost) console.error(`lost ${descriptor.host} (${event.data ?? 'connection error'}); retrying`);
+            lost = true;
+            void followIfMoved();
         });
         // A refusal (403/404) is final: the source has already stopped retrying.
         source.addEventListener('close', () => {
