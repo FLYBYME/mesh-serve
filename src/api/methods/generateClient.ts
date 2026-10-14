@@ -39,6 +39,11 @@ function camelIdentifier(raw: string): string {
     return /^[0-9]/.test(identifier) ? `_${identifier}` : identifier;
 }
 
+/** The name a generated client exports its api by: api.one-host.ca -> apiOneHostCaApi. */
+export function apiExportName(id: string): string {
+    return `${camelIdentifier(id)}Api`;
+}
+
 /**
  * One schema and its type. The schema is built inside a `/* @__PURE__ *\/` call, so a bundler drops
  * every one nothing reads at run time: the client's calls only name them in types. A bare
@@ -157,7 +162,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         ...schemas,
         '',
         // Pure: a bundle that never uses the api drops it, and with it every input schema it holds.
-        'export const ' + camelIdentifier(id) + 'Api = /* @__PURE__ */ defineApi({',
+        'export const ' + apiExportName(id) + ' = /* @__PURE__ */ defineApi({',
         `    id: ${JSON.stringify(id)},`,
         `    exposure: ${JSON.stringify(descriptor.exposure)},`,
         `    shapeHash: ${JSON.stringify(descriptor.shapeHash)},`,

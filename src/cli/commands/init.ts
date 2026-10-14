@@ -8,6 +8,9 @@ import { z } from '@flybyme/mesh';
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { siteSpecSchema } from '../../deploy/spec.js';
+import { MESH_WEB_KIT_URL, MESH_WEB_URL, newestTag, starterFiles, writeStarter } from '../../deploy/starter.js';
+import { apiExportName, renderClient } from '../../api/methods/generateClient.js';
+import { describeApi } from '../core/apiClient.js';
 import YAML from 'yaml';
 
 const run = promisify(execFile);
@@ -90,9 +93,17 @@ export class InitCommand extends BaseCommand {
             return;
         }
 
+        // An empty repository (no package.json): the starter app first, and its api's client.
+        const fresh = !(await fs.stat('package.json').then(() => true, () => false));
+        if (fresh) {
+            const ok = await this.starter(name, args);
+            if (!ok) return;
+        }
+
         const remote = httpsUrl(await git('remote', 'get-url', 'origin'));
-        const branch = (await git('rev-parse', '--abbrev-ref', 'HEAD')) || 'main';
-        const tag = (await meshWebTag()) ?? 'v0.21.10';
+        const head = await git('rev-parse', '--abbrev-ref', 'HEAD');
+        const branch = head !== '' && head !== 'HEAD' ? head : 'main';
+        const tag = (await meshWebTag()) ?? 'v0.21.11';
         const clients = await generatedClients();
         // The repo by its own name (surfdns-company-site), not the file's (one-host).
         const repo = path.basename(remote, '.git') || path.basename(process.cwd());
@@ -154,6 +165,34 @@ policy:
         // What init writes must load: a template deploy then refuses would be no start at all.
         siteSpecSchema.parse(YAML.parse(text));
         await fs.writeFile(file, text);
-        this.logger.info(`Wrote ${file}. Check it, then: mesh-serve deploy`);
+        this.logger.info(fresh
+            ? `Wrote ${file}. Next: npm install, npm run typecheck, commit and push, then mesh-serve deploy`
+            : `Wrote ${file}. Check it, then: mesh-serve deploy`);
+    }
+
+    /** The starter app and its api's client, into an empty repository. False: refused, said why. */
+    private async starter(name: string, args: z.infer<typeof initInputSchema>): Promise<boolean> {
+        const outcome = await describeApi(`https://${args.api}`)
+            .then((descriptor) => ({ descriptor }), (err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+        if ('error' in outcome) {
+            this.logger.error(`${args.api} cannot be described, so its client cannot be written: ${outcome.error}`);
+            process.exitCode = 1;
+            return false;
+        }
+
+        const described = outcome.descriptor;
+
+        const [meshWebTag, kitTag] = await Promise.all([newestTag(MESH_WEB_URL, 'v0.21.11'), newestTag(MESH_WEB_KIT_URL, 'v0.1.11')]);
+        const written = await writeStarter('.', starterFiles({
+            name, title: name, apiHost: args.api, apiExport: apiExportName(described.host), meshWebTag, kitTag,
+        }));
+
+        await fs.mkdir('src/generated', { recursive: true });
+        await fs.writeFile('src/generated/api.ts', renderClient(described.host, described));
+        written.push('src/generated/api.ts');
+
+        this.logger.info(`A new app (mesh-web ${meshWebTag}, mesh-web-kit ${kitTag}): ${written.join(', ')}`);
+
+        return true;
     }
 }

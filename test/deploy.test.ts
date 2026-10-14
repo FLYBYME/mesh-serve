@@ -6,8 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { apiExportName } from '../src/api/methods/generateClient.js';
 import { checkout, clients } from '../src/deploy/checks.js';
 import { loadSite, siteSpecSchema } from '../src/deploy/spec.js';
+import { starterFiles, writeStarter } from '../src/deploy/starter.js';
 
 const WARGAME = `
 site: wargame.localhost
@@ -72,6 +74,33 @@ describe('a site file', () => {
 
         expect(parsed.success).toBe(false);
         expect(parsed.error?.issues[0]?.path).toEqual(['api', 'expose', 0, 'gate']);
+    });
+});
+
+describe('the starter init writes into an empty repository', () => {
+    const files = starterFiles({
+        name: 'new-site', title: 'New site', apiHost: 'api.one-host.ca', apiExport: apiExportName('api.one-host.ca'),
+        meshWebTag: 'v0.21.11', kitTag: 'v0.1.11',
+    });
+
+    it('pins mesh-web and the kit to the tags it was given, and wires the App to the generated client by its name', () => {
+        const pkg: unknown = JSON.parse(files.get('package.json') ?? '{}');
+
+        expect(JSON.stringify(pkg)).toContain('github:FLYBYME/mesh-web#v0.21.11');
+        expect(JSON.stringify(pkg)).toContain('github:FLYBYME/mesh-web-kit#v0.1.11');
+        expect(apiExportName('api.one-host.ca')).toBe('apiOneHostCaApi');
+        expect(files.get('src/index.ts')).toContain("import { apiOneHostCaApi } from './generated/api.js';");
+        expect([...files.keys()].sort()).toEqual(['.gitignore', 'package.json', 'src/home-view.ts', 'src/index.ts', 'tsconfig.json']);
+    });
+
+    it('never overwrites a file that is there', async () => {
+        const dir = tmp('starter-');
+        fs.writeFileSync(path.join(dir, 'package.json'), '{ "name": "mine" }');
+
+        const written = await writeStarter(dir, files);
+
+        expect(written).not.toContain('package.json');
+        expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')).toBe('{ "name": "mine" }');
     });
 });
 
