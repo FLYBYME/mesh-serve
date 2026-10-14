@@ -1,6 +1,6 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.10.60",
+    "version": "0.10.61",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
     "private": true,
@@ -11,6 +11,11 @@
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
         },
+        "./declared/*": {
+            "types": "./dist/declared/*.d.ts",
+            "mesh-source": "./src/declared/*.ts",
+            "default": "./dist/declared/*.js"
+        },
         "./*": "./*",
         "./package.json": "./package.json"
     },
@@ -20,6 +25,7 @@
     "files": [
         "bin",
         "dist",
+        "src/declared",
         "README.md"
     ],
     "scripts": {
