@@ -96,6 +96,9 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         const name = pascalCase(call.key);
 
         let inputType = 'void';
+        // The call carries its input schema, and mesh-web checks every input with it before sending
+        // (owner, 10-14: "the zod schema does not just provide types").
+        let options = '';
         if (!isEmptyObjectSchema(call.input)) {
             const schemaName = `${lowerFirst(name)}InputSchema`;
             // `XInput` stays what it was — the parsed shape (`z.infer`), which the server sees.
@@ -104,6 +107,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
             // Typing the call with `z.infer` made every defaulted field required at every call site
             // (`domain.find` demanded `offset`, found by the company site's dashboard).
             inputType = `z.input<typeof ${schemaName}>`;
+            options = `, { inputSchema: ${schemaName} }`;
         }
 
         const outputType = `${name}Output`;
@@ -118,7 +122,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
 
         callEntries.push(
             `    /**\n     * ${doc}\n     */\n`
-            + `    ${JSON.stringify(call.key)}: call<${inputType}, ${outputType}, never>(${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}, ${gate}),`,
+            + `    ${JSON.stringify(call.key)}: /* @__PURE__ */ call<${inputType}, ${outputType}, never>(${JSON.stringify(call.method)}, ${JSON.stringify(call.path)}, ${gate}${options}),`,
         );
     }
 
@@ -152,7 +156,8 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         '',
         ...schemas,
         '',
-        'export const ' + camelIdentifier(id) + 'Api = defineApi({',
+        // Pure: a bundle that never uses the api drops it, and with it every input schema it holds.
+        'export const ' + camelIdentifier(id) + 'Api = /* @__PURE__ */ defineApi({',
         `    id: ${JSON.stringify(id)},`,
         `    exposure: ${JSON.stringify(descriptor.exposure)},`,
         `    shapeHash: ${JSON.stringify(descriptor.shapeHash)},`,

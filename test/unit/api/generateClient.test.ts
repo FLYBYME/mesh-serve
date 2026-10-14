@@ -51,7 +51,7 @@ describe('rendering from a described api, as `mesh-serve generate` does locally'
 describe('the generated client', () => {
     it('types a call by its schema\'s input side, so defaulted fields are optional to a caller', async () => {
         const source = await generateClient('api.test', 'api.test', [row], () => declaration);
-        expect(source).toContain('"domain.find": call<z.input<typeof domainFindInputSchema>, DomainFindOutput, never>(');
+        expect(source).toContain('"domain.find": /* @__PURE__ */ call<z.input<typeof domainFindInputSchema>, DomainFindOutput, never>(');
         // The named parsed type is still emitted, for code that holds a parsed value.
         expect(source).toMatch(/export type DomainFindInput = z\.infer<typeof domainFindInputSchema>/);
     });
@@ -77,7 +77,7 @@ describe('the generated client', () => {
         expect(source).not.toContain('events:');
     });
 
-    it('ships only the schemas a bundle reads at run time: the rest are dropped', async () => {
+    it('a bundle that does not use the api drops it, and every schema it does not read', async () => {
         const unusedRow: Expose = { ...row, id: 'row-2', contract: 'note.find' };
         const unused: ContractDeclaration = {
             ...declaration, key: 'note.find', domain: 'note', rest: { method: 'GET', path: '/notes' },
@@ -103,5 +103,31 @@ describe('the generated client', () => {
 
         expect(text).toContain('domainFindInputSchema');
         expect(text).not.toContain('neverReadMarker');
+    });
+
+    it('a bundle that uses the api carries each call\'s input schema, to check inputs before they are sent -- and no output schema', async () => {
+        const source = await generateClient('api.test', 'api.test', [row], () => ({
+            ...declaration, output: { type: 'object', properties: { outputOnlyMarker: { type: 'string' } } },
+        }));
+        expect(source).toContain('{ inputSchema: domainFindInputSchema }');
+
+        const bundle = await esbuild.build({
+            stdin: { contents: "import { apiTestApi } from 'client'; console.log(apiTestApi);", loader: 'ts' },
+            bundle: true,
+            write: false,
+            format: 'esm',
+            external: ['zod', '@flybyme/mesh-web/net'],
+            plugins: [{
+                name: 'client',
+                setup(build) {
+                    build.onResolve({ filter: /^client$/ }, () => ({ path: 'client', namespace: 'client' }));
+                    build.onLoad({ filter: /.*/, namespace: 'client' }, () => ({ contents: source, loader: 'ts' }));
+                },
+            }],
+        });
+        const text = bundle.outputFiles[0]?.text ?? '';
+
+        expect(text).toContain('domainFindInputSchema');
+        expect(text).not.toContain('outputOnlyMarker');
     });
 });
