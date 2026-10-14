@@ -4,7 +4,8 @@ import { Command, CommanderError } from 'commander';
 import { StartCommand } from './commands/start.js';
 import { BootstrapCommand } from './commands/bootstrap.js';
 import { GenerateCommand } from './commands/generate.js';
-import { SyncCommand } from './commands/sync.js';
+import { DeployCommand } from './commands/deploy.js';
+import { InitCommand } from './commands/init.js';
 import { LoginCommand } from './commands/login.js';
 import { LogoutCommand } from './commands/logout.js';
 import { SwitchCommand } from './commands/switch.js';
@@ -20,20 +21,18 @@ import { describeApi } from './core/apiClient.js';
  *
  * Two kinds of command, and the split is the whole design. **Built-ins** are about this machine and
  * this cluster: `start` boots a node, `bootstrap` claims one, `generate` renders a typed client for
- * a repo checked out on disk, `sync` applies a site spec, and `login`/`switch` decide who and where.
+ * a repo checked out on disk, `init` writes a site file and `deploy` puts a site on an api from it
+ * (it replaced `sync`), and `login`/`switch` decide who and where.
  * They exist regardless of what the CLI is pointed at. **Discovered** commands come from whichever
  * api `switch` selected, read from its own `_describe`.
  *
  * `bootstrap` is the only thing here that touches the mesh network directly, because its whole job
  * is to create the gate everything else goes through -- there is nothing to authenticate against
- * yet. Every other built-in, including `generate` and `sync`, is an ordinary api client using the
+ * yet. Every other built-in, including `generate` and `deploy`, is an ordinary api client using the
  * currently signed-in operator's own ticket, subject to the same `serve.expose` rows and permission
- * floors as a browser. `sync` used to connect to the mesh directly on the reasoning that it was
- * many api-shaped operations in one session rather than a login plus a round trip per step -- that
- * was the same shortcut `syncAdmin` and a raw `serve.artifact.build` were, before those were found
- * and removed, just at the level of the whole connection instead of one call. `sync.ts` is, in
- * effect, the specification for what a fuller api client automates; it is not a reason to skip
- * being one. That is deliberate: it makes an incomplete api impossible not to notice, because these
+ * floors as a browser. (`sync`, deploy's predecessor, once connected to the mesh directly -- the
+ * same shortcut `syncAdmin` and a raw `serve.artifact.build` were, before those were found and
+ * removed.) That is deliberate: it makes an incomplete api impossible not to notice, because these
  * commands cannot route around it either.
  */
 function buildProgram(session: Session, writeErr: (text: string) => void): Command {
@@ -47,7 +46,8 @@ function buildProgram(session: Session, writeErr: (text: string) => void): Comma
     new StartCommand().register(program);
     new BootstrapCommand().register(program);
     new GenerateCommand().register(program);
-    new SyncCommand().register(program);
+    new InitCommand().register(program);
+    new DeployCommand().register(program);
     new LoginCommand().register(program);
     new LogoutCommand().register(program);
     new SwitchCommand().register(program);

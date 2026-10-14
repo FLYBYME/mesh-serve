@@ -1,6 +1,6 @@
 # The operator console: organization, apis & exposure, catalog, sites, services.
 #
-# Applied with `mesh-serve sync` (or `sync --site <this file>` from elsewhere) against an
+# Applied with `mesh-serve deploy --site <this file>` (it replaced `sync`) against an
 # already-claimed cluster -- run `mesh-serve bootstrap` first if this is a fresh one.
 #
 # Hand-written only. A dump of what is actually running goes to JSON (no YAML serializer keeps
