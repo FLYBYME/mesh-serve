@@ -37,7 +37,8 @@ describe('identity.ticket.renew', () => {
         await client.db(DB_NAME).dropDatabase();
         await client.close();
 
-        app = await createTestNode({ nodeID: 'renew-ticket-node', port: 16591, dbName: DB_NAME });
+        // Not 16591: nodeMesh's, and the two failed each other in a parallel run (10-14).
+        app = await createTestNode({ nodeID: 'renew-ticket-node', port: 16594, dbName: DB_NAME });
         broker = app.getProvider<IServiceBroker>('broker');
         db = app.getProvider<Database>('database');
         await broker.loadDomain('identity', {}, { resolve: resolveHandler });

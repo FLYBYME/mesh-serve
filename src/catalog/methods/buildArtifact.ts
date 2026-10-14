@@ -14,6 +14,21 @@ import { keepCopies } from './spreadArtifact.js';
  * `tools/build.ts` could reach it, with a comment explaining that a handler in its own file is not
  * part of the class's lexical body. That whole problem was an artifact of the class existing.
  */
+/**
+ * The token a repo that names a credential is cloned with, asked of whoever implements
+ * serve.credential.resolve (SurfDNS: the vault), for this build only. A repo naming none: none.
+ */
+async function credentialOf(broker: IServiceBroker, repo: Repo): Promise<{ token?: string }> {
+    if (repo.credential === undefined) return {};
+
+    const answer = await broker.call('serve.credential.resolve', { tenantId: repo.tenantId, name: repo.credential, url: repo.url }, { meta: { tenant_id: repo.tenantId } })
+        .catch((err: unknown) => {
+            throw new Error(`Repo ${repo.name} names credential "${repo.credential}", which could not be resolved: ${err instanceof Error ? err.message : String(err)}`);
+        });
+
+    return { token: answer.token };
+}
+
 async function resolveDrivers(broker: IServiceBroker, artifact: Artifact): Promise<{ part: Part; repo: Repo }[]> {
     const meta = { tenant_id: artifact.tenantId };
     const resolved: { part: Part; repo: Repo }[] = [];
@@ -78,12 +93,14 @@ export async function buildArtifact(broker: IServiceBroker, artifact: Artifact):
         if (part === undefined) {
             throw new Error(`No part "${artifact.partId}".`);
         }
-        const repo = await broker.call('serve.repo.resolve', {
+        const record = await broker.call('serve.repo.resolve', {
             id: part.repoId,
         }, { meta });
-        if (repo === undefined) {
+        if (record === undefined) {
             throw new Error(`No repo "${part.repoId}".`);
         }
+
+        const repo = { ...record, ...(await credentialOf(broker, record)) };
 
         const startedAt = Date.now();
 

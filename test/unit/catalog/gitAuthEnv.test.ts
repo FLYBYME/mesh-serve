@@ -35,6 +35,24 @@ describe('the builder\'s GitHub access (gitAuthEnv)', () => {
         expect(env.GIT_TERMINAL_PROMPT).toBe('0');
     });
 
+    it('gives a repo\'s own credential to its host only (serve.repo.credential, resolved for the build)', async () => {
+        const repo = { id: 'r1', url: 'https://git.one-host.ca/org/site.git', token: 'repo-token' };
+        const env = gitAuthEnv(undefined, repo);
+
+        const header = await gitConfig(env, '--get', 'http.https://git.one-host.ca/.extraheader');
+        expect(header).toBe(`AUTHORIZATION: basic ${Buffer.from('x-access-token:repo-token').toString('base64')}`);
+        expect(Object.values(env).some((v) => v.includes('repo-token'))).toBe(false);
+        expect(await gitConfig(env, '--get', 'http.https://github.com/.extraheader').catch(() => 'none')).toBe('none');
+    });
+
+    it('sends one Authorization to GitHub when the repo there has its own credential', async () => {
+        const repo = { id: 'r1', url: 'https://github.com/org/private.git', token: 'repo-token' };
+        const env = gitAuthEnv('builder-token', repo);
+
+        const headers = (await gitConfig(env, '--get-all', 'http.https://github.com/.extraheader')).split('\n');
+        expect(headers).toEqual([`AUTHORIZATION: basic ${Buffer.from('x-access-token:repo-token').toString('base64')}`]);
+    });
+
     it('never puts the token in plain text anywhere git could print it (a URL, a config value)', () => {
         const env = gitAuthEnv('test-token');
 

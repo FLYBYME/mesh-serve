@@ -17,7 +17,13 @@ import type { Repo } from '../contracts/repo.contract.js';
  * platform (`mesh-serve artifact-build`) from a plain description instead of stored records.
  */
 export type BuildablePart = Pick<Part, 'path' | 'entryPoint'>;
-export type BuildableRepo = Pick<Repo, 'id' | 'url'>;
+export type BuildableRepo = Pick<Repo, 'id' | 'url'> & {
+    /**
+     * The token this build clones the repo with, resolved from `serve.repo.credential` for this
+     * build only (buildArtifact) -- never stored, never in a command line, a URL or a log.
+     */
+    readonly token?: string;
+};
 import { artifactAssetSchema } from '../schema/artifact.js';
 import { artifactDir } from './artifacts.js';
 
@@ -40,15 +46,23 @@ async function exists(p: string): Promise<boolean> {
  * carries the token. Replaces the hand-placed `/etc/mesh/gitconfig` on compute1 (2026-10-03).
  * No token: nothing added -- public repositories still build.
  */
-export function gitAuthEnv(token: string | undefined = process.env.GITHUB_TOKEN): Record<string, string> {
-    if (token === undefined || token.trim() === '') return {};
+export function gitAuthEnv(token: string | undefined = process.env.GITHUB_TOKEN, repo?: BuildableRepo): Record<string, string> {
+    const basic = (t: string): string => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${t.trim()}`).toString('base64')}`;
+    const config: Array<[string, string]> = [];
 
-    const basic = Buffer.from(`x-access-token:${token.trim()}`).toString('base64');
-    const config: Array<[string, string]> = [
-        ['http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basic}`],
-        ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
-        ['url.https://github.com/.insteadOf', 'git@github.com:'],
-    ];
+    // The repo's own credential (serve.repo.credential), for its host only: our git server and
+    // GitHub both take a token as the password of basic auth.
+    const origin = repo?.token !== undefined && /^https:\/\//.test(repo.url) ? new URL(repo.url).origin : undefined;
+    if (origin !== undefined && repo?.token !== undefined) config.push([`http.${origin}/.extraheader`, basic(repo.token)]);
+
+    // The builder's GitHub token, unless the repo's own already speaks for github.com: two
+    // Authorization headers on one request are refused.
+    if (token !== undefined && token.trim() !== '' && origin !== 'https://github.com') {
+        config.push(['http.https://github.com/.extraheader', basic(token)]);
+    }
+    if (config.length === 0) return {};
+
+    config.push(['url.https://github.com/.insteadOf', 'ssh://git@github.com/'], ['url.https://github.com/.insteadOf', 'git@github.com:']);
 
     const env: Record<string, string> = { GIT_CONFIG_COUNT: String(config.length), GIT_TERMINAL_PROMPT: '0' };
     config.forEach(([key, value], i) => {
@@ -59,8 +73,8 @@ export function gitAuthEnv(token: string | undefined = process.env.GITHUB_TOKEN)
     return env;
 }
 
-async function git(args: string[], cwd?: string): Promise<string> {
-    const { stdout } = await execFileAsync('git', args, { cwd, env: { ...process.env, ...gitAuthEnv() } });
+async function git(args: string[], cwd?: string, repo?: BuildableRepo): Promise<string> {
+    const { stdout } = await execFileAsync('git', args, { cwd, env: { ...process.env, ...gitAuthEnv(undefined, repo) } });
 
     return stdout;
 }
@@ -96,7 +110,7 @@ async function headCommit(dir: string): Promise<string> {
  * without one. Skipped entirely when there's no `package.json` -- most parts have no npm
  * dependencies of their own at all, and installing nothing should cost nothing.
  */
-async function ensureNpmInstall(dir: string): Promise<void> {
+async function ensureNpmInstall(dir: string, repo?: BuildableRepo): Promise<void> {
     if (!(await exists(path.join(dir, 'package.json')))) return;
     const hasLockfile = await exists(path.join(dir, 'package-lock.json'));
     // --omit=dev: esbuild only ever resolves what the entry point actually imports, and a repo's
@@ -112,8 +126,8 @@ async function ensureNpmInstall(dir: string): Promise<void> {
     // so no lifecycle script's output was ever going to be used regardless of whether it succeeded.
     await execFileAsync('npm', [hasLockfile ? 'ci' : 'install', '--no-audit', '--no-fund', '--omit=dev', '--ignore-scripts'], {
         cwd: dir,
-        // npm clones git dependencies with git: the same GitHub access as the repository's own clone.
-        env: { ...process.env, ...gitAuthEnv() },
+        // npm clones git dependencies with git: the same access as the repository's own clone.
+        env: { ...process.env, ...gitAuthEnv(undefined, repo) },
         // npm's own install log easily clears the default 1MB maxBuffer on a real dependency tree;
         // this only needs to not throw, the output itself is never read.
         maxBuffer: 1024 * 1024 * 50,
@@ -184,9 +198,9 @@ async function ensureRepoCheckout(repo: BuildableRepo, ref: string): Promise<str
 
     if (!(await exists(dir))) {
         await fs.mkdir(repoWorkdir, { recursive: true });
-        await git(['clone', '--', repo.url, dir]);
+        await git(['clone', '--', repo.url, dir], undefined, repo);
     } else {
-        await git(['fetch', '--all', '--tags'], dir);
+        await git(['fetch', '--all', '--tags'], dir, repo);
         // The working copy is shared and the last build ran `npm install` in it: a repo with no
         // lockfile was left an untracked package-lock.json, and the commit that added one could
         // never be checked out ("would be overwritten", surfdns-intel 10-09). Back to exactly the
@@ -206,7 +220,7 @@ async function ensureRepoCheckout(repo: BuildableRepo, ref: string): Promise<str
         await git(['checkout', ref], dir);
         await git(['reset', '--hard', ref], dir);
     }
-    await ensureNpmInstall(dir);
+    await ensureNpmInstall(dir, repo);
 
     return dir;
 }
@@ -506,7 +520,7 @@ export async function buildService(part: BuildablePart, repo: BuildableRepo, ref
  */
 export async function buildKernel(
     kernelPart: Part,
-    kernelRepo: Repo,
+    kernelRepo: Repo & Pick<BuildableRepo, 'token'>,
     ref: string,
     drivers: readonly { part: Part; repo: Repo }[],
 ): Promise<BuiltOutput> {
