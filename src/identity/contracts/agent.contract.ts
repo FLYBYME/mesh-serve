@@ -40,3 +40,44 @@ export const agentEnsureContract = defineContract({
 
 export type AgentEnsureInput = z.infer<typeof agentEnsureInputSchema>;
 export type AgentEnsureOutput = z.infer<typeof agentEnsureOutputSchema>;
+
+/**
+ * identity.agent.token -- a fresh token for an organization's agent account, the earlier one of the
+ * same name revoked first (open.md, "the dev agent from an order", proposed 10-10, done 10-14).
+ *
+ * Only ever an agent account's (kind `agent`, made by identity.agent.ensure), never a person's, and
+ * only the roles that account holds in its own organization. Internal: no api can expose it, so only
+ * a service inside the mesh can ask (builds, sealing it straight into the vault when an organization
+ * is set up to build). An operator issuing another account's token is identity.apiToken.issue.
+ */
+export const agentTokenInputSchema = z.object({
+    organizationId: z.string().min(1).describe('The organization the agent works for'),
+    name: z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'lowercase letters, digits and dashes').describe('Which agent: dev, leader, builds'),
+    tokenName: z.string().min(1).max(64).describe('The token\'s name: an earlier token of this name is revoked'),
+});
+
+export const agentTokenOutputSchema = z.object({
+    userId: z.string(),
+    email: z.string(),
+    token: z.string().describe('The plaintext token: only ever in this reply'),
+    roles: z.array(z.string()),
+    revoked: z.number().int().describe('Earlier tokens of the same name revoked'),
+});
+
+export const agentTokenContract = defineContract({
+    domain: 'identity.agent',
+    action: 'token',
+    description: 'A fresh token for an organization\'s agent account (never a person\'s), the earlier one of the same name revoked. Internal: services only.',
+    inputSchema: agentTokenInputSchema,
+    outputSchema: agentTokenOutputSchema,
+    // A path every contract has; `internal` keeps it from ever being served.
+    rest: { method: 'POST', path: '/identity/agents/token' },
+    dependencies: ['identity.user', 'identity.organization', 'identity.membership', 'identity.apiToken', 'identity.role'],
+    visibility: 'internal',
+    destructive: true,
+    filePath: 'src/identity/tools/agentToken.ts', concurrency: 'on-demand', permissions: [],
+    print: (o) => `${o.email}: a token issued (${o.revoked} revoked)`,
+});
+
+export type AgentTokenInput = z.infer<typeof agentTokenInputSchema>;
+export type AgentTokenOutput = z.infer<typeof agentTokenOutputSchema>;

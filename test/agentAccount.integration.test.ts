@@ -21,7 +21,7 @@ import '../src/identity/contracts/ticket.contract.js';
 import '../src/identity/contracts/apiToken.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 import '../src/identity/contracts/userToken.contract.js';
-import '../src/identity/contracts/agent.contract.js';
+import { agentTokenContract } from '../src/identity/contracts/agent.contract.js';
 import '../src/queue/contracts/queue.contract.js';
 import { agentEmail } from '../src/identity/tools/ensureAgent.js';
 
@@ -126,5 +126,27 @@ describe('agent accounts', () => {
     it('never takes over an address that is not its organization\'s agent', async () => {
         await broker.call('identity.user.create', { email: agentEmail(otherOrgId, 'leader'), displayName: 'Squatter', roles: [], provisional: false });
         await expect(broker.call('identity.agent.ensure', { organizationId: otherOrgId, name: 'leader' }, asOperator())).rejects.toThrow(/not .*agent account/);
+    });
+
+    it('a service asks a token for an agent account, never a person\'s: the earlier one stops working', async () => {
+        // As a service in the mesh asks, with no operator behind it (an order being set up).
+        const asService = { meta: { user: { id: 'builds', tenant_id: otherOrgId } } };
+        const agent = await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'dev' }, asOperator());
+
+        const first = await broker.call('identity.agent.token', { organizationId: orgId, name: 'dev', tokenName: 'dev-git' }, asService);
+        expect(first).toMatchObject({ userId: agent.userId, roles: ['agent'], revoked: 0 });
+        expect(await broker.call('identity.apiToken.validate', { token: first.token })).toMatchObject({ valid: true, userId: agent.userId, organizationId: orgId });
+
+        const second = await broker.call('identity.agent.token', { organizationId: orgId, name: 'dev', tokenName: 'dev-git' }, asService);
+        expect(second.revoked).toBe(1);
+        expect(await broker.call('identity.apiToken.validate', { token: first.token })).toMatchObject({ valid: false });
+
+        // An account at an agent's address that is a person's, or an agent never made: refused.
+        await expect(broker.call('identity.agent.token', { organizationId: otherOrgId, name: 'leader', tokenName: 'x' }, asService)).rejects.toThrow(/No agent/);
+        await expect(broker.call('identity.agent.token', { organizationId: orgId, name: 'ghost', tokenName: 'x' }, asService)).rejects.toThrow(/No agent/);
+    });
+
+    it('is internal: no api can expose it', () => {
+        expect(agentTokenContract.visibility).toBe('internal');
     });
 });
