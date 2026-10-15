@@ -144,8 +144,10 @@ export async function unloadAndEvictModule(ctx: IServiceContext, absolutePath: s
     let evicted = false;
     try {
         const resolved = require.resolve(absolutePath);
-        if (require.cache[resolved] !== undefined) {
+        const cached = require.cache[resolved];
+        if (cached !== undefined) {
             delete require.cache[resolved];
+            dropFromParent(cached);
             evicted = true;
         }
     } catch {
@@ -156,6 +158,27 @@ export async function unloadAndEvictModule(ctx: IServiceContext, absolutePath: s
 
     loadedParts.delete(key);
     return { domains: [...record.domains], contracts: record.contracts.length, evicted };
+}
+
+/**
+ * Node also lists every module in the `children` of the one that first required it -- here the
+ * module `createRequire` made for this file, which lives as long as the process. Deleting the
+ * cache entry alone left every unloaded build reachable from that list, so each redeploy kept the
+ * old one's whole bundle: the edge pod climbed ~50-70 Mi per import and was OOMKilled on
+ * one-host.ca (10-15). Proved apart: ten loads and unloads of a 20 MB part held 200 MB with the
+ * cache entry deleted, 20 MB with this too.
+ */
+function dropFromParent(cached: NodeJS.Module): void {
+    // `parent` is deprecated for reading who required a module, but it is the one link to the list.
+    const siblings = cached.parent?.children;
+    if (siblings === undefined) {
+        return;
+    }
+
+    const at = siblings.indexOf(cached);
+    if (at !== -1) {
+        siblings.splice(at, 1);
+    }
 }
 
 /** Whether this node currently has anything loaded from `absolutePath`. */

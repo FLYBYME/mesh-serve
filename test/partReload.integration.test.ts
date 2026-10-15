@@ -9,6 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -113,6 +114,22 @@ describe('reloading a part in place', () => {
         await ping();
 
         expect(heard).toEqual(['v2']);
+    });
+
+    it('lets go of the unloaded build: not cached, and not in its parent\'s children', async () => {
+        const v4 = writeBuild(dir, 'v4');
+        await broker.call('partreload.load', { modulePath: v4 });
+
+        const cache = createRequire(import.meta.url).cache;
+        const loaded = cache[v4];
+        const parent = loaded?.parent;
+        expect(loaded).toBeDefined();
+        expect(parent?.children).toContain(loaded);
+
+        await broker.call('partreload.unload', { modulePath: v4 });
+
+        expect(cache[v4]).toBeUndefined();
+        expect(parent?.children).not.toContain(loaded);
     });
 
     it('leaves nothing subscribed once the part is unloaded', async () => {
