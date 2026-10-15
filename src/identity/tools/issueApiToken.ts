@@ -3,7 +3,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { IssueInput, IssueOutput } from '../contracts/apiToken.contract.js';
 import { hashToken, issuedToken } from '../methods/hash.js';
-import { inOrganization, resolveEffectiveRoleKeys } from '../methods/roles.js';
+import { expandRoles, inOrganization, resolveEffectiveRoleKeys } from '../methods/roles.js';
 import { tokenOwner } from '../methods/tokenOwner.js';
 
 /**
@@ -37,8 +37,11 @@ export async function issueApiToken(
         }
     }
 
+    // Held with what they include: an owner holds admin and member too, and may want a token with
+    // less than all of it (a push token for a client's own repo, 10-15). Unexpanded, an owner was
+    // refused a member token -- a narrower one than the account they hold.
     const roles = input.roles ?? [];
-    const held = await resolveEffectiveRoleKeys(userId, input.organizationId, ctx);
+    const held = await expandRoles(await resolveEffectiveRoleKeys(userId, input.organizationId, ctx), ctx);
     const notHeld = roles.filter((role) => !held.has(role));
     if (notHeld.length > 0) {
         throw new MeshError({

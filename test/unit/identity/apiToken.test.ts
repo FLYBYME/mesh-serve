@@ -17,18 +17,31 @@ import { hashToken } from '../../../src/identity/methods/hash.js';
 const users: Record<string, { id: string; roles: string[] }> = {
     alice: { id: 'alice', roles: ['member'] },
     bob: { id: 'bob', roles: [] },
+    carol: { id: 'carol', roles: [] },
     op: { id: 'op', roles: ['operator'] },
 };
+
+/** The built-in organization roles' chain (builtinRoles.ts), and one custom role. */
+const ROLES = [
+    { key: 'owner', scope: 'organization', permissions: [], inherits: ['admin'] },
+    { key: 'admin', scope: 'organization', permissions: [], inherits: ['member'] },
+    { key: 'member', scope: 'organization', permissions: [], inherits: [] },
+    { key: 'org-dev', scope: 'organization', permissions: [], inherits: [] },
+];
 
 function context(callerId: string | undefined, extra: Record<string, (params: { query?: Record<string, unknown>; id?: string }) => unknown> = {}) {
     return createMockContext({
         meta: callerId === undefined ? {} : { user: { id: callerId } },
         handlers: {
             'identity.user.resolve': async ({ id }) => (id !== undefined ? users[id] : undefined),
-            'identity.membership.find_one': async ({ query }) =>
-                query?.userId === 'alice' && query?.organizationId === 'org-1' ? { id: 'm1', roleKey: 'org-dev' } : undefined,
-            'identity.role.find_one': async ({ query }) =>
-                query?.key === 'org-dev' ? { key: 'org-dev', scope: 'organization', permissions: [], inherits: [] } : undefined,
+            'identity.membership.find_one': async ({ query }) => {
+                if (query?.organizationId !== 'org-1') return undefined;
+                if (query.userId === 'alice') return { id: 'm1', roleKey: 'org-dev' };
+                if (query.userId === 'carol') return { id: 'm2', roleKey: 'owner' };
+                return undefined;
+            },
+            'identity.role.find_one': async ({ query }) => ROLES.find((r) => r.key === query?.key),
+            'identity.role.find': async () => ROLES,
             'identity.apiToken.create': async () => ({ id: 'new-token' }),
             ...extra,
         },
@@ -91,6 +104,19 @@ describe('identity.apiToken.issue', () => {
         const { ctx } = context('alice');
         const result = await issueApiToken({ name: 'ci', organizationId: 'org-1', roles: ['member', 'org-dev'] }, ctx);
         expect(result.roles).toEqual(['member', 'org-dev']);
+    });
+
+    it('lets an owner mint a narrower token: owner includes member (10-15, a client\'s push token)', async () => {
+        const { ctx } = context('carol');
+        const result = await issueApiToken({ name: 'push', organizationId: 'org-1', roles: ['member'] }, ctx);
+        expect(result.roles).toEqual(['member']);
+    });
+
+    it('still refuses what no held role includes', async () => {
+        const { ctx } = context('carol');
+        const err = await rejection(issueApiToken({ name: 'escalate', organizationId: 'org-1', roles: ['member', 'operator'] }, ctx));
+        expect(err.status).toBe(403);
+        expect(err.message).toContain('operator');
     });
 
     it("refuses an organization scope the account isn't a member of", async () => {
