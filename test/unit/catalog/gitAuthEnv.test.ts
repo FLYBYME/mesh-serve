@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { gitAuthEnv } from '../../../src/catalog/methods/build.js';
@@ -8,11 +9,12 @@ const run = promisify(execFile);
 /**
  * What git itself reads from a configuration given through the environment -- and only that: the
  * machine's own global and system config are left out (a laptop with the same insteadOf rewrites
- * in ~/.gitconfig answered each twice).
+ * in ~/.gitconfig answered each twice), and so is this checkout's: run outside it (CI's checkout
+ * keeps its own GitHub header in .git/config, and answered it too, 10-14).
  */
 async function gitConfig(env: Record<string, string>, ...args: string[]): Promise<string> {
     const isolated = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    const { stdout } = await run('git', ['config', ...args], { env: { ...process.env, ...isolated, ...env } });
+    const { stdout } = await run('git', ['config', ...args], { cwd: tmpdir(), env: { ...process.env, ...isolated, ...env } });
 
     return stdout.trim();
 }
