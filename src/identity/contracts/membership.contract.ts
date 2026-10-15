@@ -83,3 +83,39 @@ export const membershipAssignContract = defineContract({
 
 export type MembershipAssignInput = z.infer<typeof membershipAssignInputSchema>;
 export type MembershipAssignOutput = z.infer<typeof membershipAssignOutputSchema>;
+
+export const membershipInviteInputSchema = z.object({
+    email: z.string().trim().email('Enter an email address.').describe('Their email address'),
+    displayName: z.string().trim().min(1).max(80).optional().describe('How they are shown, until they say otherwise'),
+    roleKey: z.enum(['member', 'admin']).default('member').describe('Their role: member, or admin (manages the team). Never owner'),
+}).describe('Invite a teammate into your organization');
+
+export const membershipInviteOutputSchema = z.object({
+    userId: z.string(),
+    organizationId: z.string(),
+    roleKey: z.string(),
+    invited: z.boolean().describe('A new account, sent a link to set its password; false: an existing account, added'),
+});
+
+/**
+ * identity.membership.invite -- a teammate into the caller's own organization (owner, 10-14: phase 1's
+ * team). An existing account is added; a new address gets a provisional account and a link to set
+ * its first password (three days). Admins and owners only, and never as owner: an organization's
+ * owner changes only by an operator's identity.membership.assign.
+ */
+export const membershipInviteContract = defineContract({
+    domain: 'identity.membership',
+    action: 'invite',
+    description: 'Invite a teammate into your organization as a member or admin: an existing account is added, a new address is sent a link to set its password.',
+    inputSchema: membershipInviteInputSchema,
+    outputSchema: membershipInviteOutputSchema,
+    rest: { method: 'POST', path: '/identity/memberships/invite' },
+    dependencies: ['identity.membership', 'identity.organization', 'identity.user', 'identity.role', 'identity.userToken'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/inviteMember.ts', concurrency: 'on-demand', permissions: ['admin'],
+    print: (o) => `${o.userId} in ${o.organizationId} as ${o.roleKey}${o.invited ? ' (invited: a link to set a password was sent)' : ' (added)'}`,
+});
+
+export type MembershipInviteInput = z.infer<typeof membershipInviteInputSchema>;
+export type MembershipInviteOutput = z.infer<typeof membershipInviteOutputSchema>;

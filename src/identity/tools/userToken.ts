@@ -23,7 +23,7 @@ const MAIL_CONTRACT = process.env.IDENTITY_MAIL_CONTRACT ?? 'email.send_template
 /** The organization whose mail sends it; default: the platform's own (slug "platform"). */
 const MAIL_TENANT = process.env.IDENTITY_MAIL_TENANT;
 
-const TEMPLATE: Record<UserTokenPurpose, string> = { reset: 'reset_password', verify: 'verify_email' };
+const TEMPLATE: Record<UserTokenPurpose, string> = { reset: 'reset_password', verify: 'verify_email', invite: 'team_invite' };
 
 async function mailTenant(ctx: IServiceContext): Promise<string | undefined> {
     if (MAIL_TENANT !== undefined && MAIL_TENANT !== '') return MAIL_TENANT;
@@ -31,8 +31,16 @@ async function mailTenant(ctx: IServiceContext): Promise<string | undefined> {
     return platform?.id;
 }
 
-/** Makes a link for the account and queues the email carrying it. Only the token's hash is kept. */
-async function issue(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, purpose: UserTokenPurpose): Promise<boolean> {
+/**
+ * Makes a link for the account and queues the email carrying it. Only the token's hash is kept.
+ * `vars` are more of what the template says (an invitation names the organization and who asked).
+ */
+export async function issue(
+    ctx: IServiceContext,
+    user: { id: string; email: string; displayName: string },
+    purpose: UserTokenPurpose,
+    vars: Record<string, string> = {},
+): Promise<boolean> {
     const token = newToken();
     const now = new Date();
     await ctx.db('identity.userToken').create({
@@ -52,7 +60,7 @@ async function issue(ctx: IServiceContext, user: { id: string; email: string; di
     await ctx.call('serve.queue.create', {
         tenantId,
         contract: MAIL_CONTRACT,
-        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { name: user.displayName, url: tokenLink(LINK_BASE, purpose, token) } },
+        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { ...vars, name: user.displayName, url: tokenLink(LINK_BASE, purpose, token) } },
         maxAttempts: 5,
         timeoutMs: 30_000,
     }, { meta: { user: { id: '', tenant_id: tenantId } } });
@@ -109,9 +117,9 @@ export async function reset_request(input: ResetRequestInput, ctx: IServiceConte
 }
 
 /** The token's row, if it is usable for this purpose now; otherwise one message for every reason. */
-async function usable(ctx: IServiceContext, token: string, purpose: UserTokenPurpose) {
+async function usable(ctx: IServiceContext, token: string, purposes: UserTokenPurpose | readonly UserTokenPurpose[]) {
     const row = await ctx.db('identity.userToken').findOne({ query: { tokenHash: hashToken(token) } });
-    const problem = tokenProblem(row, purpose, new Date());
+    const problem = tokenProblem(row, purposes, new Date());
     if (row === undefined || problem !== undefined) {
         throw new MeshError({ message: problem ?? 'That link is not valid any more.', code: 'INVALID_TOKEN', status: 400 });
     }
@@ -119,7 +127,8 @@ async function usable(ctx: IServiceContext, token: string, purpose: UserTokenPur
 }
 
 export async function reset_complete(input: ResetCompleteInput, ctx: IServiceContext): Promise<ResetCompleteOutput> {
-    const row = await usable(ctx, input.token, 'reset');
+    // An invitation's link sets a teammate's first password the same way.
+    const row = await usable(ctx, input.token, ['reset', 'invite']);
     // Used first: a second click on the same link must fail even if this one fails later.
     await ctx.db('identity.userToken').update({ id: row.id, usedAt: new Date() });
     const user = await ctx.db('identity.user').findOne({ query: { id: row.userId } });

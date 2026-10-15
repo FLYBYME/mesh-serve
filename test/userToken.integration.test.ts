@@ -192,6 +192,28 @@ describe('password reset and email verification', () => {
         expect(await roster()).toEqual(['ada:member', 'op:owner']);
     });
 
+    it('an organization\'s admin invites a teammate: a new address sets its first password by the link; an existing account is added', async () => {
+        const grace = (await broker.call('identity.user.register', { email: 'grace@team.invalid', password: 'grace-password-1234', displayName: 'Grace' })).userId;
+        const graceOrg = (await broker.call('identity.organization.find', { query: { ownerId: grace } }))[0];
+        const asGrace = { meta: { user: { id: grace, tenant_id: graceOrg?.id ?? '' } } };
+
+        const lin = await broker.call('identity.membership.invite', { email: 'Lin@Team.invalid', roleKey: 'member' }, asGrace);
+        expect(lin).toMatchObject({ organizationId: graceOrg?.id, roleKey: 'member', invited: true });
+
+        // The link is an invitation, naming the organization; it sets the password and claims the account.
+        const link = (await linksFor('lin@team.invalid'))[0];
+        expect(link?.template).toBe('team_invite');
+        await broker.call('identity.user.reset_complete', { token: link?.token ?? '', password: 'lin-password-1234' });
+        const signedIn = await broker.call('identity.ticket.issue', { email: 'lin@team.invalid', password: 'lin-password-1234' });
+        expect(signedIn).toMatchObject({ userId: lin.userId });
+
+        // An existing account is added, with no link; asked twice, refused (the role is member or
+        // admin by its schema: never owner).
+        const ada = await broker.call('identity.membership.invite', { email: 'ada@reset.invalid', roleKey: 'admin' }, asGrace);
+        expect(ada).toMatchObject({ userId, roleKey: 'admin', invited: false });
+        await expect(broker.call('identity.membership.invite', { email: 'ada@reset.invalid' }, asGrace)).rejects.toMatchObject({ status: 409 });
+    });
+
     it('stops sending after a few requests an hour, still answering the same', async () => {
         for (let i = 0; i < 5; i++) await broker.call('identity.user.reset_request', { email: 'ada@reset.invalid' });
         const resets = (await linksFor('ada@reset.invalid')).filter((l) => l.template === 'reset_password');
