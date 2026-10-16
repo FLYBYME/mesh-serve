@@ -131,7 +131,9 @@ export class ApiGateway {
 
     // Reused answers (recent.ts says why). What each costs:
     /** Which api a host is, and its exposed rows: an exposure change applies within 10 s. */
-    private readonly targets = new Recent<Target>(10_000);
+    // Stale while it reloads: no request waits on the rebuild (owner's timing, 10-16: one in 24 paid it).
+    // `clear()` on an exposure or api change still drops it, so a change is seen on the next request.
+    private readonly targets = new Recent<Target>(10_000, 5000, Date.now, true);
     /** Who a bearer token is: a ticket revoked elsewhere still works for up to 15 s. A sign-out through this gateway is forgotten at once. */
     private readonly callers = new Recent<Caller | undefined>(15_000);
     /** Whether a user holds a role in a tenant: a revoked role still works for up to 15 s. */
