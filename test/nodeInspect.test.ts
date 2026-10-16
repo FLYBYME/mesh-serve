@@ -2,7 +2,7 @@ import inspector from 'node:inspector';
 import os from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IServiceContext } from '@flybyme/mesh';
-import { INSPECT_PORT, inspectHere, reachCommands } from '../src/catalog/tools/nodeInspect.js';
+import { INSPECT_PORT, inspectHere, podOf, reachCommands } from '../src/catalog/tools/nodeInspect.js';
 import { createMockContext } from './unit/helpers/mockContext.js';
 
 function ctxOf(): IServiceContext {
@@ -47,6 +47,13 @@ describe('a node\'s inspector (owner, 10-16: a debug websocket for profiling)', 
 
         vi.advanceTimersByTime(2 * 60_000 + 1);
         expect(inspector.url()).toBeUndefined();
+    });
+
+    it('knows it is in a pod by Kubernetes\' own variable, its namespace by POD_NAMESPACE (no service account mounted, 10-16)', () => {
+        expect(podOf({}, 'laptop')).toBeUndefined();
+        expect(podOf({ KUBERNETES_SERVICE_HOST: '10.17.0.1', POD_NAMESPACE: 'surfdns-system' }, 'mesh-edge1-edge-node-0'))
+            .toEqual({ name: 'mesh-edge1-edge-node-0', namespace: 'surfdns-system' });
+        expect(podOf({ KUBERNETES_SERVICE_HOST: '10.17.0.1' }, 'p')?.name).toBe('p');
     });
 
     it('in a pod, the tunnel goes through kubectl port-forward to that pod', () => {

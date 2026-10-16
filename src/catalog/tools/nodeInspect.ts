@@ -17,13 +17,24 @@ const NAMESPACE_FILE = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let closesAt: Date | undefined;
 
-/** The pod this node runs in -- its hostname is the pod's name, its namespace the service account's -- or undefined on a host. */
-function podOf(): { name: string; namespace: string } | undefined {
-    try {
-        return { name: os.hostname(), namespace: readFileSync(NAMESPACE_FILE, 'utf8').trim() };
-    } catch {
-        return undefined;
+/**
+ * The pod this node runs in, or undefined on a host. Kubernetes gives every pod
+ * KUBERNETES_SERVICE_HOST, and its hostname is the pod's name. Its namespace: POD_NAMESPACE (compute
+ * sets it), else the service account's file -- compute's pods mount none (edge1-edge, 10-16).
+ */
+export function podOf(env: NodeJS.ProcessEnv = process.env, hostname: string = os.hostname()): { name: string; namespace: string } | undefined {
+    if (env.KUBERNETES_SERVICE_HOST === undefined) return undefined;
+
+    let namespace = env.POD_NAMESPACE;
+    if (namespace === undefined) {
+        try {
+            namespace = readFileSync(NAMESPACE_FILE, 'utf8').trim();
+        } catch {
+            namespace = '<its namespace>';
+        }
     }
+
+    return { name: hostname, namespace };
 }
 
 /** The commands that reach it from a laptop: ssh to the machine and, in a pod, port-forward into it. */
