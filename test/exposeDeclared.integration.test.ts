@@ -118,6 +118,26 @@ describe('the platform api exposes what a contract gates, without a row', () => 
         expect(await get(PLATFORM, '/api/nodes')).toBe(401);
     });
 
+    it('routes a call without making any contract\'s declaration again (owner\'s profile, 10-16: ~740 per request)', async () => {
+        // Warm: the target, its route table and its descriptor are made.
+        expect(await get(PLATFORM, '/api/nodes', 'operator')).toBe(200);
+
+        const original = broker.contractDeclaration.bind(broker);
+        let asked = 0;
+        broker.contractDeclaration = (key) => {
+            asked++;
+            return original(key);
+        };
+        try {
+            for (let i = 0; i < 20; i++) expect(await get(PLATFORM, '/api/nodes', 'operator')).toBe(200);
+        } finally {
+            broker.contractDeclaration = original;
+        }
+
+        // One per call is mesh's own callNamed checking the contract it runs (one schema, not ~740).
+        expect(asked).toBeLessThanOrEqual(20);
+    });
+
     it('describes it, with the contract\'s gate', async () => {
         const res = await fetch(`${PLATFORM}/api/_describe`);
         const described = await res.json() as { calls: { key: string; gate: string }[] };

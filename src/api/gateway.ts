@@ -147,6 +147,11 @@ export class ApiGateway {
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
     /** The same, by what it is built from: a target looked up again, nothing changed, reuses it. */
     private readonly descriptorsByContent = new Map<string, ReturnType<typeof buildDescriptor>>();
+    /** Rows an exposeDeclared api adds (declaredRows), by what they are read from. */
+    private readonly declaredRowsByContent = new Map<string, ExposeRow[]>();
+    /** Each target's callable rows with their declarations (routable), kept the same way. */
+    private readonly routeTables = new WeakMap<Target, ReadonlyMap<string, readonly { row: ExposeRow; contract: ContractDeclaration }[]>>();
+    private readonly routeTablesByContent = new Map<string, ReadonlyMap<string, readonly { row: ExposeRow; contract: ContractDeclaration }[]>>();
     private readonly unsubscribes: (() => void)[] = [];
 
     /**
@@ -381,6 +386,24 @@ export class ApiGateway {
      * the site downloaded every operator call's types).
      */
     private declaredRows(apiId: string, stored: readonly ExposeRow[], roles?: readonly string[]): ExposeRow[] {
+        // The same answer while nothing it reads changed: every contract's declaration made from its
+        // zod, ~1500 of them, every 10 s otherwise (owner's profile, 10-16).
+        const key = descriptorKey(`${apiId}\n${JSON.stringify(roles ?? null)}`, stored, this.broker.registry.getNodes());
+        const kept = this.declaredRowsByContent.get(key);
+        if (kept !== undefined) return kept;
+
+        const rows = this.declaredRowsNow(apiId, stored, roles);
+        this.declaredRowsByContent.set(key, rows);
+        while (this.declaredRowsByContent.size > 16) {
+            const oldest = this.declaredRowsByContent.keys().next().value;
+            if (oldest === undefined) break;
+            this.declaredRowsByContent.delete(oldest);
+        }
+
+        return rows;
+    }
+
+    private declaredRowsNow(apiId: string, stored: readonly ExposeRow[], roles?: readonly string[]): ExposeRow[] {
         const named = new Set(stored.filter((row) => row.kind !== 'event').map((row) => row.contract));
         const keys = new Set(this.broker.registry.getNodes().flatMap((node) => node.services.flatMap((service) => Object.keys(service.tools ?? {}))));
         const allowed = (required: readonly string[]): boolean => roles === undefined || required.every((role) => roles.includes(role));
@@ -607,7 +630,7 @@ export class ApiGateway {
      * before matchPath compares them, or every generated client's calls would 404 while only the
      * hardcoded "/api/_describe" special case worked.
      */
-    private findRoute(rows: readonly ExposeRow[], req: http.IncomingMessage): Route | undefined {
+    private findRoute(target: Target, req: http.IncomingMessage): Route | undefined {
         const method = (req.method ?? 'GET').toUpperCase();
         const fullPath = (req.url ?? '/').split('?')[0] ?? '/';
         if (!fullPath.startsWith(API_BASE)) return undefined;
@@ -616,26 +639,58 @@ export class ApiGateway {
         // The most specific match, not the first: /repos/one must reach find_one even when the
         // row for get (/repos/:id) was added earlier.
         let best: Route | undefined;
-        for (const row of rows) {
-            if (row.kind === 'event') continue; // Streamed over /events, never called.
-            // This node's definition, or the one the node running it advertises: routing needs the
-            // declaration (method, path, who may call), not the implementation.
-            const contract = this.broker.contractDeclaration(row.contract);
-            if (contract === undefined) {
-                // Neither defined here nor advertised by any available peer. Skipping silently turns
-                // that into a bare 404 that looks identical to a wrong URL, so say so.
-                this.broker.logger.warn(`serve.api: "${row.contract}" is exposed on ${row.apiId} but no node declares it, so nothing can route to it.`);
-                continue;
-            }
-            if (contract.visibility !== 'public') continue;
-            if (contract.rest.method !== method) continue;
-
+        for (const { row, contract } of this.routable(target).get(method) ?? []) {
             const params = matchPath(contract.rest.path, urlPath);
             if (params !== undefined && (best === undefined || specificity(contract.rest.path) > specificity(best.contract.rest.path))) {
                 best = { row, contract, params };
             }
         }
         return best;
+    }
+
+    /**
+     * A target's callable rows with their declarations, by method: made once per target and reused
+     * while nothing it is built from changes (descriptorKey), as the descriptor is.
+     *
+     * Every request used to ask every row's declaration again to find its route -- a JSON Schema
+     * made from each contract's zod, ~740 of them, per request: in the owner's profile of edge1-edge
+     * (10-16) findRoute held the node 8.3 s of 67, and the garbage collector 8.5 s more after it.
+     */
+    private routable(target: Target): ReadonlyMap<string, readonly { row: ExposeRow; contract: ContractDeclaration }[]> {
+        const kept = this.routeTables.get(target);
+        if (kept !== undefined) return kept;
+
+        const key = descriptorKey(target.host, target.rows, this.broker.registry.getNodes());
+        let table = this.routeTablesByContent.get(key);
+        if (table === undefined) {
+            const byMethod = new Map<string, { row: ExposeRow; contract: ContractDeclaration }[]>();
+            for (const row of target.rows) {
+                if (row.kind === 'event') continue; // Streamed over /events, never called.
+                // This node's definition, or the one the node running it advertises: routing needs the
+                // declaration (method, path, who may call), not the implementation.
+                const contract = this.broker.contractDeclaration(row.contract);
+                if (contract === undefined) {
+                    // Neither defined here nor advertised by any available peer. Skipping silently turns
+                    // that into a bare 404 that looks identical to a wrong URL, so say so.
+                    this.broker.logger.warn(`serve.api: "${row.contract}" is exposed on ${row.apiId} but no node declares it, so nothing can route to it.`);
+                    continue;
+                }
+                if (contract.visibility !== 'public') continue;
+                const list = byMethod.get(contract.rest.method) ?? [];
+                list.push({ row, contract });
+                byMethod.set(contract.rest.method, list);
+            }
+            table = byMethod;
+            this.routeTablesByContent.set(key, table);
+            while (this.routeTablesByContent.size > 16) {
+                const oldest = this.routeTablesByContent.keys().next().value;
+                if (oldest === undefined) break;
+                this.routeTablesByContent.delete(oldest);
+            }
+        }
+        this.routeTables.set(target, table);
+
+        return table;
     }
 
     /**
@@ -975,7 +1030,7 @@ export class ApiGateway {
             return this.handleEvents(target, req, res);
         }
 
-        const route = this.findRoute(target.rows, req);
+        const route = this.findRoute(target, req);
         if (route === undefined) {
             res.statusCode = 404;
             res.setHeader('Content-Type', 'application/json');
