@@ -201,6 +201,45 @@ export const nodeVersionOutputSchema = z.object({
 const nodeOnly = z.object({ nodeID: z.string().min(1).describe('Which node (see serve.node.find)') });
 const releaseVersion = z.string().regex(/^v\d{1,3}\.\d{1,3}\.\d{1,4}$/).describe('A mesh-serve release, e.g. v0.8.17');
 
+const inspectChange = z.object({
+    minutes: z.number().int().min(1).max(60).default(15).describe('How long it stays open before it closes by itself'),
+    close: z.boolean().default(false).describe('Close it now instead'),
+});
+export const nodeInspectOutputSchema = z.object({
+    nodeID: z.string(),
+    open: z.boolean(),
+    url: z.string().optional().describe('The inspector\'s websocket, on the node\'s own localhost'),
+    closesAt: z.string().optional().describe('When it closes by itself (ISO)'),
+    reach: z.string().optional().describe('How to reach it from a laptop: a tunnel, never a public port'),
+}).describe('A node\'s inspector: open, where, until when');
+
+/** Answered by the node itself -- serve.node.inspect asks it by nodeID. */
+export const nodeInspectHereContract = defineContract({
+    domain: 'serve.node', action: 'inspectHere',
+    description: 'Open (or close) this node\'s Node.js inspector on its own localhost, for a while.',
+    inputSchema: inspectChange, outputSchema: nodeInspectOutputSchema,
+    rest: { method: 'POST', path: '/nodes/inspect/here' },
+    visibility: 'internal', destructive: true, filePath: 'src/catalog/tools/nodeInspect.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => (o.open ? `${o.nodeID}: inspector open until ${o.closesAt ?? '?'}\n${o.reach ?? ''}` : `${o.nodeID}: inspector closed`),
+});
+
+/**
+ * A debugger and profiler on a running node (owner, 10-16: "the option to open a debug websocket to
+ * a node process ... some profiling and digging around"): Node's inspector, opened on the node's
+ * own 127.0.0.1 only, closed by itself after `minutes`. Whoever reaches an inspector runs any code
+ * in the process, so it is never on a fleet or public address: it is reached through ssh and, for a
+ * pod, kubectl port-forward -- `reach` says the commands. Then chrome://inspect, or any DevTools.
+ */
+export const nodeInspectContract = defineContract({
+    domain: 'serve.node', action: 'inspect',
+    description: 'Open (or close) a node\'s Node.js inspector on its localhost for a while, and say how to reach it through a tunnel.',
+    inputSchema: inspectChange.extend({ nodeID: z.string().min(1).describe('Which node (see serve.node.find)') }), outputSchema: nodeInspectOutputSchema,
+    rest: { method: 'POST', path: '/nodes/inspect' },
+    visibility: 'public', destructive: true, filePath: 'src/catalog/tools/nodeInspect.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => (o.open ? `${o.nodeID}: inspector open until ${o.closesAt ?? '?'}\n${o.reach ?? ''}` : `${o.nodeID}: inspector closed`),
+    timeout: 15_000,
+});
+
 /** Answered by the node itself -- serve.node.version/upgrade ask it by nodeID. */
 export const nodeVersionHereContract = defineContract({
     domain: 'serve.node', action: 'versionHere',
