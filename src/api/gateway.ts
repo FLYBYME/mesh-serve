@@ -3,6 +3,7 @@ import http from 'node:http';
 import { ContextStack, eventPermissions, isMeshError, knownEvents, MeshError } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
+import { behindProxy } from './behindProxy.js';
 import type { activitySchema } from './schema/activity.js';
 import './contracts/activity.contract.js';
 
@@ -274,6 +275,8 @@ export class ApiGateway {
         for (const name of ['serve.expose', 'serve.api'].flatMap((d) => [`${d}.created`, `${d}.updated`, `${d}.deleted`])) {
             this.unsubscribes.push(this.hub.subscribe(name, () => this.targets.clear()));
         }
+
+        behindProxy(this.server);
 
         await new Promise<void>((resolve, reject) => {
             this.server?.listen(SERVER_PORT, SERVER_HOST, () => resolve());

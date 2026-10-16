@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { behindProxy } from '../api/behindProxy.js';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream';
 import crypto from 'node:crypto';
@@ -202,6 +203,7 @@ export class CdnGateway {
         this.server.on('error', (err) => {
             this.broker?.logger.error('Server error', err);
         });
+        behindProxy(this.server);
 
         await new Promise<void>((resolve, reject) => {
             this.server?.listen(SERVER_PORT, SERVER_HOST, () => {
