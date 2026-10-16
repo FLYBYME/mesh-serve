@@ -4,6 +4,7 @@ import { ContextStack, eventPermissions, isMeshError, knownEvents, MeshError } f
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import { behindProxy } from './behindProxy.js';
+import { descriptorKey } from './methods/descriptorKey.js';
 import type { activitySchema } from './schema/activity.js';
 import './contracts/activity.contract.js';
 
@@ -144,6 +145,8 @@ export class ApiGateway {
     private readonly formLimits = new FormLimiter();
     /** Each target's descriptor, built once rather than on every request (it hashes every schema). */
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
+    /** The same, by what it is built from: a target looked up again, nothing changed, reuses it. */
+    private readonly descriptorsByContent = new Map<string, ReturnType<typeof buildDescriptor>>();
     private readonly unsubscribes: (() => void)[] = [];
 
     /**
@@ -407,10 +410,23 @@ export class ApiGateway {
 
     private describe(target: Target): ReturnType<typeof buildDescriptor> {
         let descriptor = this.descriptors.get(target);
+        if (descriptor !== undefined) return descriptor;
+
+        // A target looked up again with nothing changed gets the descriptor already built (descriptorKey).
+        const key = descriptorKey(target.host, target.rows, this.broker.registry.getNodes());
+        descriptor = this.descriptorsByContent.get(key);
         if (descriptor === undefined) {
-            descriptor = buildDescriptor(target.host, target.rows, (key) => this.broker.contractDeclaration(key));
-            this.descriptors.set(target, descriptor);
+            descriptor = buildDescriptor(target.host, target.rows, (name) => this.broker.contractDeclaration(name));
+            this.descriptorsByContent.set(key, descriptor);
+            // A few kept: one per api host, and the one before a change.
+            while (this.descriptorsByContent.size > 16) {
+                const oldest = this.descriptorsByContent.keys().next().value;
+                if (oldest === undefined) break;
+                this.descriptorsByContent.delete(oldest);
+            }
         }
+        this.descriptors.set(target, descriptor);
+
         return descriptor;
     }
 

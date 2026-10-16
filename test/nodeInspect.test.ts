@@ -1,4 +1,5 @@
 import inspector from 'node:inspector';
+import net from 'node:net';
 import os from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IServiceContext } from '@flybyme/mesh';
@@ -8,6 +9,16 @@ import { createMockContext } from './unit/helpers/mockContext.js';
 function ctxOf(): IServiceContext {
     return createMockContext().ctx;
 }
+
+/** Whether this machine's 9229 is free: an inspector tunnel open on it (as the owner's was, 10-16) is not a failure of the code. */
+async function portFree(): Promise<boolean> {
+    return new Promise((resolve) => {
+        const probe = net.createServer();
+        probe.once('error', () => resolve(false));
+        probe.listen(INSPECT_PORT, '127.0.0.1', () => probe.close(() => resolve(true)));
+    });
+}
+const free = await portFree();
 
 /** An address of this machine other than loopback, if it has one. */
 function otherAddress(): string | undefined {
@@ -20,7 +31,7 @@ describe('a node\'s inspector (owner, 10-16: a debug websocket for profiling)', 
         await inspectHere({ minutes: 1, close: true }, ctxOf());
     });
 
-    it('opens on 127.0.0.1 only, says how to reach it through a tunnel, and closes when asked', async () => {
+    it.skipIf(!free)('opens on 127.0.0.1 only, says how to reach it through a tunnel, and closes when asked (skipped while 9229 is taken here)', async () => {
         const opened = await inspectHere({ minutes: 5, close: false }, ctxOf());
         expect(opened.open).toBe(true);
         expect(opened.url).toMatch(new RegExp(`^ws://127\\.0\\.0\\.1:${INSPECT_PORT}/`));
@@ -40,7 +51,7 @@ describe('a node\'s inspector (owner, 10-16: a debug websocket for profiling)', 
         expect(inspector.url()).toBeUndefined();
     });
 
-    it('closes by itself when its minutes are up', async () => {
+    it.skipIf(!free)('closes by itself when its minutes are up', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         await inspectHere({ minutes: 2, close: false }, ctxOf());
         expect(inspector.url()).toBeDefined();
