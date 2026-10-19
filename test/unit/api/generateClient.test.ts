@@ -2,7 +2,7 @@ import * as esbuild from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import type { ContractDeclaration } from '@flybyme/mesh';
 import { buildDescriptor } from '../../../src/api/methods/descriptor.js';
-import { gateLiteral, generateClient, renderClient } from '../../../src/api/methods/generateClient.js';
+import { gateLiteral, generateClient, inlineLocalRefs, renderClient } from '../../../src/api/methods/generateClient.js';
 import type { Expose } from '../../../src/api/contracts/expose.contract.js';
 
 /**
@@ -129,5 +129,63 @@ describe('the generated client', () => {
 
         expect(text).toContain('domainFindInputSchema');
         expect(text).not.toContain('outputOnlyMarker');
+    });
+});
+
+/**
+ * zod-to-json-schema writes a reused zod schema as a `$ref` to its first use; rendered as is, it
+ * became `z.any()` (builds' volumes, 10-18).
+ */
+describe('a local $ref', () => {
+    const sizeGb = { type: 'integer', minimum: 1, maximum: 200 };
+    const schema = {
+        type: 'object',
+        properties: {
+            disk: { type: 'object', properties: { sizeGb } },
+            volumes: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: { sizeGb: { $ref: '#/properties/disk/properties/sizeGb', description: 'grows' } },
+                },
+            },
+        },
+    };
+
+    it('is replaced by what it points at, keeping its own keywords', () => {
+        const inlined = inlineLocalRefs(schema);
+
+        expect(inlined).toEqual({
+            type: 'object',
+            properties: {
+                disk: { type: 'object', properties: { sizeGb } },
+                volumes: {
+                    type: 'array',
+                    items: { type: 'object', properties: { sizeGb: { ...sizeGb, description: 'grows' } } },
+                },
+            },
+        });
+    });
+
+    it('renders a real type in the client, not any', () => {
+        const volumeSet: ContractDeclaration = { ...declaration, key: 'environment.volume_set', domain: 'environment', action: 'volume_set', output: schema };
+        const text = renderClient('api', buildDescriptor('api.test', [{ ...row, contract: 'environment.volume_set' }], () => volumeSet));
+
+        expect(text).not.toContain('z.any()');
+        expect(text).toContain('"sizeGb": z.number().int().gte(1).lte(200).describe("grows")');
+    });
+
+    it('stays a $ref where it would repeat forever', () => {
+        const cyclic = { type: 'object', properties: { a: { type: 'object', properties: { next: { $ref: '#/properties/a' } } } } };
+
+        expect(inlineLocalRefs(cyclic)).toEqual({
+            type: 'object',
+            properties: {
+                a: {
+                    type: 'object',
+                    properties: { next: { type: 'object', properties: { next: { $ref: '#/properties/a' } } } },
+                },
+            },
+        });
     });
 });

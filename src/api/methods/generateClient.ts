@@ -51,10 +51,57 @@ export function apiExportName(id: string): string {
  * them shipped -- the company site carried 1,400 schemas (about 1.5 MB) to use five (10-11).
  */
 function schemaDeclaration(schemaName: string, typeName: string, schema: Record<string, unknown>): string {
-    const expression = jsonSchemaToZod(schema);
+    const expression = jsonSchemaToZod(inlineLocalRefs(schema));
 
     return `export const ${schemaName} = /* @__PURE__ */ (() => ${expression})()\n`
         + `export type ${typeName} = z.infer<typeof ${schemaName}>\n`;
+}
+
+/** The value at a local JSON pointer (`#/properties/disk/properties/sizeGb`), or undefined. */
+function resolvePointer(root: unknown, ref: string): unknown {
+    if (!ref.startsWith('#/')) return undefined;
+
+    let node = root;
+    for (const raw of ref.slice(2).split('/')) {
+        const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (typeof node !== 'object' || node === null) return undefined;
+        node = Reflect.get(node, key);
+    }
+
+    return node;
+}
+
+/**
+ * The schema with every local `$ref` replaced by what it points at. zod-to-json-schema writes a
+ * zod schema used twice as a `$ref` to its first use (`EnvironmentDiskSchema.extend(...)` inside
+ * an array points at `disk`'s fields), and jsonSchemaToZod renders a `$ref` as `z.any()`: the
+ * console's volumes came out as `sizeGb: any` (10-18). A pointer seen again on its own path is a
+ * cycle and stays `$ref` (rendered `any`) rather than recursing forever.
+ */
+export function inlineLocalRefs(schema: Record<string, unknown>): Record<string, unknown> {
+    const walk = (node: unknown, seen: readonly string[]): unknown => {
+        if (Array.isArray(node)) return node.map((item) => walk(item, seen));
+        if (typeof node !== 'object' || node === null) return node;
+
+        const ref = Reflect.get(node, '$ref');
+        if (typeof ref === 'string' && !seen.includes(ref)) {
+            const target = resolvePointer(schema, ref);
+            if (target !== undefined) {
+                const { $ref: _ref, ...rest } = Object.fromEntries(Object.entries(node));
+                const resolved = walk(target, [...seen, ref]);
+                return typeof resolved === 'object' && resolved !== null && !Array.isArray(resolved)
+                    ? { ...resolved, ...rest }
+                    : resolved;
+            }
+        }
+
+        return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, walk(value, seen)]));
+    };
+
+    const result = walk(schema, []);
+    return typeof result === 'object' && result !== null && !Array.isArray(result)
+        ? Object.fromEntries(Object.entries(result))
+        : schema;
 }
 
 function isEmptyObjectSchema(schema: unknown): boolean {
