@@ -32,6 +32,7 @@ export const registerInputSchema = z.object({
     password: z.string().min(8).describe('At least eight characters'),
     displayName: z.string().trim().min(1).max(80).describe('The name shown for this account'),
     shownForMs: z.number().int().min(0).optional().describe('How long the form was on screen before it was sent: through the api, one sent within seconds is refused (api/methods/formLimit.ts)'),
+    website: z.string().max(200).optional().describe('The trap: a field the page hides from people; anything in it and the api refuses the form as a bot\'s (api/methods/formLimit.ts)'),
 }).describe('Create an account');
 
 export const registerOutputSchema = z.object({
@@ -157,6 +158,8 @@ export const listUsersOutputSchema = z.object({
         provisional: z.boolean().describe('True until the account\'s owner sets a password'),
         suspendedAt: z.coerce.date().optional().describe('When the account was suspended, if it is'),
         createdAt: z.coerce.date().optional().describe('When the account was made'),
+        emailVerified: z.boolean().describe('Whether the account proved it reads its address; one that never does, days on, is likely a bot\'s'),
+        signedUpFrom: z.object({ address: z.string(), agent: z.string() }).optional().describe('Where its sign-up came from (accounts made since 10-19)'),
         organizations: z.array(z.object({
             organizationId: z.string().describe('The organization\'s id'),
             name: z.string().describe('The organization\'s display name'),
@@ -177,7 +180,7 @@ export const userListContract = defineContract({
     dependencies: ['identity.membership', 'identity.organization'],
     visibility: 'public',
     filePath: 'src/identity/tools/listUsers.ts', concurrency: 'on-demand', permissions: ['operator'],
-    print: (o) => o.users.map((u) => `${u.email}  ${u.organizations.map((g) => `${g.name}:${g.roleKey}`).join(', ')}`).join('\n'),
+    print: (o) => o.users.map((u) => `${u.email}${u.emailVerified ? '' : ' (unconfirmed)'}  ${u.organizations.map((g) => `${g.name}:${g.roleKey}`).join(', ')}`).join('\n'),
 });
 
 export type ListUsersInput = z.infer<typeof userListContract.inputSchema>;

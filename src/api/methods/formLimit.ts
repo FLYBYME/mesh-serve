@@ -28,23 +28,31 @@ export const FORM_MIN_SHOWN_MS = 3000;
 export const FORM_MEASURE_REQUIRED = true;
 
 /**
- * Whether this call is one of the public forms sent too fast. Returns the input without
- * `shownForMs` -- the service is never handed the page's own measure (an older build of it would not
- * know the field).
+ * The trap field: a public form's page carries a `website` field no person sees (hidden, out of the
+ * tab order, autocomplete off). The bots that signed up on 10-18 ran the real page -- they passed
+ * `shownForMs` -- and a bot filling in a page fills in every field it finds. Anything in it: a bot.
+ */
+export const FORM_TRAP_FIELD = 'website';
+
+/**
+ * Whether this call is one of the public forms sent too fast, or with its trap field filled in.
+ * Returns the input without `shownForMs` or the trap -- the service is never handed either (an
+ * older build of it would not know the fields).
  */
 export function formTiming(
     contract: string,
     input: Readonly<Record<string, unknown>>,
     required: boolean = FORM_MEASURE_REQUIRED,
-): { tooFast: boolean; unmeasured: boolean; input: Record<string, unknown> } {
-    const { shownForMs, ...rest } = input;
-    if (FORM_LIMITS[contract] === undefined) return { tooFast: false, unmeasured: false, input: { ...input } };
+): { tooFast: boolean; unmeasured: boolean; trapped: boolean; input: Record<string, unknown> } {
+    const { shownForMs, [FORM_TRAP_FIELD]: trap, ...rest } = input;
+    if (FORM_LIMITS[contract] === undefined) return { tooFast: false, unmeasured: false, trapped: false, input: { ...input } };
 
-    if (shownForMs === undefined) return { tooFast: required, unmeasured: true, input: rest };
+    const trapped = trap !== undefined && trap !== null && trap !== '';
+    if (shownForMs === undefined) return { tooFast: required, unmeasured: true, trapped, input: rest };
 
     const tooFast = typeof shownForMs !== 'number' || !Number.isFinite(shownForMs) || shownForMs < FORM_MIN_SHOWN_MS;
 
-    return { tooFast, unmeasured: false, input: rest };
+    return { tooFast, unmeasured: false, trapped, input: rest };
 }
 
 export class FormLimiter {

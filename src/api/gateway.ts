@@ -1148,12 +1148,19 @@ export class ApiGateway {
             ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
             : organization;
         trace.organizationId = effectiveTenantId;
-        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone.
+        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone. Every
+        // call carries where it came from, so a service can record it (a sign-up's address and browser).
+        const agent = req.headers['user-agent'];
+        const client = {
+            address: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress),
+            agent: typeof agent === 'string' ? agent.slice(0, 300) : '',
+        };
         const meta = {
             user: {
                 id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId,
                 ...(caller?.mailbox !== undefined ? { mailAddressId: caller.mailbox.mailAddressId, mailAddress: caller.mailbox.address } : {}),
             },
+            client,
         };
 
         // Public forms (methods/formLimit.ts), before anything is done or mailed: one sent within
@@ -1161,10 +1168,15 @@ export class ApiGateway {
         if (timing.tooFast) {
             throw new MeshError({ message: 'That was sent very fast. Take a moment, then send it again.', code: 'TOO_FAST', status: 400 });
         }
-        if (timing.unmeasured) {
-            this.broker.logger.info(`[api] ${route.row.contract} from ${clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress)} without the form's shownForMs (allowed until the site sends it)`);
+        // Its trap field filled in: a bot. Recorded (security through knowledge); told nothing it can learn from.
+        if (timing.trapped) {
+            this.broker.logger.warn(`[api] ${route.row.contract} from ${client.address} (${client.agent}): its trap field was filled in -- refused as a bot`);
+            throw new MeshError({ message: 'That could not be sent. Reload the page, then try again.', code: 'REFUSED', status: 400 });
         }
-        if (!this.formLimits.allow(route.row.contract, clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress))) {
+        if (timing.unmeasured) {
+            this.broker.logger.info(`[api] ${route.row.contract} from ${client.address} without the form's shownForMs (allowed until the site sends it)`);
+        }
+        if (!this.formLimits.allow(route.row.contract, client.address)) {
             throw new MeshError({ message: 'Too many tries from your address. Try again in an hour.', code: 'RATE_LIMITED', status: 429 });
         }
 

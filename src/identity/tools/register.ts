@@ -15,11 +15,25 @@ export function organizationSlug(displayName: string): string {
     return `${base}-${randomBytes(3).toString('hex')}`;
 }
 
+/** Where a call came from, as the api gateway put it in its meta (api/gateway.ts); none for an internal call. */
+export function clientOf(ctx: IServiceContext): { address: string; agent: string } | undefined {
+    const client = ctx.meta?.client;
+    if (typeof client !== 'object' || client === null) return undefined;
+
+    const address = 'address' in client && typeof client.address === 'string' ? client.address : '';
+    const agent = 'agent' in client && typeof client.agent === 'string' ? client.agent : '';
+
+    return address === '' && agent === '' ? undefined : { address, agent };
+}
+
 export async function register(
     input: RegisterInput,
     ctx: IServiceContext
 ): Promise<RegisterOutput> {
     const passwordHash = await hashPassword(input.password);
+    // Where it came from, as the api saw it: bots signed up on 10-18 and nothing said from where.
+    const from = clientOf(ctx);
+
     // Lower case, so an address matches however it is typed later (methods/findByEmail.ts) and
     // "Ada@" and "ada@" can never be two accounts.
     const user = await ctx.db('identity.user').create({
@@ -27,6 +41,7 @@ export async function register(
         displayName: input.displayName,
         passwordHash,
         roles: [],
+        ...(from !== undefined ? { signedUpFrom: from } : {}),
     });
 
     // Every account starts with its own organization, owner of it (organization.contract.ts's
@@ -47,7 +62,7 @@ export async function register(
         throw new MeshError({ message: 'The account could not be set up. Nothing was kept: try again.', code: 'REGISTER_FAILED', status: 500 });
     }
 
-    ctx.logger.debug(`registered user "${input.email}"`, { id: user.id, email: input.email });
+    ctx.logger.info(`[identity] account ${user.id} signed up${from !== undefined ? ` from ${from.address} (${from.agent})` : ''}`);
 
     // A new account proves its address by clicking the link sent to it (identity.user.verify_complete).
     await sendFirstVerification(ctx, user);

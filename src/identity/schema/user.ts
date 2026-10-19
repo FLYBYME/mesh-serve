@@ -11,4 +11,8 @@ export const userSchema = z.object({
   suspendedAt: z.coerce.date().optional().describe('When the user was suspended'),
   suspendedReason: z.string().optional().describe('Reason for suspension'),
   emailVerifiedAt: z.coerce.date().optional().describe('When the account proved it reads its email address (identity.user.verify_complete)'),
+  signedUpFrom: z.object({
+    address: z.string(),
+    agent: z.string(),
+  }).optional().describe('Where the sign-up came from, as the api saw it: the client\'s address and browser (security through knowledge, 10-19)'),
 }).describe('A person or a machine that can hold a ticket; every action internal');

@@ -15,6 +15,7 @@ export const userTokenCrud = defineCrud('identity.userToken', userTokenSchema, {
 export const resetRequestInputSchema = z.object({
     email: z.string().trim().email().describe('The account\'s address (spaces around it are ignored)'),
     shownForMs: z.number().int().min(0).optional().describe('How long the form was on screen before it was sent: through the api, one sent within seconds is refused (api/methods/formLimit.ts)'),
+    website: z.string().max(200).optional().describe('The trap: a field the page hides from people; anything in it and the api refuses the form as a bot\'s (api/methods/formLimit.ts)'),
 }).describe('Ask for a link to set a new password');
 
 export const resetRequestOutputSchema = z.object({

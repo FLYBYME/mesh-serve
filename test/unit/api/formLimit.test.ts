@@ -33,18 +33,26 @@ describe('FormLimiter: public forms per client address', () => {
 
 describe('formTiming: a public form sent within seconds of being shown', () => {
     it('refuses a form sent under 3 s, or a measure that is not a number; takes the measure out', () => {
-        expect(formTiming('email.contact', { name: 'a', shownForMs: 800 })).toEqual({ tooFast: true, unmeasured: false, input: { name: 'a' } });
-        expect(formTiming('identity.user.register', { email: 'x@y.z', shownForMs: '9000' })).toEqual({ tooFast: true, unmeasured: false, input: { email: 'x@y.z' } });
-        expect(formTiming('identity.user.reset_request', { email: 'x@y.z', shownForMs: 12_000 })).toEqual({ tooFast: false, unmeasured: false, input: { email: 'x@y.z' } });
+        expect(formTiming('email.contact', { name: 'a', shownForMs: 800 })).toEqual({ tooFast: true, unmeasured: false, trapped: false, input: { name: 'a' } });
+        expect(formTiming('identity.user.register', { email: 'x@y.z', shownForMs: '9000' })).toEqual({ tooFast: true, unmeasured: false, trapped: false, input: { email: 'x@y.z' } });
+        expect(formTiming('identity.user.reset_request', { email: 'x@y.z', shownForMs: 12_000 })).toEqual({ tooFast: false, unmeasured: false, trapped: false, input: { email: 'x@y.z' } });
     });
 
     it('a form with no measure (a bot posting without the page): said, and refused once the measure is required', () => {
-        expect(formTiming('email.contact', { name: 'a' }, false)).toEqual({ tooFast: false, unmeasured: true, input: { name: 'a' } });
-        expect(formTiming('email.contact', { name: 'a' }, true)).toEqual({ tooFast: true, unmeasured: true, input: { name: 'a' } });
+        expect(formTiming('email.contact', { name: 'a' }, false)).toEqual({ tooFast: false, unmeasured: true, trapped: false, input: { name: 'a' } });
+        expect(formTiming('email.contact', { name: 'a' }, true)).toEqual({ tooFast: true, unmeasured: true, trapped: false, input: { name: 'a' } });
+    });
+
+    it('its hidden trap field filled in (a bot filling every field it finds): trapped, however slowly it was sent; the field taken out', () => {
+        expect(formTiming('identity.user.register', { email: 'x@y.z', shownForMs: 9000, website: 'http://spam.example' }))
+            .toEqual({ tooFast: false, unmeasured: false, trapped: true, input: { email: 'x@y.z' } });
+        // Empty, as a person's page sends it: not trapped.
+        expect(formTiming('identity.user.register', { email: 'x@y.z', shownForMs: 9000, website: '' }))
+            .toEqual({ tooFast: false, unmeasured: false, trapped: false, input: { email: 'x@y.z' } });
     });
 
     it('never looks at a call that is not a public form, and leaves its input as it is', () => {
-        expect(formTiming('dns.record_add', { name: 'www', shownForMs: 1 })).toEqual({ tooFast: false, unmeasured: false, input: { name: 'www', shownForMs: 1 } });
+        expect(formTiming('dns.record_add', { name: 'www', shownForMs: 1, website: 'x' })).toEqual({ tooFast: false, unmeasured: false, trapped: false, input: { name: 'www', shownForMs: 1, website: 'x' } });
     });
 });
 

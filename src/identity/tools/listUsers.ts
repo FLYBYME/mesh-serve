@@ -37,6 +37,8 @@ export async function list(
             provisional: u.provisional === true,
             ...(u.suspendedAt !== undefined ? { suspendedAt: u.suspendedAt } : {}),
             ...(u.createdAt !== undefined ? { createdAt: u.createdAt } : {}),
+            emailVerified: u.emailVerifiedAt !== undefined,
+            ...(u.signedUpFrom !== undefined ? { signedUpFrom: u.signedUpFrom } : {}),
             organizations: memberships
                 .filter((m) => m.userId === u.id)
                 .map((m) => ({ organizationId: m.organizationId, name: names.get(m.organizationId) ?? 'unknown', roleKey: m.roleKey })),

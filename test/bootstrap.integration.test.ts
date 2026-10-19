@@ -260,6 +260,32 @@ describe('a fresh install, booted for real', () => {
         expect(res.status).toBe(403);
     });
 
+    it('a sign-up with its hidden trap field filled in is refused; one made is recorded with where it came from, unconfirmed', async () => {
+        const trapped = await fetch(`${API_ORIGIN}/api/identity/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'bot@example.com', password: 'a-bot-password-12', displayName: 'qPHhViCefCufuLOsDn', shownForMs: 8000, website: 'http://spam.example' }),
+        });
+        expect(trapped.status).toBe(400);
+
+        const made = await fetch(`${API_ORIGIN}/api/identity/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'user-agent': 'TestBrowser/1.0' },
+            body: JSON.stringify({ email: 'grace@example.com', password: 'a-real-password-12', displayName: 'Grace', shownForMs: 8000, website: '' }),
+        });
+        expect(made.status).toBe(200);
+
+        await ensureExposed(API_ORIGIN, operatorToken, apiId, 'identity.user.list', 'operator');
+        const res = await fetch(`${API_ORIGIN}/api/identity/users`, { headers: { authorization: `Bearer ${operatorToken}` } });
+        expect(res.status).toBe(200);
+        const { users } = await json(res) as { users: { email: string; emailVerified: boolean; signedUpFrom?: { address: string; agent: string } }[] };
+        expect(users.find((u) => u.email === 'bot@example.com')).toBeUndefined();
+        const grace = users.find((u) => u.email === 'grace@example.com');
+        expect(grace?.emailVerified).toBe(false);
+        expect(grace?.signedUpFrom?.agent).toBe('TestBrowser/1.0');
+        expect(grace?.signedUpFrom?.address).not.toBe('');
+    });
+
     it('whoami reports real organization membership', async () => {
         const res = await fetch(`${API_ORIGIN}/api/identity/whoami`, {
             headers: { authorization: `Bearer ${operatorToken}` },
