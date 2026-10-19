@@ -236,4 +236,14 @@ describe('password reset and email verification', () => {
         // One from the test before, and as many more as the hourly limit allows across both purposes.
         expect(resets.length).toBeLessThanOrEqual(3);
     });
+
+    it('ten requests at once send no more than the limit (owner, 10-20: ten fast clicks sent ten)', async () => {
+        await broker.call('identity.user.register', { email: 'kit@reset.invalid', password: 'kit-password-1234', displayName: 'Kit' });
+
+        await Promise.all(Array.from({ length: 10 }, () => broker.call('identity.user.reset_request', { email: 'kit@reset.invalid' })));
+
+        // The sign-up's verification link counts too: the limit is per address, every purpose.
+        const links = await linksFor('kit@reset.invalid');
+        expect(links.length).toBe(3);
+    });
 });

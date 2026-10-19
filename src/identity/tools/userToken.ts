@@ -117,13 +117,27 @@ async function recentRequests(ctx: IServiceContext, email: string): Promise<Date
     return rows.map((r) => r.createdAt);
 }
 
+/**
+ * Counts the address's recent links and sends one, one request per address at a time. Unlocked, ten
+ * clicks at once each counted none yet sent and all ten sent (owner, 10-20: "if i click it 10 times
+ * fast it will send out 10 emails").
+ */
+async function issueWithinLimit(ctx: IServiceContext, user: Recipient, purpose: 'reset' | 'verify'): Promise<{ limited: boolean; sent: boolean }> {
+    const email = normalizeEmail(user.email);
+
+    return ctx.withLock(`identity.userToken:${email}`, async () => {
+        if (!mayRequest(await recentRequests(ctx, email), new Date())) return { limited: true, sent: false };
+
+        return { limited: false, sent: await issue(ctx, user, purpose) };
+    });
+}
+
 export async function reset_request(input: ResetRequestInput, ctx: IServiceContext): Promise<ResetRequestOutput> {
-    const email = normalizeEmail(input.email);
     // The answer is the same whatever happens below: nothing here may tell a stranger whether an
     // address has an account, or that it is being rate limited.
     const user = await findUserByEmail(ctx, input.email);
-    if (user !== undefined && user.suspendedAt === undefined && mayRequest(await recentRequests(ctx, email), new Date())) {
-        await issue(ctx, user, 'reset');
+    if (user !== undefined && user.suspendedAt === undefined) {
+        await issueWithinLimit(ctx, user, 'reset');
     }
     return { message: RESET_REQUESTED };
 }
@@ -176,10 +190,11 @@ export async function verify_request(_input: Record<string, never>, ctx: IServic
     const user = await ctx.db('identity.user').findOne({ query: { id: userId } });
     if (user === undefined) throw new MeshError({ message: 'No such account.', code: 'UNAUTHENTICATED', status: 401 });
     if (user.emailVerifiedAt !== undefined) return { sent: false, alreadyVerified: true };
-    if (!mayRequest(await recentRequests(ctx, normalizeEmail(user.email)), new Date())) {
+    const { limited, sent } = await issueWithinLimit(ctx, user, 'verify');
+    if (limited) {
         throw new MeshError({ message: 'A link was sent a few times already this hour. Check your inbox, or try again later.', code: 'RATE_LIMITED', status: 429 });
     }
-    return { sent: await issue(ctx, user, 'verify'), alreadyVerified: false };
+    return { sent, alreadyVerified: false };
 }
 
 export async function verify_complete(input: VerifyCompleteInput, ctx: IServiceContext): Promise<VerifyCompleteOutput> {
