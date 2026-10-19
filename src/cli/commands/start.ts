@@ -10,6 +10,7 @@ import {
 import { WSTransport, installNodeMetrics } from '@flybyme/mesh/node';
 
 import { BaseCommand } from '../core/BaseCommand.js';
+import { stopOnSignal } from '../core/stopOnSignal.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { meshFrameworkVersion, resolveMetricsPort, startMetricsServer } from '../core/metricsServer.js';
 import { runningVersion } from '../../catalog/methods/upgrade.js';
@@ -156,6 +157,7 @@ export class StartCommand extends BaseCommand {
         node.use(new BrokerModule());
 
         await node.start();
+        stopOnSignal(node, this.logger);
 
         // The one thing this command still knows about by name -- the catalog owns
         // serve.part.start/serve.corePart.load, the mechanism that loads everything else,
