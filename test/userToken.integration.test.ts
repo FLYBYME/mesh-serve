@@ -112,11 +112,14 @@ describe('password reset and email verification', () => {
     });
 
     it('verifies the address once; the same link never works again', async () => {
+        const asAda = { meta: { user: { id: userId, tenant_id: '' } } };
+        expect(await broker.call('identity.whoami', {}, asAda)).toMatchObject({ emailVerified: false });
         const [link] = await linksFor('ada@reset.invalid');
         const done = await broker.call('identity.user.verify_complete', { token: link?.token ?? '' });
         expect(done.email).toBe('ada@reset.invalid');
         const user = await broker.call('identity.user.get', { id: userId });
         expect(user.emailVerifiedAt).toBeInstanceOf(Date);
+        expect(await broker.call('identity.whoami', {}, asAda)).toMatchObject({ emailVerified: true });
         await expect(broker.call('identity.user.verify_complete', { token: link?.token ?? '' })).rejects.toMatchObject({ status: 400 });
         // Welcomed once, on the first verification -- by name, now that the address is proved.
         const welcomes = (await linksFor('ada@reset.invalid')).filter((l) => l.template === 'welcome');

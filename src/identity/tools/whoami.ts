@@ -47,6 +47,7 @@ export async function whoami(
         userId: user.id,
         email: user.email,
         displayName: user.displayName,
+        emailVerified: user.emailVerifiedAt !== undefined,
         roles: user.roles,
         organizations,
     };

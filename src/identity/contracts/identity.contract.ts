@@ -6,6 +6,7 @@ export const whoamiOutputSchema = z.object({
     userId: z.string().describe('The caller\'s id'),
     email: z.string().describe('The caller\'s email'),
     displayName: z.string().describe('The caller\'s display name'),
+    emailVerified: z.boolean().describe('Whether the account proved it reads its address (identity.user.verify_complete); until then it cannot invite anyone'),
     roles: z.array(z.string()).describe('Cluster-scoped roles held directly on the account'),
     organizations: z.array(z.object({
         organizationId: z.string().describe('The organization\'s id'),
