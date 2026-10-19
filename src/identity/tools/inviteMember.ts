@@ -13,6 +13,14 @@ export async function invite(input: MembershipInviteInput, ctx: IServiceContext)
         throw new MeshError({ message: `No organization "${organizationId}".`, code: 'NOT_FOUND', status: 404 });
     }
 
+    // Only an account that proved its own address mails a stranger's: the invitation names the
+    // inviter and the organization, both typed by whoever signed up (10-19, bots signing up).
+    const inviter = callerUserId(ctx);
+    const by = inviter === undefined ? undefined : await ctx.db('identity.user').resolve({ id: inviter });
+    if (by !== undefined && by.emailVerifiedAt === undefined && !by.roles.includes('operator')) {
+        throw new MeshError({ message: 'Confirm your email address before inviting anyone: use the link we sent you, or ask for a new one on your account page.', code: 'FORBIDDEN', status: 403 });
+    }
+
     // An existing account, never an agent's; else a new one that can only set its own password.
     let user = await findUserByEmail(ctx, input.email);
     if (user !== undefined && user.kind === 'agent') {
@@ -40,8 +48,6 @@ export async function invite(input: MembershipInviteInput, ctx: IServiceContext)
     await ctx.call('identity.membership.assign', { userId: user.id, organizationId: org.id, roleKey: input.roleKey });
 
     // A new account's link sets its password; an existing one is told where it was added.
-    const inviter = callerUserId(ctx);
-    const by = inviter === undefined ? undefined : await ctx.db('identity.user').resolve({ id: inviter });
     if (invited) {
         await issue(ctx, user, 'invite', { organization: org.name, by: by?.displayName ?? org.name });
     }

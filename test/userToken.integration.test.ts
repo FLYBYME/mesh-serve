@@ -33,14 +33,15 @@ describe('password reset and email verification', () => {
     let platformId = '';
 
     /** The links queued for an address, newest first, read back out of the email jobs. */
-    const linksFor = async (to: string): Promise<{ template: string; token: string }[]> => {
+    const linksFor = async (to: string): Promise<{ template: string; token: string; name: string | undefined }[]> => {
         const jobs = await broker.call('serve.queue.find', { query: {}, limit: 100 }, { meta: { tenant_id: platformId } });
         return jobs
             .filter((j) => j.payload.to === to)
             .map((j) => {
                 const vars = j.payload.vars;
                 const url = typeof vars === 'object' && vars !== null && 'url' in vars && typeof vars.url === 'string' ? vars.url : '';
-                return { template: String(j.payload.templateKey), token: new URL(url).searchParams.get('token') ?? '' };
+                const name = typeof vars === 'object' && vars !== null && 'name' in vars && typeof vars.name === 'string' ? vars.name : undefined;
+                return { template: String(j.payload.templateKey), token: new URL(url).searchParams.get('token') ?? '', name };
             })
             .reverse();
     };
@@ -100,6 +101,8 @@ describe('password reset and email verification', () => {
         const links = await linksFor('ada@reset.invalid');
         expect(links.map((l) => l.template)).toEqual(['verify_email']);
         expect(links[0]?.token.length).toBeGreaterThan(40);
+        // The name was typed beside an address nobody has proved yet: it is not put in mail to it.
+        expect(links[0]?.name).toBeUndefined();
     });
 
     it('keeps only the hash of a token, never the token', async () => {
@@ -115,8 +118,9 @@ describe('password reset and email verification', () => {
         const user = await broker.call('identity.user.get', { id: userId });
         expect(user.emailVerifiedAt).toBeInstanceOf(Date);
         await expect(broker.call('identity.user.verify_complete', { token: link?.token ?? '' })).rejects.toMatchObject({ status: 400 });
-        // Welcomed once, on the first verification.
-        expect((await linksFor('ada@reset.invalid')).filter((l) => l.template === 'welcome')).toHaveLength(1);
+        // Welcomed once, on the first verification -- by name, now that the address is proved.
+        const welcomes = (await linksFor('ada@reset.invalid')).filter((l) => l.template === 'welcome');
+        expect(welcomes.map((w) => w.name)).toEqual(['Ada']);
     });
 
     it('a reset request answers the same for a stranger, and sends nothing to them', async () => {
@@ -197,12 +201,21 @@ describe('password reset and email verification', () => {
         const graceOrg = (await broker.call('identity.organization.find', { query: { ownerId: grace } }))[0];
         const asGrace = { meta: { user: { id: grace, tenant_id: graceOrg?.id ?? '' } } };
 
-        const lin = await broker.call('identity.membership.invite', { email: 'Lin@Team.invalid', roleKey: 'member' }, asGrace);
+        // Not before Grace proves her own address: an invitation carries words she typed to a stranger.
+        await expect(broker.call('identity.membership.invite', { email: 'Lin@Team.invalid', roleKey: 'member', displayName: 'Buy now' }, asGrace))
+            .rejects.toMatchObject({ status: 403 });
+        expect(await linksFor('lin@team.invalid')).toEqual([]);
+        const graceVerify = (await linksFor('grace@team.invalid'))[0];
+        await broker.call('identity.user.verify_complete', { token: graceVerify?.token ?? '' });
+
+        const lin = await broker.call('identity.membership.invite', { email: 'Lin@Team.invalid', roleKey: 'member', displayName: 'Buy now' }, asGrace);
         expect(lin).toMatchObject({ organizationId: graceOrg?.id, roleKey: 'member', invited: true });
 
         // The link is an invitation, naming the organization; it sets the password and claims the account.
+        // The invitee's name was typed by the inviter: Lin is greeted without it.
         const link = (await linksFor('lin@team.invalid'))[0];
         expect(link?.template).toBe('team_invite');
+        expect(link?.name).toBeUndefined();
         await broker.call('identity.user.reset_complete', { token: link?.token ?? '', password: 'lin-password-1234' });
         const signedIn = await broker.call('identity.ticket.issue', { email: 'lin@team.invalid', password: 'lin-password-1234' });
         expect(signedIn).toMatchObject({ userId: lin.userId });

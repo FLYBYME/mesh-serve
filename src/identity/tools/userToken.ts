@@ -25,6 +25,18 @@ const MAIL_TENANT = process.env.IDENTITY_MAIL_TENANT;
 
 const TEMPLATE: Record<UserTokenPurpose, string> = { reset: 'reset_password', verify: 'verify_email', invite: 'team_invite' };
 
+/** An account as the mail to it needs it. */
+type Recipient = { id: string; email: string; displayName: string; emailVerifiedAt?: Date | undefined };
+
+/**
+ * The name a mail greets with: the account's own only once it proved it reads that address. Before,
+ * the name is whatever was typed on a form beside someone's address -- a bot's sign-up with a
+ * stranger's address put its words in our mail to them (10-18). The templates say "there" instead.
+ */
+function greeting(user: Recipient): Record<string, string> {
+    return user.emailVerifiedAt !== undefined ? { name: user.displayName } : {};
+}
+
 async function mailTenant(ctx: IServiceContext): Promise<string | undefined> {
     if (MAIL_TENANT !== undefined && MAIL_TENANT !== '') return MAIL_TENANT;
     const platform = await ctx.db('identity.organization').findOne({ query: { slug: 'platform' } });
@@ -37,7 +49,7 @@ async function mailTenant(ctx: IServiceContext): Promise<string | undefined> {
  */
 export async function issue(
     ctx: IServiceContext,
-    user: { id: string; email: string; displayName: string },
+    user: Recipient,
     purpose: UserTokenPurpose,
     vars: Record<string, string> = {},
 ): Promise<boolean> {
@@ -60,7 +72,7 @@ export async function issue(
     await ctx.call('serve.queue.create', {
         tenantId,
         contract: MAIL_CONTRACT,
-        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { ...vars, name: user.displayName, url: tokenLink(LINK_BASE, purpose, token) } },
+        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { ...vars, ...greeting(user), url: tokenLink(LINK_BASE, purpose, token) } },
         maxAttempts: 5,
         timeoutMs: 30_000,
     }, { meta: { user: { id: '', tenant_id: tenantId } } });
@@ -72,7 +84,7 @@ export async function issue(
  * change its owner did not make is noticed. Queued like the links; never fails the change it
  * reports: a mail problem is logged, the password stays set.
  */
-export async function notifyPasswordChanged(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, how: 'changed' | 'reset'): Promise<void> {
+export async function notifyPasswordChanged(ctx: IServiceContext, user: Recipient, how: 'changed' | 'reset'): Promise<void> {
     await queueNotice(ctx, user, 'password_changed', { how, url: `${LINK_BASE.replace(/\/+$/, '')}/forgot-password` });
 }
 
@@ -80,7 +92,7 @@ export async function notifyPasswordChanged(ctx: IServiceContext, user: { id: st
  * A notice to an account (no link to prove anything): queued like the links, as the sending
  * organization; never fails what it reports -- a mail problem is logged.
  */
-async function queueNotice(ctx: IServiceContext, user: { id: string; email: string; displayName: string }, templateKey: string, vars: Record<string, string>): Promise<void> {
+async function queueNotice(ctx: IServiceContext, user: Recipient, templateKey: string, vars: Record<string, string>): Promise<void> {
     try {
         const tenantId = await mailTenant(ctx);
         if (tenantId === undefined) {
@@ -90,7 +102,7 @@ async function queueNotice(ctx: IServiceContext, user: { id: string; email: stri
         await ctx.call('serve.queue.create', {
             tenantId,
             contract: MAIL_CONTRACT,
-            payload: { templateKey, to: user.email, vars: { name: user.displayName, ...vars } },
+            payload: { templateKey, to: user.email, vars: { ...greeting(user), ...vars } },
             maxAttempts: 5,
             timeoutMs: 30_000,
         }, { meta: { user: { id: '', tenant_id: tenantId } } });
@@ -179,16 +191,17 @@ export async function verify_complete(input: VerifyCompleteInput, ctx: IServiceC
         throw new MeshError({ message: 'That link is not valid any more. Ask for a new one.', code: 'INVALID_TOKEN', status: 400 });
     }
     if (user.emailVerifiedAt === undefined) {
-        await ctx.db('identity.user').update({ id: user.id, emailVerifiedAt: new Date() });
+        const emailVerifiedAt = new Date();
+        await ctx.db('identity.user').update({ id: user.id, emailVerifiedAt });
         // The first time only: the account is real now, so it is welcomed (mail's `welcome` template
         // says what the account can do).
-        await queueNotice(ctx, user, 'welcome', { url: LINK_BASE.replace(/\/+$/, '') });
+        await queueNotice(ctx, { ...user, emailVerifiedAt }, 'welcome', { url: LINK_BASE.replace(/\/+$/, '') });
     }
     return { ok: true, email: user.email };
 }
 
 /** Sends the first verification link to a new account (register.ts); a failure never fails registering. */
-export async function sendFirstVerification(ctx: IServiceContext, user: { id: string; email: string; displayName: string }): Promise<void> {
+export async function sendFirstVerification(ctx: IServiceContext, user: Recipient): Promise<void> {
     await issue(ctx, user, 'verify').catch((err: unknown) => {
         ctx.logger.warn(`[identity] verification link for "${user.id}" not queued: ${err instanceof Error ? err.message : String(err)}`);
     });
