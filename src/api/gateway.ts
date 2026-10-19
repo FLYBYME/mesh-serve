@@ -42,7 +42,20 @@ interface Caller {
     /** Informational only (a held call's frozen requestedBy, display) -- never trusted for a gate
      *  decision; checkGate always re-resolves fresh. */
     readonly roles: readonly string[];
+    /**
+     * A mailbox signed in with its own address and password (the webmail at mail.<platform>,
+     * owner 10-19: "They sign in with their email ... Not the same as the console"): no account, no
+     * membership -- its organization is the mailbox's, and it passes only gates asking for
+     * `mailbox` alone (checkGate).
+     */
+    readonly mailbox?: { readonly mailAddressId: string; readonly organizationId: string; readonly address: string };
 }
+
+/** The one role a mailbox session holds; a contract gated on it alone is a webmail call. */
+export const MAILBOX_ROLE = 'mailbox';
+
+/** Who validates a mailbox session (the mail service), when it runs. */
+const MAILBOX_SESSION_VALIDATE = 'mailbox.session_validate';
 
 /** The organization a request names: the `x-organization` header, or `?organization=` (an EventSource cannot set headers). */
 /**
@@ -481,6 +494,13 @@ export class ApiGateway {
         if (caller === undefined || !gated) return apiTenantId;
 
         const named = namedOrganization(req);
+        // A mailbox acts in its own organization and no other.
+        if (caller.mailbox !== undefined) {
+            if (named !== undefined && named !== caller.mailbox.organizationId) {
+                throw new MeshError({ message: 'A mailbox acts only in its own organization.', code: 'FORBIDDEN', status: 403 });
+            }
+            return caller.mailbox.organizationId;
+        }
         if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
             if (named === undefined) return apiTenantId;
 
@@ -571,6 +591,8 @@ export class ApiGateway {
     }
 
     private holdsRole(userId: string, role: string, tenantId: string): Promise<boolean> {
+        // A mailbox is no account: it holds no account's role, operator least of all.
+        if (userId.startsWith('mailbox:')) return Promise.resolve(false);
         return this.roles.get(`${userId}\u0000${role}\u0000${tenantId}`, async () => {
             // The same meta checkGate always sent -- see its comment for why organizationId too.
             const meta = { user: { id: userId, tenant_id: tenantId, organizationId: tenantId } };
@@ -617,7 +639,30 @@ export class ApiGateway {
             };
         }
 
-        return undefined;
+        return this.lookUpMailbox(token);
+    }
+
+    /**
+     * A mailbox's session, asked of the mail service when one runs (a platform without mail has
+     * none). Its answer is read field by field: a reply that isn't exactly a valid session is no
+     * caller at all.
+     */
+    private async lookUpMailbox(token: string): Promise<Caller | undefined> {
+        if (this.broker.registry.findNodesForTool(MAILBOX_SESSION_VALIDATE).length === 0) return undefined;
+
+        const reply: unknown = await this.broker.callNamed(MAILBOX_SESSION_VALIDATE, { token }, {}).catch(() => undefined);
+        if (typeof reply !== 'object' || reply === null || Reflect.get(reply, 'valid') !== true) return undefined;
+
+        const mailAddressId = Reflect.get(reply, 'mailAddressId');
+        const organizationId = Reflect.get(reply, 'organizationId');
+        const address = Reflect.get(reply, 'address');
+        if (typeof mailAddressId !== 'string' || typeof organizationId !== 'string' || typeof address !== 'string') return undefined;
+        if (mailAddressId === '' || organizationId === '') return undefined;
+
+        return {
+            userId: `mailbox:${mailAddressId}`, viaApiToken: false, roles: [MAILBOX_ROLE],
+            mailbox: { mailAddressId, organizationId, address },
+        };
     }
 
     /**
@@ -721,6 +766,17 @@ export class ApiGateway {
 
         if (caller === undefined) {
             throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
+        }
+
+        // A mailbox passes only a gate asking for `mailbox` and nothing else: every member,
+        // operator and permission gate refuses it, whatever an expose row says.
+        if (caller.mailbox !== undefined) {
+            const onlyMailbox = required.length > 0 && required.every((r) => r === MAILBOX_ROLE)
+                && (row.role === undefined || row.role === MAILBOX_ROLE) && row.permission === undefined;
+            if (!onlyMailbox) {
+                throw new MeshError({ message: `"${row.contract}" is not a mailbox's call.`, code: 'FORBIDDEN', status: 403 });
+            }
+            return;
         }
 
         // An operator passes every gate, in whichever organization the call runs (callOrganization):
@@ -1092,7 +1148,13 @@ export class ApiGateway {
             ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
             : organization;
         trace.organizationId = effectiveTenantId;
-        const meta = { user: { id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId } };
+        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone.
+        const meta = {
+            user: {
+                id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId,
+                ...(caller?.mailbox !== undefined ? { mailAddressId: caller.mailbox.mailAddressId, mailAddress: caller.mailbox.address } : {}),
+            },
+        };
 
         // Public forms (methods/formLimit.ts), before anything is done or mailed: one sent within
         // seconds of being shown is refused -- before it counts against its address -- then per address.
