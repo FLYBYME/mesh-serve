@@ -44,6 +44,13 @@ export function nodeMatchesSelector(registry: IServiceRegistry, nodeID: string, 
     return nodesForLabel(registry, selector).some((n) => n.nodeID === nodeID);
 }
 
+/** Every available node a selector names: the one exact nodeID, or each "key=value" match. */
+export function nodesForSelector(registry: IServiceRegistry, selector: string): NodeInfo[] {
+    if (!selector.includes('=')) return registry.getAvailableNodes().filter((node) => node.nodeID === selector);
+
+    return nodesForLabel(registry, selector);
+}
+
 export function resolveNodeSelector(registry: IServiceRegistry, selector: string): NodeInfo | undefined {
     if (!selector.includes('=')) {
         return registry.getNode(selector);

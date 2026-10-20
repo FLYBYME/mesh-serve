@@ -2,9 +2,10 @@ import { Database } from '@flybyme/mesh';
 import type { IServiceContext } from '@flybyme/mesh';
 
 import { partCrud } from '../contracts/part.contract.js';
+import type { Part } from '../contracts/part.contract.js';
 import { artifactCrud } from '../contracts/artifact.contract.js';
 import type { PartReconcileOutput } from '../contracts/supervisor.contract.js';
-import { labelHas, nodeMatchesSelector, resolveNodeSelector } from '../methods/resolveNode.js';
+import { labelHas, nodeMatchesSelector, nodesForSelector, resolveNodeSelector } from '../methods/resolveNode.js';
 
 /**
  * One pass of desired-vs-observed.
@@ -47,14 +48,16 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
     // registry and simply is not asked, which is exactly the signal we want -- there is no stale
     // record of it claiming to still host anything.
     const nodes = ctx.broker.registry.getNodes();
-    const observed = new Map<string, { nodeID: string; artifactId?: string | undefined }>(); // by partId
+    const observed = new Map<string, Observed[]>(); // by partId: every node that runs it
     const unanswered: string[] = [];
 
     for (const node of nodes) {
         try {
             const report = await ctx.call('serve.part.runningHere', {}, { nodeID: node.nodeID });
             for (const service of report.services) {
-                observed.set(service.partId, { nodeID: report.nodeID, artifactId: service.artifactId });
+                const runs = observed.get(service.partId) ?? [];
+                runs.push({ nodeID: report.nodeID, artifactId: service.artifactId });
+                observed.set(service.partId, runs);
             }
         } catch (err) {
             // A builder hosts no parts, so its silence cannot mean it runs one: counted, a laptop
@@ -71,13 +74,16 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
         }
     }
 
-    const started: PartReconcileOutput['started'] = [];
-    const stopped: PartReconcileOutput['stopped'] = [];
-    const redeployed: PartReconcileOutput['redeployed'] = [];
-    const failed: PartReconcileOutput['failed'] = [];
+    const out: PartReconcileOutput = { started: [], stopped: [], redeployed: [], failed: [] };
+    const { started, stopped, failed } = out;
 
     for (const part of services) {
-        const observedRun = observed.get(part.id);
+        if (part.placement === 'every') {
+            await reconcileEvery(ctx, part, observed.get(part.id) ?? [], unanswered, out);
+            continue;
+        }
+
+        const observedRun = observed.get(part.id)?.[0];
         let runningOn = observedRun?.nodeID;
 
         // Running on a node its nodeSelector no longer names: the pin moved (a part moved to a pod
@@ -109,32 +115,7 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
             part.desired === 'running' && runningOn !== undefined && observedRun !== undefined
             && part.artifactId !== undefined && observedRun.artifactId !== part.artifactId
         ) {
-            const scoped = { nodeID: observedRun.nodeID, meta: { tenant_id: part.tenantId } };
-            try {
-                // The new build onto that node first (from a node, the database, or rebuilt): a
-                // redeploy never stops the old build before the new one is there. It used to stop
-                // first and fetch in the start -- a build nothing could give left the part down.
-                const pinned = await ctx.call('serve.artifact.get', { id: part.artifactId }, { meta: scoped.meta });
-                if (pinned.hash === undefined) throw new Error(`pinned build ${part.artifactId} has no hash (status ${pinned.status}); the old build keeps running`);
-                await ctx.call('serve.artifact.pull', { artifactHash: pinned.hash }, scoped).catch((err: unknown) => {
-                    throw new Error(`the new build is not available on ${observedRun.nodeID} (${err instanceof Error ? err.message : String(err)}); the old build keeps running`);
-                });
-                await ctx.call('serve.part.stop', { id: part.id }, scoped);
-                // If this start fails the part is now simply not running, and the next pass's
-                // not-running branch retries it like any other missing service.
-                await ctx.call('serve.part.start', { id: part.id }, scoped);
-                redeployed.push({
-                    partId: part.id,
-                    key: part.key,
-                    nodeID: observedRun.nodeID,
-                    ...(observedRun.artifactId !== undefined ? { from: observedRun.artifactId } : {}),
-                    to: part.artifactId,
-                });
-                ctx.logger.info(`serve.part.reconcile: redeployed "${part.key}" on ${observedRun.nodeID}: ${observedRun.artifactId ?? '(unknown)'} -> ${part.artifactId}`);
-            } catch (err) {
-                const error = err instanceof Error ? err.message : String(err);
-                failed.push({ partId: part.id, key: part.key, error });
-            }
+            await redeploy(ctx, part, part.artifactId, observedRun, out);
             continue;
         }
 
@@ -207,11 +188,117 @@ export async function reconcile(_params: Record<string, never>, ctx: IServiceCon
     }
 
     reportFailures(ctx, failed);
-    return { started, stopped, redeployed, failed };
+
+    return out;
 }
 
-/** The last error logged for each part that is failing, by partId -- see reportFailures. */
-const lastFailure = new Map<string, { key: string; error: string }>();
+/** One node's report of running a part, and which build. */
+interface Observed {
+    nodeID: string;
+    artifactId?: string | undefined;
+}
+
+/**
+ * Running, but not the build it is pinned to: restarts it on the pinned build in place, on the node
+ * it already runs on.
+ */
+async function redeploy(ctx: IServiceContext, part: Part, artifactId: string, run: Observed, out: PartReconcileOutput): Promise<void> {
+    const scoped = { nodeID: run.nodeID, meta: { tenant_id: part.tenantId } };
+    try {
+        // The new build onto that node first (from a node, the database, or rebuilt): a
+        // redeploy never stops the old build before the new one is there. It used to stop
+        // first and fetch in the start -- a build nothing could give left the part down.
+        const pinned = await ctx.call('serve.artifact.get', { id: artifactId }, { meta: scoped.meta });
+        if (pinned.hash === undefined) throw new Error(`pinned build ${artifactId} has no hash (status ${pinned.status}); the old build keeps running`);
+        await ctx.call('serve.artifact.pull', { artifactHash: pinned.hash }, scoped).catch((err: unknown) => {
+            throw new Error(`the new build is not available on ${run.nodeID} (${err instanceof Error ? err.message : String(err)}); the old build keeps running`);
+        });
+        await ctx.call('serve.part.stop', { id: part.id }, scoped);
+        // If this start fails the part is now simply not running, and the next pass's
+        // not-running branch retries it like any other missing service.
+        await ctx.call('serve.part.start', { id: part.id }, scoped);
+        out.redeployed.push({
+            partId: part.id,
+            key: part.key,
+            nodeID: run.nodeID,
+            ...(run.artifactId !== undefined ? { from: run.artifactId } : {}),
+            to: artifactId,
+        });
+        ctx.logger.info(`serve.part.reconcile: redeployed "${part.key}" on ${run.nodeID}: ${run.artifactId ?? '(unknown)'} -> ${artifactId}`);
+    } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        out.failed.push({ partId: part.id, key: part.key, nodeID: run.nodeID, error });
+    }
+}
+
+/**
+ * A part placed on every node its nodeSelector matches (placement "every"): one copy per match --
+ * dns, proxy and smtp on each edge machine, each answering on its own address. Each node is its own
+ * small reconcile: started where it is missing, redeployed where it runs another build, stopped
+ * where the selector no longer names it. A silent node holds back only its own copy, never the
+ * others.
+ */
+async function reconcileEvery(ctx: IServiceContext, part: Part, runs: Observed[], unanswered: string[], out: PartReconcileOutput): Promise<void> {
+    const scoped = (nodeID: string) => ({ nodeID, meta: { tenant_id: part.tenantId } });
+
+    const stop = async (nodeID: string, why: string): Promise<void> => {
+        try {
+            await ctx.call('serve.part.stop', { id: part.id }, scoped(nodeID));
+            out.stopped.push({ partId: part.id, key: part.key, nodeID });
+            ctx.logger.info(`serve.part.reconcile: stopped "${part.key}" on ${nodeID}: ${why}`);
+        } catch (err) {
+            out.failed.push({ partId: part.id, key: part.key, nodeID, error: err instanceof Error ? err.message : String(err) });
+        }
+    };
+
+    if (part.desired === 'stopped') {
+        for (const run of runs) await stop(run.nodeID, 'no longer desired');
+        return;
+    }
+
+    const selector = part.nodeSelector;
+    if (selector === undefined) {
+        out.failed.push({ partId: part.id, key: part.key, error: 'placement "every" needs a nodeSelector: which nodes is every?' });
+        return;
+    }
+
+    const targets = nodesForSelector(ctx.broker.registry, selector).map((node) => node.nodeID);
+
+    // Off the selector: a node lost its label. Stopped only while a copy still runs or can run
+    // somewhere it belongs, so a mistyped selector never takes the last copy down.
+    for (const run of runs) {
+        if (targets.includes(run.nodeID) || targets.length === 0) continue;
+        await stop(run.nodeID, `its nodeSelector "${selector}" no longer names this node`);
+    }
+
+    for (const nodeID of targets) {
+        const run = runs.find((r) => r.nodeID === nodeID);
+
+        if (run !== undefined) {
+            if (part.artifactId !== undefined && run.artifactId !== part.artifactId) await redeploy(ctx, part, part.artifactId, run, out);
+            continue;
+        }
+
+        if (unanswered.includes(nodeID)) {
+            out.failed.push({ partId: part.id, key: part.key, nodeID, error: `not started on ${nodeID}: it did not answer, and may already be running it` });
+            continue;
+        }
+
+        try {
+            await ctx.call('serve.part.start', { id: part.id }, scoped(nodeID));
+            out.started.push({ partId: part.id, key: part.key, nodeID });
+            ctx.logger.info(`serve.part.reconcile: started "${part.key}" on ${nodeID}`);
+        } catch (err) {
+            out.failed.push({ partId: part.id, key: part.key, nodeID, error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+}
+
+/**
+ * The last error logged for each part that is failing, by partId -- and node, for a part on every
+ * match, whose copies fail apart -- see reportFailures.
+ */
+const lastFailure = new Map<string, { key: string; where: string; error: string }>();
 
 /**
  * `failed` is only ever returned, and an interval contract's return value goes nowhere: a part
@@ -225,15 +312,17 @@ const lastFailure = new Map<string, { key: string; error: string }>();
  */
 function reportFailures(ctx: IServiceContext, failed: PartReconcileOutput['failed']): void {
     const failingNow = new Set<string>();
-    for (const { partId, key, error } of failed) {
-        failingNow.add(partId);
-        if (lastFailure.get(partId)?.error === error) continue;
-        lastFailure.set(partId, { key, error });
-        ctx.logger.warn(`serve.part.reconcile: "${key}" failed: ${error}`);
+    for (const { partId, key, nodeID, error } of failed) {
+        const id = nodeID === undefined ? partId : `${partId}@${nodeID}`;
+        const where = nodeID === undefined ? '' : ` on ${nodeID}`;
+        failingNow.add(id);
+        if (lastFailure.get(id)?.error === error) continue;
+        lastFailure.set(id, { key, where, error });
+        ctx.logger.warn(`serve.part.reconcile: "${key}"${where} failed: ${error}`);
     }
-    for (const [partId, { key }] of lastFailure) {
-        if (failingNow.has(partId)) continue;
-        lastFailure.delete(partId);
-        ctx.logger.info(`serve.part.reconcile: "${key}" no longer failing`);
+    for (const [id, { key, where }] of lastFailure) {
+        if (failingNow.has(id)) continue;
+        lastFailure.delete(id);
+        ctx.logger.info(`serve.part.reconcile: "${key}"${where} no longer failing`);
     }
 }

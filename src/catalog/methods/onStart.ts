@@ -30,11 +30,13 @@ export async function runOnStart(
     modulePath: string,
     meta: Record<string, unknown>,
 ): Promise<void> {
+    const labels = ctx.broker.registry.getNode(ctx.nodeID)?.metadata ?? {};
+
     for (const entry of part.onStart ?? []) {
         try {
             // The key is operator-declared data: callNamed refuses an unknown contract (404), and the
             // contract's own schema refuses bad params.
-            await ctx.callNamed(entry.contract, entry.params, { meta });
+            await ctx.callNamed(entry.contract, nodeParams(entry.params, ctx.nodeID, labels), { meta });
         } catch (err) {
             await unloadAndEvictModule(ctx, modulePath);
             clearServiceRunning(ctx.nodeID, part.id);
@@ -46,4 +48,34 @@ export async function runOnStart(
             });
         }
     }
+}
+
+const NODE_REFERENCE = /\$\{node\.([A-Za-z0-9_-]+)\}/g;
+
+/**
+ * An onStart entry's params, with "${node.id}" and "${node.<label>}" in any string filled in from
+ * the node it runs on. One part placed on every edge (placement "every") then still greets with
+ * each machine's own name: smtp's { "hostname": "${node.fqdn}" } is edge1.surfdns.net on edge1 and
+ * ns1.surfdns.net on ns1. A label the node does not carry throws, failing the start: an smtp
+ * greeting with a literal "${node.fqdn}" would be worse than one that did not start.
+ */
+export function nodeParams(params: Record<string, unknown>, nodeID: string, labels: Record<string, unknown>): Record<string, unknown> {
+    const fill = (value: unknown): unknown => {
+        if (typeof value === 'string') {
+            return value.replace(NODE_REFERENCE, (_whole, name: string) => {
+                if (name === 'id') return nodeID;
+
+                const label = labels[name];
+                if (typeof label !== 'string') throw new Error(`"\${node.${name}}": node ${nodeID} has no "${name}" label`);
+
+                return label;
+            });
+        }
+        if (Array.isArray(value)) return value.map(fill);
+        if (typeof value === 'object' && value !== null) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fill(v)]));
+
+        return value;
+    };
+
+    return Object.fromEntries(Object.entries(params).map(([key, value]) => [key, fill(value)]));
 }

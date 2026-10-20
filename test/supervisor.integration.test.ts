@@ -299,6 +299,96 @@ describe('desired state, observed state, and the loop between them', () => {
         expect(registryA.leaderFor('serve.part')?.nodeID).toBe(registryB.leaderFor('serve.part')?.nodeID);
     });
 
+    describe('placement "every": one copy on each node the selector names', () => {
+        let everyId = '';
+        const registryOf = (app: MeshApp) => app.getProvider<{ setLocalMetadata: (m: Record<string, string>) => void }>('registry');
+        const settle = () => new Promise((r) => { setTimeout(r, 800); });
+        const mine = (rows: ReadonlyArray<{ partId: string; nodeID?: string | undefined }>) => rows
+            .filter((r) => r.partId === everyId).map((r) => r.nodeID).sort();
+
+        beforeAll(async () => {
+            registryOf(appA).setLocalMetadata({ tier: 'edge' });
+            registryOf(appB).setLocalMetadata({ tier: 'edge' });
+            await settle();
+
+            const [repo] = await brokerA.call('serve.repo.find', { query: { name: 'sup-repo' } }, meta());
+            const part = await brokerA.call('serve.part.create', {
+                tenantId, repoId: repo!.id, key: `${ORG_SLUG}/edge`, kind: 'service', path: '.', entryPoint: 'src/index.ts', wants: [],
+                desired: 'running', nodeSelector: 'tier=edge', placement: 'every',
+            }, meta());
+            everyId = part.id;
+        }, 20000);
+
+        afterAll(async () => {
+            await brokerA.call('serve.part.update', { id: everyId, desired: 'stopped' }, meta());
+            registryOf(appA).setLocalMetadata({});
+            registryOf(appB).setLocalMetadata({ role: 'worker' });
+            await settle();
+        });
+
+        it('starts it on every match, not only the first', async () => {
+            const result = await brokerA.call('serve.part.reconcile', {});
+            // No build, so each start is refused -- but one was attempted on each node.
+            expect(mine(result.failed)).toEqual(['sup-a', 'sup-b']);
+            expect(result.failed.filter((f) => f.partId === everyId).every((f) => /no successful build/i.test(f.error))).toBe(true);
+        }, 20000);
+
+        it('starts only the copies that are missing', async () => {
+            markServiceRunning('sup-b', everyId, 'edge.domain', '/tmp/edge.cjs');
+            try {
+                const result = await brokerA.call('serve.part.reconcile', {});
+                expect(mine(result.failed)).toEqual(['sup-a']);
+                expect(mine(result.stopped)).toEqual([]);
+            } finally {
+                clearServiceRunning('sup-b', everyId);
+            }
+        }, 20000);
+
+        it('holds back only the silent node\'s copy', async () => {
+            brokerB.unregisterContract('serve.part.runningHere');
+            try {
+                const result = await brokerA.call('serve.part.reconcile', {});
+                const failures = result.failed.filter((f) => f.partId === everyId);
+                expect(failures.find((f) => f.nodeID === 'sup-b')?.error).toMatch(/did not answer/);
+                expect(failures.find((f) => f.nodeID === 'sup-a')?.error).toMatch(/no successful build/i);
+            } finally {
+                brokerB.registerContract(partRunningHereContract, runningHere);
+            }
+        }, 40000);
+
+        it('takes its copy off a node that loses the label', async () => {
+            registryOf(appB).setLocalMetadata({ tier: 'storage' });
+            await settle();
+            markServiceRunning('sup-b', everyId, 'edge.domain', '/tmp/edge.cjs');
+            try {
+                const result = await brokerA.call('serve.part.reconcile', {});
+                // The stop on B itself fails here (nothing was really loaded); what matters is that
+                // B's copy was the one taken off, and A's was still started.
+                expect(mine([...result.stopped, ...result.failed])).toEqual(['sup-a', 'sup-b']);
+                expect(result.failed.find((f) => f.partId === everyId && f.nodeID === 'sup-a')?.error).toMatch(/no successful build/i);
+                expect(result.failed.find((f) => f.partId === everyId && f.nodeID === 'sup-b')?.error ?? '').not.toMatch(/no successful build/i);
+            } finally {
+                clearServiceRunning('sup-b', everyId);
+                registryOf(appB).setLocalMetadata({ tier: 'edge' });
+                await settle();
+            }
+        }, 20000);
+
+        it('stops every copy when no longer desired', async () => {
+            await brokerA.call('serve.part.update', { id: everyId, desired: 'stopped' }, meta());
+            markServiceRunning('sup-a', everyId, 'edge.domain', '/tmp/edge.cjs');
+            markServiceRunning('sup-b', everyId, 'edge.domain', '/tmp/edge.cjs');
+            try {
+                const result = await brokerA.call('serve.part.reconcile', {});
+                expect(mine([...result.stopped, ...result.failed])).toEqual(['sup-a', 'sup-b']);
+            } finally {
+                clearServiceRunning('sup-a', everyId);
+                clearServiceRunning('sup-b', everyId);
+                await brokerA.call('serve.part.update', { id: everyId, desired: 'running' }, meta());
+            }
+        }, 20000);
+    });
+
     it('logs a failing service once when it starts failing, not every pass, and once when it stops', async () => {
         // `failed` is only returned, and nothing reads an interval contract's return: before this,
         // a part whose start kept failing left no trace anywhere. Logged on change, so a part with
