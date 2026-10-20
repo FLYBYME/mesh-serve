@@ -293,6 +293,31 @@ export const nodeServingContract = defineContract({
     print: (o) => `${o.tool}: ${o.servers.length} server(s)${o.agree ? '' : ' -- NOT ALIKE'}\n${o.servers.map((s) => `  ${s.nodeID}  ${s.hash ?? '?'}  ${s.meshServe ?? '?'}${s.available ? '' : '  (unavailable)'}`).join('\n')}`,
 });
 
+export const nodeContractsOutputSchema = z.array(z.object({
+    contract: z.string().describe('domain.action'),
+    visibility: z.enum(['public', 'internal']).describe('internal: no api can expose it, only the mesh calls it'),
+    permissions: z.array(z.string()).describe('Every role a caller must hold, all of them; empty: none'),
+    destructive: z.boolean(),
+    method: z.string(),
+    path: z.string(),
+    nodes: z.array(z.string()).describe('The nodes that advertise it'),
+}));
+
+/**
+ * Every contract the mesh runs, internal ones too, with its gate -- what an api describes is only what
+ * it exposes (owner, 10-20: "the api only shows whats exposed ... at least 25% more contracts are
+ * hidden"). Read from what each node advertises, as calls are routed.
+ */
+export const nodeContractsContract = defineContract({
+    domain: 'serve.node', action: 'contracts',
+    description: 'Every contract running on the mesh, internal ones too: its visibility, the roles it requires, whether it is destructive, and which nodes serve it.',
+    inputSchema: z.object({}),
+    outputSchema: nodeContractsOutputSchema,
+    rest: { method: 'GET', path: '/nodes/contracts' },
+    visibility: 'public', filePath: 'src/catalog/tools/nodeContracts.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (rows) => rows.map((r) => `${r.contract}\t${r.visibility}\t${r.permissions.length > 0 ? r.permissions.join('+') : '(none)'}${r.destructive ? '\tdestructive' : ''}`).join('\n'),
+});
+
 /**
  * Moves a node to another mesh-serve release through the api -- what used to be `docker pull`, a
  * `sed` on the unit and `systemctl restart` over SSH on each box. The node asks its host (see

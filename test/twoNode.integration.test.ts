@@ -263,4 +263,15 @@ describe('two nodes, one serving a domain it does not hold', () => {
         expect(answer.servers[0]?.hash).toMatch(/^[0-9a-f]{14}$/);
         expect(answer.agree).toBe(true);
     });
+
+    it('lists every contract the mesh runs, internal ones too, each with its gate and its nodes', async () => {
+        const all = await brokerB.call('serve.node.contracts', {});
+        const byKey = new Map(all.map((c) => [c.contract, c]));
+
+        expect(byKey.get('identity.whoami')).toMatchObject({ visibility: 'public', nodes: ['two-node-a'] });
+        expect(byKey.get('serve.node.contracts')).toMatchObject({ visibility: 'public', permissions: ['operator'] });
+        // What no api exposes is listed as well.
+        expect(all.some((c) => c.visibility === 'internal')).toBe(true);
+        expect(all.map((c) => c.contract)).toEqual([...all.map((c) => c.contract)].sort((a, b) => a.localeCompare(b)));
+    });
 });
