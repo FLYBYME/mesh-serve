@@ -1,6 +1,6 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.10.74",
+    "version": "0.10.75",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
     "private": true,
@@ -41,7 +41,7 @@
     },
     "dependencies": {
         "@flybyme/mesh": "github:FLYBYME/mesh#v4.14.4",
-        "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.19.4",
+        "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.19.5",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
         "json-schema-to-zod": "^2.8.1",
