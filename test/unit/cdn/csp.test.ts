@@ -127,6 +127,27 @@ describe('Content Security Policy (CSP) generation', () => {
             });
         });
 
+        describe('the site\'s own extra origins (site.connect)', () => {
+            it('adds each one after the api and mcp origins', () => {
+                const csp = contentSecurityPolicy({ ...sampleSite, connect: ['wss://stream.mesh.example.com'] }, 'api.mesh.example.com', "'sha256-test'");
+
+                expect(csp).toContain(
+                    "connect-src 'self' https://api.mesh.example.com https://mcp.mesh.example.com wss://mcp.mesh.example.com wss://stream.mesh.example.com;"
+                );
+            });
+
+            it('the site schema takes only bare origins, so a value cannot add a directive', async () => {
+                const { siteSchema } = await import('../../../src/cdn/schema/site.js');
+                const connect = siteSchema.shape.connect;
+
+                expect(connect.safeParse(['wss://stream.mesh.example.com']).success).toBe(true);
+                expect(connect.safeParse(['wss://stream.mesh.example.com:8443']).success).toBe(true);
+                expect(connect.safeParse(["wss://x; script-src 'unsafe-inline'"]).success).toBe(false);
+                expect(connect.safeParse(['wss://x/path']).success).toBe(false);
+                expect(connect.safeParse(['*']).success).toBe(false);
+            });
+        });
+
         describe('handling undefined apiHost', () => {
             it('omits API origin completely from connect-src without extra spaces or undefined', () => {
                 const csp = contentSecurityPolicy(sampleSite, undefined, "'sha256-test'");

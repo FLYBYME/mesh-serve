@@ -126,7 +126,7 @@ export const inlineScript = (body: string): { escaped: string; hash: string } =>
  * them the browser reports "contains an invalid source" and drops it silently rather than erring
  * loudly at the header. Found live, the first time this path actually rendered two hashes. */
 export const contentSecurityPolicy = (
-    site: Pick<Site, 'mcpHost'>,
+    site: Pick<Site, 'mcpHost' | 'connect'>,
     apiHost: string | undefined,
     scriptHashes: string,
 ): string => {
@@ -134,11 +134,15 @@ export const contentSecurityPolicy = (
     const mcp = `${publicScheme()}://${site.mcpHost}`;
     const wsScheme = publicScheme() === 'https' ? 'wss' : 'ws';
     const mcpWs = `${wsScheme}://${site.mcpHost}`;
+    // The site's own extra origins (a streaming edge's socket): the schema allows only bare origins,
+    // so nothing here can widen another directive.
+    const extra = site.connect ?? [];
+
     return [
         "default-src 'self'",
         `script-src 'self' ${scriptHashes}`,
         "style-src 'self' 'unsafe-inline'",
-        `connect-src 'self' ${[api, mcp, mcpWs].filter((v) => v !== undefined).join(' ')}`,
+        `connect-src 'self' ${[api, mcp, mcpWs, ...extra].filter((v) => v !== undefined).join(' ')}`,
         "img-src 'self' data: https:",
         "font-src 'self'",
     ].join('; ');

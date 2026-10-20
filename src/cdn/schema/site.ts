@@ -14,6 +14,8 @@ export const siteSchema = z.object({
   // carries this purely as inert config (baked into preconnect links/CSP); the actual MCP protocol
   // endpoint has no implementation here -- that responsibility moved to mesh-infer.
   mcpHost: z.string().describe('The hostname that resolves to this site\'s mcp endpoint').optional(),
+  connect: z.array(z.string().regex(/^(https|wss|http|ws):\/\/[a-z0-9.-]+(:\d+)?$/, 'An origin: scheme://host[:port], nothing after it'))
+    .optional().describe('Other origins the page may open connections to (CSP connect-src), e.g. wss://stream.surfdns.net'),
   tenantId: z.string().describe('The organization that owns this site'),
   releaseHash: z.string().optional().describe('The release this site serves; absent means not deployed yet'),
   application: z.string().describe('Namespaces this page\'s settings, so two Applications cannot collide in one backing store'),
