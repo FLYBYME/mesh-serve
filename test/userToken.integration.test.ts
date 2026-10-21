@@ -183,6 +183,10 @@ describe('password reset and email verification', () => {
         const roster = async () => (await broker.call('identity.membership.find', { query: {} }, { meta: { user: { id: userId, tenant_id: adaOrg, organizationId: adaOrg } } }))
             .map((m) => `${m.userId === userId ? 'ada' : 'op'}:${m.roleKey}`).sort();
 
+        // The test before took Op's operator role away (Ada holds it now): an operator acts here, so
+        // Op has it back -- assign checks the caller runs the organization or is an operator.
+        await broker.call('identity.user.grantRole', { userId: opId, role: 'operator' }, { meta: { user: { id: userId, tenant_id: platformId } } });
+
         // Called from the platform organization, it writes into Ada's -- not the caller's own.
         await broker.call('identity.membership.assign', { userId: opId, organizationId: adaOrg, roleKey: 'member' }, asOp);
         expect(await roster()).toEqual(['ada:owner', 'op:member']);

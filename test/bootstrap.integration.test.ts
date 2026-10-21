@@ -292,7 +292,7 @@ describe('a fresh install, booted for real', () => {
         });
         expect(res.status).toBe(200);
         const who = await json(res) as { organizations: { name: string; roleKey: string }[] };
-        expect(who.organizations).toEqual([{ organizationId, name: 'Platform', roleKey: 'owner' }]);
+        expect(who.organizations).toEqual([{ organizationId, name: 'Platform', slug: 'platform', roleKey: 'owner' }]);
     });
 
     it('exposes and calls serve.repo.create, serve.part.create, serve.composition.create, and serve.expose.find -- all unreachable before this session\'s visibility fix', async () => {

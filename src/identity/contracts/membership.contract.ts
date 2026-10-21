@@ -77,7 +77,7 @@ export const membershipAssignContract = defineContract({
     dependencies: ['identity.membership', 'identity.organization', 'identity.user', 'identity.role'],
     visibility: 'public',
     destructive: true,
-    filePath: 'src/identity/tools/assignMembership.ts', concurrency: 'on-demand', permissions: ['operator'],
+    filePath: 'src/identity/tools/assignMembership.ts', concurrency: 'on-demand', permissions: ['admin'],
     print: (o) => `${o.userId} in ${o.organizationId}: ${o.roleKey ?? 'removed'}`,
 });
 
