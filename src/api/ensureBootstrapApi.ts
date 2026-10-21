@@ -112,7 +112,8 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'serve.artifact.get', role: 'operator' },
     { contract: 'serve.artifact.requestBuild', role: 'operator' },
     // A fresh install's first builds come from outside (no builder yet): artifact-build + artifact-import.
-    { contract: 'serve.artifact.importBuild', role: 'operator' },
+    { contract: 'serve.artifact.import_piece', role: 'operator' },
+    { contract: 'serve.artifact.import_finish', role: 'operator' },
 
     { contract: 'serve.composition.find', role: 'operator' },
     { contract: 'serve.composition.find_one', role: 'operator' },

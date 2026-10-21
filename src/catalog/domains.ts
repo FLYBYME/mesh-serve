@@ -29,6 +29,7 @@ export const CATALOG_DOMAINS = [
     'serve.part',
     'serve.composition',
     'serve.artifact',
+    'serve.artifactPiece',
     'serve.release',
     'serve.corePart',
     'serve.node',

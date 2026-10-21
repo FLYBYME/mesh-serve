@@ -10,6 +10,7 @@
  * filesystem fact rather than a same-process coincidence, since both nodes otherwise share one real
  * ~/.mesh/artifacts on the test runner's own disk.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +23,7 @@ import type { Database, IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
 
 import { CATALOG_DOMAINS } from '../src/catalog/domains.js';
+import type { ImportFinishInput } from '../src/catalog/contracts/artifact.contract.js';
 import { resolveHandler } from '../src/catalog/methods/resolveHandler.js';
 import { setTestArtifactDir, clearTestArtifactDirs } from '../src/catalog/methods/artifacts.js';
 import '../src/identity/contracts/organization.contract.js';
@@ -201,9 +203,22 @@ describe('a service part started on a node that never built it', () => {
         expect(await brokerA.call('serve.artifact.pull', { artifactHash: hash }, onB)).toEqual({ artifactHash: hash, from: 'port-a' });
     }, 30000);
 
-    describe('serve.artifact.importBuild -- a build made outside, brought in as if the builder made it', () => {
+    describe('serve.artifact.import_piece / import_finish -- a build made outside, brought in as if the builder made it', () => {
         const files = { 'register.js': 'export default async function register() { return "imported"; }\n', 'register.js.map': '{}' };
-        const asInput = (f: Record<string, string>) => Object.entries(f).map(([p, c]) => ({ path: p, contentBase64: Buffer.from(c).toString('base64') }));
+        /** The files sent in pieces as the CLI sends them, every piece on `pieceNode`, then import_finish on `onFinish`. */
+        const importBuild = async (
+            input: { partId: string; ref: string; commit: string; hash: string; wants?: string[]; pin?: boolean; files: Record<string, string> },
+            onFinish: { nodeID: string; meta: { tenant_id: string } },
+            pieceNode = 'port-b',
+        ) => {
+            const { newUploadId, sendFile } = await import('../src/catalog/methods/importPieces.js');
+            const uploadId = newUploadId();
+            const sent: ImportFinishInput['files'] = [];
+            for (const [p, c] of Object.entries(input.files)) {
+                sent.push(await sendFile(uploadId, p, Buffer.from(c), (piece) => brokerA.call('serve.artifact.import_piece', piece, { nodeID: pieceNode, meta: onFinish.meta })));
+            }
+            return brokerA.call('serve.artifact.import_finish', { ...input, uploadId, files: sent }, onFinish);
+        };
         const hashOf = async (f: Record<string, string>): Promise<string> => {
             const { hashOutput } = await import('../src/catalog/methods/build.js');
             return hashOutput(new Map(Object.entries(f).map(([p, c]) => [p, Buffer.from(c)]))).hash;
@@ -222,8 +237,9 @@ describe('a service part started on a node that never built it', () => {
             const partId = await newPart('imported');
             const hash = await hashOf(files);
             const onA = { nodeID: 'port-a', meta: { tenant_id: tenantId } };
-            const artifact = await brokerA.call('serve.artifact.importBuild', {
-                partId, ref: 'master', commit, hash, wants: ['identity.whoami'], pin: true, files: asInput(files),
+            // Its pieces sent to another node than the one that finishes: they meet in the database.
+            const artifact = await importBuild({
+                partId, ref: 'master', commit, hash, wants: ['identity.whoami'], pin: true, files,
             }, onA);
 
             expect(artifact).toMatchObject({ status: 'success', hash, builtOn: 'port-a', imported: true, commit, ref: 'master' });
@@ -249,7 +265,7 @@ describe('a service part started on a node that never built it', () => {
             const importOn = async (name: string, f: Record<string, string>): Promise<string> => {
                 const partId = await newPart(name);
                 const hash = await hashOf(f);
-                await brokerA.call('serve.artifact.importBuild', { partId, ref: 'master', commit, hash, files: asInput(f) }, onNode('port-a'));
+                await importBuild({ partId, ref: 'master', commit, hash, files: f }, onNode('port-a'));
                 return hash;
             };
             /** A build from before 10-09: on port-a's disk and in the database, on no other node. Pinned, so retention keeps it. */
@@ -428,19 +444,40 @@ describe('a service part started on a node that never built it', () => {
         it('refuses files that do not hash to what it claims', async () => {
             const partId = await newPart('tampered');
             const hash = await hashOf(files);
-            await expect(brokerA.call('serve.artifact.importBuild', {
-                partId, ref: 'master', commit, hash, files: asInput({ ...files, 'register.js': 'export default () => "changed";\n' }),
+            await expect(importBuild({
+                partId, ref: 'master', commit, hash, files: { ...files, 'register.js': 'export default () => "changed";\n' },
             }, { nodeID: 'port-a', meta: { tenant_id: tenantId } })).rejects.toThrow(/not the build it claims to be/);
+            // Refused or not, its pieces are gone.
+            expect(await brokerA.call('serve.artifactPiece.count', { query: {} }, { meta: { tenant_id: tenantId } })).toBe(0);
         }, 20000);
 
         it('refuses a path that leaves the build\'s folder', async () => {
             const partId = await newPart('escape');
             const evil = { '../outside.js': 'x' };
-            await expect(brokerA.call('serve.artifact.importBuild', {
-                partId, ref: 'master', commit, hash: await hashOf(evil), files: asInput(evil),
+            await expect(importBuild({
+                partId, ref: 'master', commit, hash: await hashOf(evil), files: evil,
             }, { nodeID: 'port-a', meta: { tenant_id: tenantId } })).rejects.toThrow(/not a path inside a build/);
             await expect(fs.access(path.join(dirA, 'outside.js'))).rejects.toThrow();
         }, 20000);
+
+        it('refuses a file missing a piece, naming it', async () => {
+            const partId = await newPart('short');
+            const hash = await hashOf(files);
+            const onA = { nodeID: 'port-a', meta: { tenant_id: tenantId } };
+            await expect(brokerA.call('serve.artifact.import_finish', {
+                uploadId: 'nothing-sent-1', partId, ref: 'master', commit, hash, files: [{ path: 'register.js', pieces: 2 }],
+            }, onA)).rejects.toThrow(/register\.js is not whole: 0 piece\(s\) received for 2, missing 0, 1/);
+        }, 20000);
+
+        it('takes a file bigger than one call, in several pieces', async () => {
+            const partId = await newPart('big');
+            // 3 MB of hex, ~1.5 MB gzipped: three pieces.
+            const big = { 'register.js': crypto.randomBytes(1_500_000).toString('hex') };
+            const hash = await hashOf(big);
+            const artifact = await importBuild({ partId, ref: 'master', commit, hash, files: big }, { nodeID: 'port-a', meta: { tenant_id: tenantId } });
+            expect(artifact).toMatchObject({ status: 'success', hash });
+            expect(await fs.readFile(path.join(dirA, hash, 'register.js'), 'utf8')).toBe(big['register.js']);
+        }, 30000);
     });
 
     it('refuses cleanly when no node is recorded as having built it', async () => {

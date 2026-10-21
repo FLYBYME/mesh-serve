@@ -31,7 +31,7 @@ const execFileAsync = promisify(execFile);
 
 export const repoWorkdir = path.join(os.homedir(), '.mesh', 'repos');
 
-type ArtifactAssetInput = z.infer<typeof artifactAssetSchema>;
+export type ArtifactAssetInput = z.infer<typeof artifactAssetSchema>;
 
 async function exists(p: string): Promise<boolean> {
     return fs.stat(p).then(() => true, () => false);
@@ -384,24 +384,49 @@ async function normalizeSourceMaps(outDir: string, checkoutDir: string): Promise
 /**
  * What a build *is*, from its files alone: the content hash (every relative path and its bytes,
  * sorted) and each file's asset entry with its sha384 integrity. The builder computes it here after
- * bundling; `serve.artifact.importBuild` computes it again from the files it is handed, so an imported
- * build is accepted only when it is byte-for-byte what it claims to be.
+ * bundling; `serve.artifact.import_finish` computes the same from the files on disk (`hashFolder`),
+ * so an imported build is accepted only when it is byte-for-byte what it claims to be.
  */
 export function hashOutput(contents: ReadonlyMap<string, Buffer>): { hash: string; assets: ArtifactAssetInput[] } {
-    // `<` on strings orders by UTF-16 code unit, exactly like the default sort() this always used.
-    const files = [...contents.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const files = [...contents.entries()].sort(([a], [b]) => byCodeUnit(a, b));
     const hasher = crypto.createHash('sha256');
     for (const [relPath, content] of files) {
         hasher.update(relPath);
         hasher.update(content);
     }
-    const assets: ArtifactAssetInput[] = files.map(([relPath, content]) => ({
+    const assets: ArtifactAssetInput[] = files.map(([relPath, content]) => assetOf(relPath, content));
+    return { hash: hasher.digest('hex'), assets };
+}
+
+/**
+ * `hashOutput` over files on disk, read one at a time: the same hash and assets, without ever
+ * holding the whole build. `relPaths` are forward-slash paths inside `dir`.
+ */
+export async function hashFolder(dir: string, relPaths: readonly string[]): Promise<{ hash: string; assets: ArtifactAssetInput[] }> {
+    const sorted = [...relPaths].sort(byCodeUnit);
+    const hasher = crypto.createHash('sha256');
+    const assets: ArtifactAssetInput[] = [];
+    for (const relPath of sorted) {
+        const content = await fs.readFile(path.join(dir, ...relPath.split('/')));
+        hasher.update(relPath);
+        hasher.update(content);
+        assets.push(assetOf(relPath, content));
+    }
+    return { hash: hasher.digest('hex'), assets };
+}
+
+/** `<` on strings orders by UTF-16 code unit, exactly like the default sort() this always used. */
+function byCodeUnit(a: string, b: string): number {
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function assetOf(relPath: string, content: Buffer): ArtifactAssetInput {
+    return {
         url: relPath,
         name: path.basename(relPath),
         fileExtension: path.extname(relPath) || undefined,
         integrity: `sha384-${crypto.createHash('sha384').update(content).digest('base64')}`,
-    }));
-    return { hash: hasher.digest('hex'), assets };
+    };
 }
 
 /**

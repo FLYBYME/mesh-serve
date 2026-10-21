@@ -10,11 +10,13 @@ import { ApiError, callApi } from '../core/apiClient.js';
 import { isLive, readSession } from '../core/session.js';
 import { artifactFolder } from '../../catalog/methods/artifacts.js';
 import { buildPart, buildService, hashOutput, type BuiltOutput } from '../../catalog/methods/build.js';
+import { newUploadId, sendFile } from '../../catalog/methods/importPieces.js';
+import type { ImportFinishInput } from '../../catalog/contracts/artifact.contract.js';
 import { runningVersion } from '../../catalog/methods/upgrade.js';
 
 /**
  * A build made outside the platform, as a folder: `manifest.json` plus `files/<path>`. What
- * `artifact-build` writes and `artifact-import` sends to `serve.artifact.importBuild`.
+ * `artifact-build` writes and `artifact-import` sends to `serve.artifact.import_piece` / `import_finish`.
  */
 const ManifestSchema = z.object({
     format: z.literal('mesh-serve-artifact@1'),
@@ -98,7 +100,8 @@ export class ArtifactBuildCommand extends BaseCommand {
 }
 
 /**
- * Sends a folder from `artifact-build` to `serve.artifact.importBuild` through the signed-in api. The
+ * Sends a folder from `artifact-build` through the signed-in api, file by file in pieces
+ * (`serve.artifact.import_piece`), then brings it in (`import_finish`). The
  * hash is checked here first, and again by the node that stores it.
  */
 export class ArtifactImportCommand extends BaseCommand {
@@ -135,17 +138,24 @@ export class ArtifactImportCommand extends BaseCommand {
             process.exitCode = 1;
             return;
         }
-        const call = session.descriptor?.calls.find((c) => c.key === 'serve.artifact.importBuild');
-        if (call === undefined) {
-            this.logger.error(`serve.artifact.importBuild is not exposed on ${session.descriptor?.host ?? session.apiUrl}.`);
+        const apiUrl = session.apiUrl;
+        const pieceCall = session.descriptor?.calls.find((c) => c.key === 'serve.artifact.import_piece');
+        const finishCall = session.descriptor?.calls.find((c) => c.key === 'serve.artifact.import_finish');
+        if (pieceCall === undefined || finishCall === undefined) {
+            this.logger.error(`serve.artifact.import_piece and import_finish are not both exposed on ${session.descriptor?.host ?? apiUrl}.`);
             process.exitCode = 1;
             return;
         }
 
         try {
-            const artifact = await callApi(session.apiUrl, call, {
-                partId: opts.partId, ref: m.ref, commit: m.commit, hash: m.hash, wants: m.wants, pin: opts.pin,
-                files: [...contents].map(([p, content]) => ({ path: p, contentBase64: content.toString('base64') })),
+            // One file at a time, in pieces under the api's 1 MB a call; then the build is brought in.
+            const uploadId = newUploadId();
+            const files: ImportFinishInput['files'] = [];
+            for (const [p, content] of contents) {
+                files.push(await sendFile(uploadId, p, content, (piece) => callApi(apiUrl, pieceCall, piece, session.token)));
+            }
+            const artifact = await callApi(apiUrl, finishCall, {
+                uploadId, partId: opts.partId, ref: m.ref, commit: m.commit, hash: m.hash, wants: m.wants, pin: opts.pin, files,
             }, session.token);
             console.log(JSON.stringify(artifact, null, 2));
         } catch (err) {

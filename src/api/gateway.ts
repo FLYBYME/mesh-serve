@@ -22,16 +22,11 @@ import { clientAddress, FormLimiter, formTiming } from './methods/formLimit.js';
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
 
-/** The most any call's request body may be: far above a real record create or update. */
+/**
+ * The most any call's request body may be: far above a real record create or update. No call
+ * carries more: a build comes in pieces (serve.artifact.import_piece), never one 32 MB body.
+ */
 export const BODY_LIMIT_BYTES = 1024 * 1024;
-/** The calls that carry more: a whole build, base64, for serve.artifact.importBuild. */
-const LARGE_BODY_LIMITS: Readonly<Record<string, number>> = {
-    'serve.artifact.importBuild': 32 * 1024 * 1024,
-};
-
-export function bodyLimitFor(contract: string): number {
-    return LARGE_BODY_LIMITS[contract] ?? BODY_LIMIT_BYTES;
-}
 
 interface Caller {
     readonly userId: string;
@@ -1126,7 +1121,7 @@ export class ApiGateway {
         await this.checkGate(route.row, route.contract, caller, organization, target.tenantId);
 
         // A public form's own measure of how long it was shown is the gateway's to check, never the service's.
-        const timing = formTiming(route.row.contract, await this.parseInput(req, route.params, bodyLimitFor(route.row.contract), route.contract.input));
+        const timing = formTiming(route.row.contract, await this.parseInput(req, route.params, BODY_LIMIT_BYTES, route.contract.input));
         const input = timing.input;
         trace.input = input;
 

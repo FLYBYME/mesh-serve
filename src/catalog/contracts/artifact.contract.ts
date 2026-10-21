@@ -1,6 +1,7 @@
 import { defineContract, defineCrud, defineEvent, z } from '@flybyme/mesh';
 
 import { artifactSchema } from '../schema/artifact.js';
+import { artifactPieceSchema, MAX_FILE_PIECES, MAX_PIECE_CHARS } from '../schema/artifactPiece.js';
 
 export const artifactCrud = defineCrud('serve.artifact', artifactSchema, {
     pluralPath: 'artifacts',
@@ -183,35 +184,89 @@ export const artifactRequestBuildContract = defineContract({
     print: (o) => `${o.id} (${o.status})`,
 });
 
-export const importInputSchema = z.object({
+/**
+ * The pieces of builds being imported. Never reachable from outside: import_piece writes them,
+ * import_finish reads and removes them. In the database, not on a disk, because every node runs
+ * serve.artifact and one import's calls land on different nodes.
+ */
+export const artifactPieceCrud = defineCrud('serve.artifactPiece', artifactPieceSchema, {
+    pluralPath: 'artifact-pieces',
+    scopedBy: 'tenantId',
+    visibility: {},
+    dependencies: [],
+    filePath: 'src/catalog/contracts/artifact.contract.ts',
+    permissions: ['operator'],
+});
+
+const uploadIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).describe('The import these pieces belong to, chosen by the sender (a random id), the same in every piece and in import_finish');
+const buildPathSchema = z.string().min(1).max(500).describe('Relative path inside the build, forward slashes, e.g. "register.js"');
+
+export const importPieceInputSchema = z.object({
+    uploadId: uploadIdSchema,
+    path: buildPathSchema,
+    index: z.number().int().min(0).max(MAX_FILE_PIECES - 1).describe('This piece\'s place in the file\'s gzipped bytes, from 0'),
+    data: z.string().min(1).max(MAX_PIECE_CHARS).regex(/^[A-Za-z0-9+/]*={0,2}$/, 'base64').describe('The piece, base64'),
+}).describe('One piece of one gzipped file of a build made outside');
+
+export const importPieceOutputSchema = z.object({
+    index: z.number().int(),
+    bytes: z.number().int().describe('The piece\'s size, decoded'),
+});
+
+/**
+ * One piece of one file of a build made outside, held until serve.artifact.import_finish. A build
+ * comes in as many small calls, never one: a whole build in one call (the old importBuild, up to
+ * 32 MB of JSON) ran core out of heap on 10-21.
+ */
+export const artifactImportPieceContract = defineContract({
+    domain: 'serve.artifact',
+    action: 'import_piece',
+    description: 'One piece of one gzipped file of a build made outside; the same file and index again replaces it. serve.artifact.import_finish brings the build in.',
+    inputSchema: importPieceInputSchema,
+    outputSchema: importPieceOutputSchema,
+    rest: { method: 'POST', path: '/artifacts/import_piece' },
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/catalog/tools/importArtifact.ts', concurrency: 'on-demand', permissions: ['operator'],
+    print: (o) => `piece ${o.index}: ${o.bytes} bytes`,
+});
+
+export type ImportPieceInput = z.infer<typeof artifactImportPieceContract.inputSchema>;
+export type ImportPieceOutput = z.infer<typeof artifactImportPieceContract.outputSchema>;
+
+export const importFinishInputSchema = z.object({
+    uploadId: uploadIdSchema,
     partId: z.string().min(1).describe('The serve.part this is a build of'),
     ref: z.string().min(1).describe('The git ref it was built from'),
     commit: z.string().regex(/^[0-9a-f]{40}$/).describe('The exact commit that ref resolved to'),
     hash: z.string().regex(/^[0-9a-f]{64}$/).describe('The build\'s content hash, as the builder computed it -- checked against the files'),
     wants: z.array(z.string()).optional().describe('The contracts the part calls (mesh.wants.json at build time), as the builder records them on the part'),
     files: z.array(z.object({
-        path: z.string().min(1).describe('Relative path inside the build, forward slashes, e.g. "register.js"'),
-        contentBase64: z.string().describe('The file\'s exact bytes'),
-    })).min(1).describe('Every file of the build'),
+        path: buildPathSchema,
+        pieces: z.number().int().min(1).max(MAX_FILE_PIECES).describe('How many pieces were sent for it, indexes 0 to pieces - 1'),
+        sha256: z.string().regex(/^[0-9a-f]{64}$/).optional().describe('The sha256 of its gzipped bytes, when the sender has it: checked before unzipping'),
+    })).min(1).max(1000).describe('Every file of the build'),
     pin: z.boolean().default(false).describe('Pin the part to this build once it is stored'),
-}).describe('A build made outside with the builder\'s own code (mesh-serve artifact-build)');
+}).describe('A build made outside with the builder\'s own code, whose files were sent with import_piece');
 
 /**
  * Brings in a build made outside -- `mesh-serve artifact-build`, which runs the builder's own
- * `buildService`/`buildPart` -- as if the queue had built it: owner, 2026-09-28, for the very first
- * builds of a fresh install (no builder exists yet) and any time a build is made elsewhere. The
- * content hash and every file's integrity are recomputed from the files themselves
- * (`methods/build.ts` `hashOutput`, the builder's own function); anything that does not match is
- * refused. Stored on the node that runs this, recorded `builtOn` that node, so every other node
- * pulls it from there exactly like a queue build.
+ * `buildService`/`buildPart`, or a workflow job -- as if the queue had built it: owner, 2026-09-28,
+ * for the very first builds of a fresh install (no builder exists yet) and any time a build is made
+ * elsewhere. Its files arrived as pieces (import_piece); each is joined, unzipped and written to
+ * disk one at a time, and the content hash and every file's integrity are computed from the files
+ * on disk (`methods/build.ts` `hashFolder`, the same sum as the builder's `hashOutput`); anything
+ * that does not match is refused. No node ever holds the whole build in memory. Stored on the node
+ * that runs this, recorded `builtOn` that node, so every other node pulls it from there exactly
+ * like a queue build.
  */
-export const artifactImportContract = defineContract({
+export const artifactImportFinishContract = defineContract({
     domain: 'serve.artifact',
-    action: 'importBuild',
-    description: 'Bring in a build made outside with the builder\'s own code, checked against its hash, as a successful build.',
-    inputSchema: importInputSchema,
+    action: 'import_finish',
+    description: 'Bring in a build made outside, from the pieces sent with import_piece, checked against its hash, as a successful build.',
+    inputSchema: importFinishInputSchema,
     outputSchema: artifactCrud.get.outputSchema,
-    rest: { method: 'POST', path: '/artifacts/importBuild' },
+    rest: { method: 'POST', path: '/artifacts/import_finish' },
     visibility: 'public',
     destructive: true,
     // What it stores is code a node will run: as trusted as requestBuild, and gated the same.
@@ -220,7 +275,7 @@ export const artifactImportContract = defineContract({
     timeout: 120_000,
 });
 
-export type ImportArtifactInput = z.infer<typeof artifactImportContract.inputSchema>;
+export type ImportFinishInput = z.infer<typeof artifactImportFinishContract.inputSchema>;
 
 export type RequestBuildInput = z.infer<typeof artifactRequestBuildContract.inputSchema>;
 export type RequestBuildOutput = z.infer<typeof artifactRequestBuildContract.outputSchema>;
