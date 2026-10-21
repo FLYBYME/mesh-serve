@@ -32,8 +32,17 @@ export async function ensure(input: AgentEnsureInput, ctx: IServiceContext): Pro
         throw new MeshError({ message: `${email} is not ${org.name}'s agent account.`, code: 'CONFLICT', status: 409 });
     }
 
-    // Its one membership: the agent role in its organization.
-    await ctx.call('identity.membership.assign', { organizationId: org.id, userId: user.id, roleKey: 'agent' });
+    // Its one membership: the agent role in its organization. Written here, not through
+    // identity.membership.assign: that checks a person's right to change a membership (an admin or
+    // owner of the organization), and the caller here is a service making its own account -- a
+    // service is no member (workflows' ci agent was refused, 10-21).
+    const memberships = ctx.db('identity.membership', { user: { id: user.id, tenant_id: org.id, organizationId: org.id } });
+    const membership = await memberships.findOne({ query: { userId: user.id } });
+    if (membership === undefined) {
+        await memberships.create({ userId: user.id, organizationId: org.id, roleKey: 'agent', invitedBy: ctx.meta?.user?.id ?? '', joinedAt: new Date() });
+    } else if (membership.roleKey !== 'agent') {
+        await memberships.update({ id: membership.id, roleKey: 'agent' });
+    }
 
     if (created) {
         ctx.logger.info(`[identity] agent account ${email} made for ${org.name}`);

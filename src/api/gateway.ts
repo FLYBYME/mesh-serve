@@ -1164,7 +1164,8 @@ export class ApiGateway {
             user: {
                 id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId,
                 ...(caller?.mailbox !== undefined ? { mailAddressId: caller.mailbox.mailAddressId, mailAddress: caller.mailbox.address } : {}),
-                ...(caller?.apiTokenId !== undefined ? { apiTokenId: caller.apiTokenId, apiTokenName: caller.agentName ?? '' } : {}),
+                ...(caller?.viaApiToken === true && caller.agentName !== undefined ? { apiTokenName: caller.agentName } : {}),
+                ...(caller?.apiTokenId !== undefined ? { apiTokenId: caller.apiTokenId } : {}),
             },
             client,
         };

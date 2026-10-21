@@ -54,6 +54,7 @@ export const agentTokenInputSchema = z.object({
     organizationId: z.string().min(1).describe('The organization the agent works for'),
     name: z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'lowercase letters, digits and dashes').describe('Which agent: dev, leader, builds'),
     tokenName: z.string().min(1).max(64).describe('The token\'s name: an earlier token of this name is revoked'),
+    expiresInMs: z.number().int().positive().optional().describe('How long it is valid for, from now (a workflow job\'s token: the job\'s own limit). Absent: until revoked'),
 });
 
 export const agentTokenOutputSchema = z.object({
@@ -81,3 +82,35 @@ export const agentTokenContract = defineContract({
 
 export type AgentTokenInput = z.infer<typeof agentTokenInputSchema>;
 export type AgentTokenOutput = z.infer<typeof agentTokenOutputSchema>;
+
+/**
+ * identity.agent.revoke -- an agent account's token of one name stops working (a workflow job's,
+ * when the job ends). Internal, like identity.agent.token: the service that asked for the token
+ * ends it; identity.apiToken.revoke is a person's own, or an operator's.
+ */
+export const agentRevokeInputSchema = z.object({
+    organizationId: z.string().min(1).describe('The organization the agent works for'),
+    name: z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'lowercase letters, digits and dashes').describe('Which agent'),
+    tokenName: z.string().min(1).max(64).describe('The token to revoke, by name'),
+});
+
+export const agentRevokeOutputSchema = z.object({
+    revoked: z.number().int().describe('Tokens revoked by this call -- 0 when none was live'),
+});
+
+export const agentRevokeContract = defineContract({
+    domain: 'identity.agent',
+    action: 'revoke',
+    description: 'Revoke an organization\'s agent account\'s token of one name. Internal: services only.',
+    inputSchema: agentRevokeInputSchema,
+    outputSchema: agentRevokeOutputSchema,
+    rest: { method: 'POST', path: '/identity/agents/revoke' },
+    dependencies: ['identity.user', 'identity.apiToken'],
+    visibility: 'internal',
+    destructive: true,
+    filePath: 'src/identity/tools/agentRevoke.ts', concurrency: 'on-demand', permissions: [],
+    print: (o) => `${o.revoked} revoked`,
+});
+
+export type AgentRevokeInput = z.infer<typeof agentRevokeInputSchema>;
+export type AgentRevokeOutput = z.infer<typeof agentRevokeOutputSchema>;

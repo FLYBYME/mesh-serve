@@ -29,7 +29,10 @@ export async function token(input: AgentTokenInput, ctx: IServiceContext): Promi
     const roles = [...held];
 
     const plaintext = issuedToken();
-    await tokens.create({ tokenHash: hashToken(plaintext), name: input.tokenName, userId: user.id, roles, organizationId: input.organizationId });
+    await tokens.create({
+        tokenHash: hashToken(plaintext), name: input.tokenName, userId: user.id, roles, organizationId: input.organizationId,
+        ...(input.expiresInMs !== undefined ? { expiresAt: new Date(Date.now() + input.expiresInMs) } : {}),
+    });
     ctx.logger.info(`[identity] ${email}: token "${input.tokenName}" issued, ${revoked} revoked`);
 
     return { userId: user.id, email, token: plaintext, roles, revoked };

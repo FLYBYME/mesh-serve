@@ -21,7 +21,7 @@ import '../src/identity/contracts/ticket.contract.js';
 import '../src/identity/contracts/apiToken.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 import '../src/identity/contracts/userToken.contract.js';
-import { agentTokenContract } from '../src/identity/contracts/agent.contract.js';
+import { agentRevokeContract, agentTokenContract } from '../src/identity/contracts/agent.contract.js';
 import '../src/queue/contracts/queue.contract.js';
 import { agentEmail } from '../src/identity/tools/ensureAgent.js';
 
@@ -146,7 +146,34 @@ describe('agent accounts', () => {
         await expect(broker.call('identity.agent.token', { organizationId: orgId, name: 'ghost', tokenName: 'x' }, asService)).rejects.toThrow(/No agent/);
     });
 
+    it('a service with no role of its own makes its organization\'s agent (workflows\' ci agent, 10-21)', async () => {
+        const asService = { meta: { user: { id: 'workflows', tenant_id: orgId } } };
+        const made = await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'ci' }, asService);
+        expect(await broker.call('identity.hasRole', { userId: made.userId, role: 'agent', organizationId: orgId }, asOperator())).toMatchObject({ granted: true });
+        expect((await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'ci' }, asService)).created).toBe(false);
+    });
+
+    it('a job\'s token lasts the job: it expires on its own, and its service revokes it when the job ends', async () => {
+        const asService = { meta: { user: { id: 'workflows', tenant_id: orgId } } };
+        await broker.call('identity.agent.ensure', { organizationId: orgId, name: 'ci' }, asService);
+
+        const short = await broker.call('identity.agent.token', { organizationId: orgId, name: 'ci', tokenName: 'job-short', expiresInMs: 1 }, asService);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await broker.call('identity.apiToken.validate', { token: short.token })).toMatchObject({ valid: false });
+
+        const job = await broker.call('identity.agent.token', { organizationId: orgId, name: 'ci', tokenName: 'job-1', expiresInMs: 60_000 }, asService);
+        expect(await broker.call('identity.apiToken.validate', { token: job.token })).toMatchObject({ valid: true, name: 'job-1' });
+
+        expect(await broker.call('identity.agent.revoke', { organizationId: orgId, name: 'ci', tokenName: 'job-1' }, asService)).toEqual({ revoked: 1 });
+        expect(await broker.call('identity.apiToken.validate', { token: job.token })).toMatchObject({ valid: false });
+        expect(await broker.call('identity.agent.revoke', { organizationId: orgId, name: 'ci', tokenName: 'job-1' }, asService)).toEqual({ revoked: 0 });
+
+        // Never a person's token, whatever its name.
+        expect(await broker.call('identity.agent.revoke', { organizationId: otherOrgId, name: 'leader', tokenName: 'job-1' }, asService)).toEqual({ revoked: 0 });
+    });
+
     it('is internal: no api can expose it', () => {
         expect(agentTokenContract.visibility).toBe('internal');
+        expect(agentRevokeContract.visibility).toBe('internal');
     });
 });
