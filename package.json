@@ -1,9 +1,8 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.10.77",
+    "version": "0.10.78",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
-    "private": true,
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
@@ -40,8 +39,8 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "github:FLYBYME/mesh#v4.14.4",
-        "@flybyme/mesh-web": "github:FLYBYME/mesh-web#v0.19.5",
+        "@flybyme/mesh": "^4.14.7",
+        "@flybyme/mesh-web": "^0.21.19",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
         "json-schema-to-zod": "^2.8.1",
@@ -57,5 +56,8 @@
         "typescript": "^5.9.3",
         "vitest": "^2.1.9"
     },
-    "license": "UNLICENSED"
+    "license": "UNLICENSED",
+    "publishConfig": {
+        "registry": "https://registry.surfdns.net/"
+    }
 }
