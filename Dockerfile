@@ -11,7 +11,11 @@ WORKDIR /app
 # package*.json existed at that point. Costs the layer-caching a bare package.json copy would
 # have bought; correctness first.
 COPY . .
-RUN npm ci
+# Our @flybyme packages come from registry.surfdns.net, which needs a read token: the builder hands
+# it in as the build secret `npmrc` (GitHub: the SURFDNS_NPMRC secret; surfdns.net: the job's own
+# read token), mounted for this one step and never in a layer. Without it npm ci 404s on
+# @flybyme/mesh (v0.10.78 and v0.10.79 never became images, 10-21).
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci
 # Dev deps (typescript, tsx, esbuild's CLI, vitest, ...) were needed to produce dist/ and
 # dist/parts/*.cjs above; nothing at runtime imports them, so they don't belong in the image.
 RUN npm prune --omit=dev

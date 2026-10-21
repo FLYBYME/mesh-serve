@@ -45,6 +45,10 @@ jobs:
         with:
           context: .
           push: true
+          # A read-only registry.surfdns.net token for our @flybyme packages, as an .npmrc (the
+          # Dockerfile mounts it for npm ci alone). Its own token, revocable alone (10-21).
+          secrets: |
+            "npmrc=${{ secrets.SURFDNS_NPMRC }}"
           tags: |
             ghcr.io/flybyme/mesh-serve:${{ github.ref_name }}
             ghcr.io/flybyme/mesh-serve:latest
