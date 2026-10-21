@@ -18,7 +18,7 @@ import '../src/identity/contracts/role.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 
 const DB_NAME = 'mesh-serve-membership-assign-test';
-const WS_PORT = 16611;
+const WS_PORT = 16613;
 
 describe('identity.membership.assign: only in an organization the caller runs', () => {
     let app: MeshApp;

@@ -22,5 +22,6 @@ export async function validateApiToken(
         ...(token.organizationId !== undefined ? { organizationId: token.organizationId } : {}),
         roles: token.roles,
         name: token.name,
+        id: token.id,
     };
 }

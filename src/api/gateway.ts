@@ -39,6 +39,8 @@ interface Caller {
     readonly viaApiToken: boolean;
     /** The api token's own name, when viaApiToken. Absent for a person; that absence is meaningful. */
     readonly agentName?: string;
+    /** The api token's own id, when viaApiToken: which token, not only whose (a workflow job's). */
+    readonly apiTokenId?: string;
     /** Informational only (a held call's frozen requestedBy, display) -- never trusted for a gate
      *  decision; checkGate always re-resolves fresh. */
     readonly roles: readonly string[];
@@ -635,6 +637,7 @@ export class ApiGateway {
         if (apiToken.valid && apiToken.userId !== undefined) {
             return {
                 userId: apiToken.userId, viaApiToken: true, agentName: apiToken.name,
+                ...(apiToken.id !== undefined ? { apiTokenId: apiToken.id } : {}),
                 roles: apiToken.roles ?? [],
             };
         }
@@ -1148,8 +1151,10 @@ export class ApiGateway {
             ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
             : organization;
         trace.organizationId = effectiveTenantId;
-        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone. Every
-        // call carries where it came from, so a service can record it (a sign-up's address and browser).
+        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone. A token's
+        // call carries which token, so a service can tell one of an account's tokens from another (a
+        // workflow job's token is that job). Every call carries where it came from, so a service can
+        // record it (a sign-up's address and browser).
         const agent = req.headers['user-agent'];
         const client = {
             address: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress),
@@ -1159,6 +1164,7 @@ export class ApiGateway {
             user: {
                 id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId,
                 ...(caller?.mailbox !== undefined ? { mailAddressId: caller.mailbox.mailAddressId, mailAddress: caller.mailbox.address } : {}),
+                ...(caller?.apiTokenId !== undefined ? { apiTokenId: caller.apiTokenId, apiTokenName: caller.agentName ?? '' } : {}),
             },
             client,
         };
