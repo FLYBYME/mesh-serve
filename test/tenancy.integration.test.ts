@@ -216,6 +216,12 @@ describe('a member\'s call runs in their own organization, never another', () =>
         expect((await res.json() as { organizations: { name: string }[] }).organizations.map((o) => o.name)).toEqual(['Peera']);
     });
 
+    it('whoami names each organization by its slug too: a page tells the platform\'s by it, never by its name', async () => {
+        const res = await fetch(`${ORIGIN}/api/identity/whoami`, { headers: { authorization: `Bearer ${token.ada}` } });
+        const body: unknown = await res.json();
+        expect(body).toMatchObject({ organizations: [{ name: 'Peera', slug: 'peera' }] });
+    });
+
     // Last: it changes Ada's password.
     it('keeps an activity log: changes and refusals, who and in which organization, never a password', async () => {
         // A refusal (Ada naming an organization she is not in) and a change (Ada setting her

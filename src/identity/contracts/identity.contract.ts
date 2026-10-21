@@ -11,6 +11,7 @@ export const whoamiOutputSchema = z.object({
     organizations: z.array(z.object({
         organizationId: z.string().describe('The organization\'s id'),
         name: z.string().describe('The organization\'s display name'),
+        slug: z.string().describe('The organization\'s slug, fixed when it was made; the platform\'s own is "platform" -- a page tells it by this, never by its name'),
         roleKey: z.string().describe('The caller\'s role in this organization'),
     })).describe('Every organization the caller belongs to, and their role in each'),
 }).describe('Who the caller is');

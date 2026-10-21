@@ -31,6 +31,7 @@ export async function whoami(
         return {
             organizationId: m.organizationId,
             name: org?.name ?? 'unknown',
+            slug: org?.slug ?? '',
             roleKey: m.roleKey,
         };
     }));
