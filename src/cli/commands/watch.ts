@@ -2,7 +2,7 @@ import type { Command as CommanderCommand } from 'commander';
 import { createFetchEventSource } from '@flybyme/mesh-web/net';
 
 import { BaseCommand } from '../core/BaseCommand.js';
-import { describeApi } from '../core/apiClient.js';
+import { describeApi, organizationHeader } from '../core/apiClient.js';
 import { isLive, readSession } from '../core/session.js';
 
 interface WatchOptions {
@@ -50,7 +50,10 @@ export class WatchCommand extends BaseCommand {
         const query = requested.length > 0 ? `?events=${encodeURIComponent(requested.join(','))}` : '';
         const token = isLive(session) ? session.token : undefined;
         const source = createFetchEventSource(`${apiUrl.replace(/\/+$/, '')}/api/events${query}`, {
-            headers: (): Record<string, string> => (token !== undefined ? { authorization: `Bearer ${token}` } : {}),
+            headers: (): Record<string, string> => ({
+                ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
+                ...organizationHeader(),
+            }),
         });
 
         const print = (event: string, data: string | undefined): void => {

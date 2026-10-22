@@ -91,6 +91,18 @@ function fillPath(pattern: string, input: Record<string, unknown>): { path: stri
 }
 
 /**
+ * Act in one of the caller's organizations, as a site page does (the gateway's x-organization):
+ * MESH_ORGANIZATION=<id> mesh-serve <call>. Unset, nothing is sent and the api picks as it always
+ * has. Every request the CLI makes as the signed-in account carries it -- calls and `watch` alike
+ * (watch once left it out: "This account belongs to several organizations", 10-22).
+ */
+export function organizationHeader(): Record<string, string> {
+    const organization = process.env.MESH_ORGANIZATION?.trim();
+
+    return organization !== undefined && organization !== '' ? { 'x-organization': organization } : {};
+}
+
+/**
  * GET and DELETE carry their input in the query string; everything else in a JSON body -- matching
  * `gateway.parseInput` exactly, including that an object-valued query parameter is JSON (the
  * gateway's `decodeQueryValue` tries `JSON.parse` on every value and keeps it when it yields an
@@ -110,10 +122,7 @@ export async function callApi(
     const init: RequestInit = { method, headers };
     if (token !== undefined) headers['Authorization'] = `Bearer ${token}`;
 
-    // Act in one of the caller's organizations, as a site page does (the gateway's x-organization):
-    // MESH_ORGANIZATION=<id> mesh-serve <call>. Unset, the call runs where it always has.
-    const organization = process.env.MESH_ORGANIZATION?.trim();
-    if (organization !== undefined && organization !== '') headers['x-organization'] = organization;
+    Object.assign(headers, organizationHeader());
 
     if (method === 'GET' || method === 'DELETE') {
         const query = new URLSearchParams();
