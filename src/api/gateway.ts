@@ -18,6 +18,7 @@ import { answerHealth } from './health.js';
 import { formatTraceparent, newSpanId, newTraceId, readTraceparent } from './methods/traceparent.js';
 import { Recent } from './recent.js';
 import { clientAddress, FormLimiter, formTiming } from './methods/formLimit.js';
+import { secretFieldOf } from './methods/secretField.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -211,6 +212,8 @@ export class ApiGateway {
     private readonly roles = new Recent<boolean>(15_000);
     /** Each account's organizations (callOrganization), as briefly as a role. */
     private readonly memberOf = new Recent<readonly string[]>(15_000);
+    /** Whether an organization lets its tokens make a call at once (serve.hold.allow), as briefly as a role. */
+    private readonly allowedCalls = new Recent<boolean>(15_000);
     /** Public forms per client address (methods/formLimit.ts). */
     private readonly formLimits = new FormLimiter();
     /** Each target's descriptor, built once rather than on every request (it hashes every schema). */
@@ -652,6 +655,13 @@ export class ApiGateway {
         return this.memberOf.get(userId, async () => {
             const who = await this.broker.call('identity.whoami', {}, { meta: { user: { id: userId, tenant_id: '', organizationId: '' } } });
             return who.organizations.map((o) => o.organizationId);
+        });
+    }
+
+    private allowedByOrganization(tenantId: string, call: string): Promise<boolean> {
+        return this.allowedCalls.get(`${tenantId}\u0000${call}`, async () => {
+            const rule = await this.broker.call('serve.holdRule.find_one', { query: { call } }, { meta: { tenant_id: tenantId } });
+            return rule !== undefined && rule !== null;
         });
     }
 
@@ -1262,10 +1272,26 @@ export class ApiGateway {
         // deliberately never marked destructive, so an operator's own decision can't recursively hold.
         // The one exception is an operator's standing approval on this exposure row (serve.expose.hold,
         // `unheld`): the approved list, one visible row per contract.
-        if (caller?.viaApiToken === true && route.contract.destructive === true && route.row.unheld === true) {
+        // The organization's own admins may approve a call for their tokens too (serve.hold.allow):
+        // what their agents do on their own is theirs to say, not only the platform operator's.
+        const tokenDestructive = caller?.viaApiToken === true && route.contract.destructive === true;
+        const approved = tokenDestructive
+            && (route.row.unheld === true || await this.allowedByOrganization(effectiveTenantId, route.row.contract));
+        if (tokenDestructive && approved) {
             this.broker.logger.debug(`[api] ${route.row.contract}: token call by ${caller.userId} runs at once (approved, not held)`);
         }
-        if (caller?.viaApiToken === true && route.contract.destructive === true && route.row.unheld !== true) {
+        if (tokenDestructive && !approved) {
+            // A hold keeps the call's input as it came, to replay it: never a secret. Such a call
+            // runs only once it is approved for the organization's tokens (or made signed in).
+            const secret = secretFieldOf(input);
+            if (secret !== undefined) {
+                throw new MeshError({
+                    message: `${route.row.contract} carries a secret ("${secret}"), and a held call is kept as it came: it is never held. An admin of the organization allows it for its agents (serve.hold.allow), or someone signed in makes it.`,
+                    code: 'SECRET_NOT_HELD',
+                    status: 409,
+                });
+            }
+
             const held = await this.placeOnHold(route, caller, target, input, effectiveTenantId);
             res.setHeader('Content-Type', 'application/json');
             res.statusCode = 202;

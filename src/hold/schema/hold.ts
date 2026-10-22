@@ -24,4 +24,16 @@ export const holdSchema = z.object({
     reason: z.string().optional().describe('Why it was rejected, if the decider gave one'),
     result: z.unknown().optional().describe('The replayed call\'s own result, once released'),
     error: z.string().optional().describe('The replayed call\'s own error message, if releasing it failed'),
-}).describe('A call an agent asked to make, frozen and held until an operator decides it');
+}).describe('A call an agent asked to make, frozen and held until an operator or an admin of its organization decides it');
+
+/**
+ * An organization's standing approval of one call: its api tokens' calls to it run at once instead
+ * of being held (serve.hold.allow). Set by the organization's own admins -- what its agents may do
+ * on their own -- beside the operator's api-wide `unheld` on an exposure row.
+ */
+export const holdRuleSchema = z.object({
+    tenantId: z.string().describe('The organization whose tokens it covers'),
+    call: z.string().min(1).describe('The domain.action contract that runs at once'),
+    setBy: z.string().describe('The account that allowed it'),
+    setAt: z.coerce.date(),
+}).describe('One call an organization\'s api tokens make without being held');
