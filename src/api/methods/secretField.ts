@@ -5,6 +5,10 @@
  */
 const SECRET_NAMES = /^(secret|password|passphrase|token|apiKey|privateKey|clientSecret|credentials?)$/i;
 
+export function isSecretName(name: string): boolean {
+    return SECRET_NAMES.test(name);
+}
+
 export function secretFieldOf(input: Readonly<Record<string, unknown>>): string | undefined {
-    return Object.keys(input).find((key) => SECRET_NAMES.test(key) && typeof input[key] === 'string' && input[key] !== '');
+    return Object.keys(input).find((key) => isSecretName(key) && typeof input[key] === 'string' && input[key] !== '');
 }
