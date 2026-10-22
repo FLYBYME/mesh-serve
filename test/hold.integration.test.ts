@@ -293,4 +293,32 @@ describe('the approved list: destructive token calls are held, unless an operato
         expect(decided.status).toBe('released');
         expect(decided.result).toEqual({ name: 'peera-job', receivedSecret: 'peera-real-secret' });
     });
+
+    it('an operator removes decided holds by id, in any organization; a held one and an unknown id are refused', async () => {
+        expect(broker.contractDeclaration('serve.hold.remove')?.permissions).toEqual(['operator']);
+
+        const other = (await broker.call('identity.organization.create', { slug: 'other-remove', name: 'Other', ownerId: operator })).id;
+        const otherMeta = { meta: { tenant_id: other } };
+        const row = (status: 'held' | 'rejected') => ({
+            tenantId: other, call: 'testEcho.replay', host: 'api.localhost',
+            input: { name: 'old', secret: 'dead-value' },
+            requestedBy: { userId: 'u', roles: ['admin'] }, status,
+            requestedAt: new Date(), expiresAt: new Date(Date.now() + 60_000),
+        });
+        const rejected = await broker.call('serve.hold.create', row('rejected'), otherMeta);
+        const held = await broker.call('serve.hold.create', row('held'), otherMeta);
+
+        const asOperator = { meta: { user: { id: 'op', roles: ['operator'], tenant_id: platform, organizationId: platform } } };
+        const out = await broker.call('serve.hold.remove', { ids: [rejected.id, held.id, 'no-such-hold'] }, asOperator);
+
+        expect(out.removed).toEqual([rejected.id]);
+        expect(out.refused).toEqual([
+            { id: held.id, why: 'still held: decide it first' },
+            { id: 'no-such-hold', why: 'not found' },
+        ]);
+
+        const left = (await broker.call('serve.hold.all', {}, asOperator)).map((h) => h.id);
+        expect(left).not.toContain(rejected.id);
+        expect(left).toContain(held.id);
+    });
 });

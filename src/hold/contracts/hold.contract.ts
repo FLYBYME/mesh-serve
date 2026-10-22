@@ -203,3 +203,36 @@ export const holdAllContract = defineContract({
 
 export type HoldAllInput = z.infer<typeof holdAllContract.inputSchema>;
 export type HoldAllOutput = z.infer<typeof holdAllContract.outputSchema>;
+
+export const holdRemoveInputSchema = z.object({
+    ids: z.array(z.string().min(1)).min(1).max(100).describe('The holds to remove, by id: each must be decided already (released, rejected or expired)'),
+});
+
+export const holdRemoveOutputSchema = z.object({
+    removed: z.array(z.string()).describe('The ids removed'),
+    refused: z.array(z.object({ id: z.string(), why: z.string() })).describe('The ids left, and why: not found, or still held'),
+});
+
+/**
+ * serve.hold.remove -- operator only: decided holds, by exact id, gone. A hold kept from before
+ * v0.10.85 can carry a secret in its input (10-22: Peera's token and a node's password, both dead
+ * since); nothing else removed a row. A hold still `held` is never removed: it is decided first.
+ */
+export const holdRemoveContract = defineContract({
+    domain: 'serve.hold',
+    action: 'remove',
+    description: 'Operator: removes decided holds (released, rejected, expired) by id; a held one is refused.',
+    inputSchema: holdRemoveInputSchema,
+    outputSchema: holdRemoveOutputSchema,
+    rest: { method: 'POST', path: '/hold/remove' },
+    visibility: 'public',
+    destructive: true,
+    dependencies: ['serve.hold'],
+    filePath: 'src/hold/tools/remove.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: (o) => `${o.removed.length} removed, ${o.refused.length} refused`,
+});
+
+export type HoldRemoveInput = z.infer<typeof holdRemoveContract.inputSchema>;
+export type HoldRemoveOutput = z.infer<typeof holdRemoveContract.outputSchema>;
