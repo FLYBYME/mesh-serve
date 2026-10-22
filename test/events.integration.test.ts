@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoClient } from 'mongodb';
 import {
-    BrokerModule, DatabaseModule, defineEvent, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule,
+    BrokerModule, DatabaseModule, defaultPrint, defineContract, defineEvent, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule,
     PlacementRegistry, RegistryModule, z,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
@@ -51,9 +51,49 @@ const startedEvent = defineEvent('eventstest.started', z.object({
     tenantId: z.string(), partId: z.string(), key: z.string(), nodeID: z.string(),
 }), { scopedBy: 'tenantId' });
 
+const sessionReplySchema = z.object({
+    valid: z.boolean(),
+    role: z.string().optional(),
+    subjectId: z.string().optional(),
+    organizationId: z.string().optional(),
+    fields: z.record(z.string(), z.string()).optional(),
+});
+type SessionReply = z.infer<typeof sessionReplySchema>;
+
+const sessionValidateContract = (domain: string) => defineContract({
+    domain,
+    action: 'session_validate',
+    description: `test: a ${domain} session`,
+    inputSchema: z.object({ token: z.string() }),
+    outputSchema: sessionReplySchema,
+    rest: { method: 'POST', path: `/${domain}/session_validate` },
+    filePath: 'test/events.integration.test.ts',
+    concurrency: 'on-demand',
+    permissions: [],
+    visibility: 'internal',
+    print: defaultPrint,
+});
+
+declare global {
+    interface IServiceToolRegistry {
+        'partsession.session_validate': { params: { token: string }; returns: SessionReply };
+    }
+}
+
+const boxedEvent = defineEvent('eventstest.boxed', z.object({
+    tenantId: z.string(),
+    box: z.string().optional(),
+}), { scopedBy: 'tenantId', permissions: ['partsession'] });
+
+const memberOnlyEvent = defineEvent('eventstest.memberonly', z.object({
+    tenantId: z.string(),
+}), { scopedBy: 'tenantId', permissions: ['member'] });
+
 declare module '@flybyme/mesh' {
     interface EventRegistry {
         'eventstest.started': z.infer<typeof startedEvent.schema>;
+        'eventstest.boxed': z.infer<typeof boxedEvent.schema>;
+        'eventstest.memberonly': z.infer<typeof memberOnlyEvent.schema>;
     }
 }
 
@@ -142,6 +182,15 @@ describe('/api/events', () => {
 
         await broker.call('identity.role.ensureBuiltins', {});
 
+        await broker.call('identity.role.create', {
+            key: 'partsession',
+            name: 'Part Session',
+            scope: 'organization',
+            builtin: false,
+            inherits: [],
+            permissions: [],
+        });
+
         const operator = await broker.call('identity.user.create', {
             email: 'op@events.invalid', displayName: 'Op', passwordHash: await hashPassword(PASSWORD),
             roles: ['operator'], provisional: false,
@@ -164,6 +213,32 @@ describe('/api/events', () => {
         const meta = { meta: { tenant_id: org.id } };
         await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'serve.part.failed', role: 'operator' }, meta);
         await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'eventstest.started', public: true }, meta);
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'eventstest.boxed', role: 'partsession' }, meta);
+        await broker.call('serve.expose.add', { apiId, kind: 'event', contract: 'eventstest.memberonly', role: 'member' }, meta);
+
+        broker.registerContract(sessionValidateContract('partsession'), async (input) => {
+            if (input.token === 'token-box-a') {
+                return {
+                    valid: true,
+                    role: 'partsession',
+                    subjectId: 'sub-a',
+                    organizationId: org.id,
+                    fields: { box: 'a' },
+                };
+            }
+
+            if (input.token === 'token-box-b') {
+                return {
+                    valid: true,
+                    role: 'partsession',
+                    subjectId: 'sub-b',
+                    organizationId: org.id,
+                    fields: { box: 'b' },
+                };
+            }
+
+            return { valid: false };
+        });
 
         for (const [email, target] of [['op@events.invalid', 'operator'], ['member@events.invalid', 'member']] as const) {
             const res = await fetch(`${ORIGIN}/api/identity/ticket`, {
@@ -258,6 +333,60 @@ describe('/api/events', () => {
         await stream.waitFor('"key":"after"');
         expect(stream.received()).not.toContain('no-tenant');
         stream.close();
+    });
+
+    it('streams an event with box: a only to the session with box: a, and one with no box to neither', async () => {
+        const streamA = await subscribe('?events=eventstest.boxed', 'token-box-a');
+
+        expect(streamA.status).toBe(200);
+
+        await streamA.waitFor(': open');
+
+        const streamB = await subscribe('?events=eventstest.boxed', 'token-box-b');
+
+        expect(streamB.status).toBe(200);
+
+        await streamB.waitFor(': open');
+
+        broker.emit('eventstest.boxed', { tenantId: orgId, box: 'a' });
+
+        await streamA.waitFor('"box":"a"');
+
+        await settle();
+
+        expect(streamB.received()).not.toContain('"box":"a"');
+
+        broker.emit('eventstest.boxed', { tenantId: orgId });
+
+        broker.emit('eventstest.boxed', { tenantId: orgId, box: 'b' });
+
+        await streamB.waitFor('"box":"b"');
+
+        await settle();
+
+        expect(streamA.received()).not.toContain('"box":"b"');
+
+        expect(streamA.received()).not.toContain(`{"tenantId":"${orgId}"}`);
+
+        expect(streamB.received()).not.toContain(`{"tenantId":"${orgId}"}`);
+
+        streamA.close();
+
+        streamB.close();
+    });
+
+    it('refuses a session an event gated on a role it does not have, and on operator', async () => {
+        const onOperator = await subscribe('?events=serve.part.failed', 'token-box-a');
+
+        expect(onOperator.status).toBe(403);
+
+        expect(onOperator.body).toMatch(/requires role \\?"operator\\?"/);
+
+        const onMember = await subscribe('?events=eventstest.memberonly', 'token-box-a');
+
+        expect(onMember.status).toBe(403);
+
+        expect(onMember.body).toMatch(/requires role \\?"member\\?"/);
     });
 
     // Last: it exposes more events, which the tests above list exactly.

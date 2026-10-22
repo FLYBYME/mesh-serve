@@ -1086,11 +1086,25 @@ export class ApiGateway {
             // The definition's own gate and the row's, both -- as a call's contract floor and row.
             // An operator passes every gate, as on a call (checkGate).
             const required = [...new Set([...(eventPermissions(name) ?? []), ...(row.role !== undefined ? [row.role] : [])])];
+
             if (required.length > 0) {
                 if (caller === undefined) {
                     omitted.push({ name, reason: `requires role "${required.join('" and "')}" -- not signed in` });
                     continue;
                 }
+
+                if (caller.session !== undefined) {
+                    const role = caller.session.role;
+                    const missing = required.find((r) => r !== role);
+                    if (missing !== undefined) {
+                        omitted.push({ name, reason: `requires role "${missing}"` });
+                        continue;
+                    }
+
+                    events.push(name);
+                    continue;
+                }
+
                 const operator = await holds(caller, 'operator');
                 const missing = await firstMissing(caller, operator ? [] : required);
                 if (missing !== undefined) {
@@ -1098,6 +1112,7 @@ export class ApiGateway {
                     continue;
                 }
             }
+
             events.push(name);
         }
 
@@ -1110,10 +1125,17 @@ export class ApiGateway {
 
         // The scope is re-read on every recheck: a member removed from the organization stops
         // receiving its events on the next beat (the recheck then fails, and the stream ends).
-        const subscriberFor = async (who: Caller | undefined): Promise<Subscriber> => ({
-            scope: await scopeOf(who),
-            operator: who !== undefined && await this.holdsRole(who.userId, 'operator', target.tenantId),
-        });
+        const subscriberFor = async (who: Caller | undefined): Promise<Subscriber> => {
+            const scope = await scopeOf(who);
+
+            const operator = who !== undefined && who.session === undefined && await this.holdsRole(who.userId, 'operator', target.tenantId);
+
+            return {
+                scope,
+                operator,
+                ...(who?.session !== undefined ? { fields: who.session.fields } : {}),
+            };
+        };
 
         const stream = openStream({
             res,
@@ -1127,11 +1149,21 @@ export class ApiGateway {
             // to lose. Roles are re-read, so a revoked operator stops seeing other tenants' events.
             recheck: async () => {
                 const current = await this.resolveCaller(req);
-                if (caller !== undefined && current === undefined) return undefined;
+                if (caller !== undefined && current === undefined) {
+                    return undefined;
+                }
+
+                if (caller?.session !== undefined && current?.session === undefined) {
+                    return undefined;
+                }
+
                 // Refused now (no longer a member of the organization it streams): end it. Any
                 // other failure stays a blip, which openStream rides out.
                 return subscriberFor(current).catch((err: unknown) => {
-                    if (isMeshError(err) && (err.status === 403 || err.status === 400)) return undefined;
+                    if (isMeshError(err) && (err.status === 403 || err.status === 400)) {
+                        return undefined;
+                    }
+
                     throw err;
                 });
             },

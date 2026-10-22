@@ -23,6 +23,8 @@ export interface Subscriber {
     readonly scope: string;
     /** Sees every organization's events -- but still never an unscopable one. */
     readonly operator: boolean;
+    /** A part session's own fields (optional, only for a session). */
+    readonly fields?: Record<string, string>;
 }
 
 export type Delivery =
@@ -31,10 +33,29 @@ export type Delivery =
 
 export function decideDelivery(name: string, payload: unknown, subscriber: Subscriber): Delivery {
     const occurrence = scopeOfOccurrence(name, payload);
-    if (occurrence === undefined) return { deliver: false, reason: 'unscopable' };
-    if ('global' in occurrence) return { deliver: true };
-    if (subscriber.operator) return { deliver: true };
-    return occurrence.scope === subscriber.scope ? { deliver: true } : { deliver: false, reason: 'out-of-scope' };
+    if (occurrence === undefined) {
+        return { deliver: false, reason: 'unscopable' };
+    }
+
+    const inScope = 'global' in occurrence || subscriber.operator || occurrence.scope === subscriber.scope;
+    if (inScope === false) {
+        return { deliver: false, reason: 'out-of-scope' };
+    }
+
+    if (subscriber.fields !== undefined) {
+        if (typeof payload !== 'object' || payload === null) {
+            return { deliver: false, reason: 'out-of-scope' };
+        }
+
+        for (const [key, value] of Object.entries(subscriber.fields)) {
+            const actual = Reflect.get(payload, key);
+            if (actual !== value) {
+                return { deliver: false, reason: 'out-of-scope' };
+            }
+        }
+    }
+
+    return { deliver: true };
 }
 
 /** An event this subscription will not receive, and why -- sent before anything else. */
