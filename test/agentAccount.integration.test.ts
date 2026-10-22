@@ -172,6 +172,40 @@ describe('agent accounts', () => {
         expect(await broker.call('identity.agent.revoke', { organizationId: otherOrgId, name: 'leader', tokenName: 'job-1' }, asService)).toEqual({ revoked: 0 });
     });
 
+    it('an organization\'s admin makes its own agent, as a member of that organization, and gets its token (Peera, 10-22)', async () => {
+        // As the api's gateway calls for an admin of orgId: the call's organization is theirs.
+        const asAdmin = { meta: { user: { id: 'admin-of-father-tom', tenant_id: orgId, organizationId: orgId } } };
+
+        const made = await broker.call('identity.agent.save', { name: 'peera', displayName: 'Peera' }, asAdmin);
+        expect(made).toMatchObject({ organizationId: orgId, name: 'peera', email: agentEmail(orgId, 'peera'), role: 'member', created: true });
+        expect(await broker.call('identity.hasRole', { userId: made.userId, role: 'member', organizationId: orgId }, asOperator())).toMatchObject({ granted: true });
+        // Never more than a member, and nothing in another organization.
+        expect(await broker.call('identity.hasRole', { userId: made.userId, role: 'admin', organizationId: orgId }, asOperator())).toMatchObject({ granted: false });
+        expect(await broker.call('identity.hasRole', { userId: made.userId, role: 'member', organizationId: otherOrgId }, asOperator())).toMatchObject({ granted: false });
+
+        const issued = await broker.call('identity.agent.issue', { name: 'peera', tokenName: 'peera-bridge' }, asAdmin);
+        expect(issued).toMatchObject({ userId: made.userId, roles: ['member'], revoked: 0 });
+        const checked = await broker.call('identity.apiToken.validate', { token: issued.token });
+        expect(checked).toMatchObject({ valid: true, userId: made.userId, organizationId: orgId });
+
+        // Its role is the admin's to change, both ways; the account stays the same.
+        const narrowed = await broker.call('identity.agent.save', { name: 'peera', role: 'agent' }, asAdmin);
+        expect(narrowed).toMatchObject({ userId: made.userId, role: 'agent', created: false });
+        expect(await broker.call('identity.hasRole', { userId: made.userId, role: 'member', organizationId: orgId }, asOperator())).toMatchObject({ granted: false });
+    });
+
+    it('an admin\'s agent is always their own organization\'s: the organization is the call\'s, never an input', async () => {
+        const asAdmin = { meta: { user: { id: 'admin-of-father-tom', tenant_id: orgId, organizationId: orgId } } };
+
+        await expect(broker.callNamed('identity.agent.save', { name: 'x', organizationId: otherOrgId }, asAdmin)).rejects.toThrow(/organizationId/);
+        await expect(broker.callNamed('identity.agent.save', { name: 'x', role: 'admin' }, asAdmin)).rejects.toThrow(/role/);
+        // Another organization's agent is not theirs to issue for.
+        await broker.call('identity.agent.ensure', { organizationId: otherOrgId, name: 'helper' }, asOperator());
+        await expect(broker.call('identity.agent.issue', { name: 'helper', tokenName: 't' }, asAdmin)).rejects.toThrow(/No agent/);
+        // A person's address is never taken over.
+        await expect(broker.call('identity.agent.save', { name: 'leader' }, { meta: { user: { id: 'a', tenant_id: otherOrgId, organizationId: otherOrgId } } })).rejects.toThrow(/not .*agent account/);
+    });
+
     it('is internal: no api can expose it', () => {
         expect(agentTokenContract.visibility).toBe('internal');
         expect(agentRevokeContract.visibility).toBe('internal');

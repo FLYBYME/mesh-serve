@@ -112,5 +112,64 @@ export const agentRevokeContract = defineContract({
     print: (o) => `${o.revoked} revoked`,
 });
 
+/**
+ * identity.agent.save / identity.agent.issue -- an organization's admins make their own agent
+ * accounts and get their tokens (owner, 10-22: Peera, a customer, needs an agent of its own that
+ * works as a member would, and only the operator could make one).
+ *
+ * The caller's own organization only, never another's: it is the call's organization, not an input.
+ * The role is the admin's choice: `member` for an employee that works as a member of the
+ * organization would (never an admin: an agent never manages people or the organization), `agent`
+ * for one that reaches only what is exposed for agents. The admin sees the token once, as with
+ * their own (identity.apiToken.issue).
+ */
+const AGENT_NAME = z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'lowercase letters, digits and dashes');
+
+export const agentSaveInputSchema = z.object({
+    name: AGENT_NAME.describe('Which agent: peera, bookkeeper'),
+    displayName: z.string().min(1).max(80).optional().describe('How it is shown: "Peera"'),
+    role: z.enum(['member', 'agent']).default('member').describe('member: works as a member of your organization would; agent: only what is exposed for agents'),
+}).strict();
+
+export const agentSaveOutputSchema = agentEnsureOutputSchema.extend({ role: z.enum(['member', 'agent']) });
+
+export const agentSaveContract = defineContract({
+    domain: 'identity.agent',
+    action: 'save',
+    description: 'Make one of your organization\'s agent accounts, or change its role: an account with no password that acts only by its tokens, as a member of your organization (or with the narrow agent role).',
+    inputSchema: agentSaveInputSchema,
+    outputSchema: agentSaveOutputSchema,
+    rest: { method: 'POST', path: '/identity/agents/save' },
+    dependencies: ['identity.user', 'identity.organization', 'identity.membership', 'identity.role'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/agentOwn.ts', concurrency: 'on-demand', permissions: ['admin'],
+    print: (o) => `${o.email} (${o.userId}), ${o.role}${o.created ? ', made' : ''}`,
+});
+
+export const agentIssueInputSchema = z.object({
+    name: AGENT_NAME.describe('Which of your organization\'s agents'),
+    tokenName: z.string().min(1).max(64).describe('The token\'s name: an earlier token of this name stops working'),
+    expiresInDays: z.number().int().min(1).max(365).default(90),
+}).strict();
+
+export const agentIssueContract = defineContract({
+    domain: 'identity.agent',
+    action: 'issue',
+    description: 'A token for one of your organization\'s agent accounts, with the roles it holds there; an earlier token of the same name stops working. Shown once.',
+    inputSchema: agentIssueInputSchema,
+    outputSchema: agentTokenOutputSchema,
+    rest: { method: 'POST', path: '/identity/agents/issue' },
+    dependencies: ['identity.user', 'identity.organization', 'identity.membership', 'identity.apiToken', 'identity.role'],
+    visibility: 'public',
+    destructive: true,
+    filePath: 'src/identity/tools/agentOwn.ts', concurrency: 'on-demand', permissions: ['admin'],
+    print: (o) => `${o.email}: a token issued (${o.revoked} revoked), roles ${o.roles.join(', ')}`,
+});
+
+export type AgentSaveInput = z.infer<typeof agentSaveInputSchema>;
+export type AgentSaveOutput = z.infer<typeof agentSaveOutputSchema>;
+export type AgentIssueInput = z.infer<typeof agentIssueInputSchema>;
+
 export type AgentRevokeInput = z.infer<typeof agentRevokeInputSchema>;
 export type AgentRevokeOutput = z.infer<typeof agentRevokeOutputSchema>;
