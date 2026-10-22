@@ -68,7 +68,9 @@ describe('a node\'s inspector (owner, 10-16: a debug websocket for profiling)', 
     });
 
     it('in a pod, the tunnel goes through kubectl port-forward to that pod', () => {
-        expect(reachCommands({ name: 'mesh-edge1-edge-node-0', namespace: 'surfdns-system' }))
-            .toContain('sudo k3s kubectl -n surfdns-system port-forward pod/mesh-edge1-edge-node-0 9229:9229');
+        expect(reachCommands({ name: 'node-0', namespace: 'system' }))
+            .toContain('kubectl -n system port-forward pod/node-0 9229:9229');
+        // The install's account is not named: mesh-serve knows no install.
+        expect(reachCommands({ name: 'node-0', namespace: 'system' })).toContain('<you>@');
     });
 });

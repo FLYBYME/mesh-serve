@@ -37,12 +37,15 @@ export function podOf(env: NodeJS.ProcessEnv = process.env, hostname: string = o
     return { name: hostname, namespace };
 }
 
-/** The commands that reach it from a laptop: ssh to the machine and, in a pod, port-forward into it. */
+/**
+ * The commands that reach it from a laptop: ssh to the machine and, in a pod, port-forward into it.
+ * The account and how kubectl is run on the machine are the install's own, so they are left to fill in.
+ */
 export function reachCommands(pod: { name: string; namespace: string } | undefined): string {
     const port = INSPECT_PORT;
     const tunnel = pod === undefined
-        ? `ssh -N -L ${port}:127.0.0.1:${port} surfdns@<this machine>`
-        : `ssh -L ${port}:127.0.0.1:${port} surfdns@<the machine it runs on> sudo k3s kubectl -n ${pod.namespace} port-forward pod/${pod.name} ${port}:${port}`;
+        ? `ssh -N -L ${port}:127.0.0.1:${port} <you>@<this machine>`
+        : `ssh -L ${port}:127.0.0.1:${port} <you>@<the machine it runs on> kubectl -n ${pod.namespace} port-forward pod/${pod.name} ${port}:${port}`;
 
     return `${tunnel}\nthen chrome://inspect -> Configure -> localhost:${port} (or any DevTools client)`;
 }

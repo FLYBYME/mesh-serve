@@ -28,6 +28,22 @@ const EXPOSE_PAGE = 500;
  */
 export const BODY_LIMIT_BYTES = 1024 * 1024;
 
+/** `https://<host>` when the request's Origin is https and one of `sites`, else undefined. */
+export function siteOf(origin: string | undefined, sites: readonly string[]): string | undefined {
+    if (origin === undefined) return undefined;
+
+    let url: URL;
+    try {
+        url = new URL(origin);
+    } catch {
+        return undefined;
+    }
+
+    if (url.protocol !== 'https:' || url.port !== '' || !sites.includes(url.hostname)) return undefined;
+
+    return `https://${url.hostname}`;
+}
+
 interface Caller {
     readonly userId: string;
     /** True when auth came from an api token rather than a person's ticket -- see resolveCaller. */
@@ -40,19 +56,61 @@ interface Caller {
      *  decision; checkGate always re-resolves fresh. */
     readonly roles: readonly string[];
     /**
-     * A mailbox signed in with its own address and password (the webmail at mail.<platform>,
-     * owner 10-19: "They sign in with their email ... Not the same as the console"): no account, no
-     * membership -- its organization is the mailbox's, and it passes only gates asking for
-     * `mailbox` alone (checkGate).
+     * A part's own session, not an account's (`lookUpSession`): no account, no membership. Its
+     * organization is the session's, it holds one role and passes only gates asking for that role
+     * alone (checkGate), and its fields go into every call's `meta.user`.
      */
-    readonly mailbox?: { readonly mailAddressId: string; readonly organizationId: string; readonly address: string };
+    readonly session?: Session;
 }
 
-/** The one role a mailbox session holds; a contract gated on it alone is a webmail call. */
-export const MAILBOX_ROLE = 'mailbox';
+/**
+ * What a part's `<domain>.session_validate` answers for a token it issued: a sign-in that is no
+ * account (a mailbox signing in to its webmail with its own address and password, for one).
+ */
+interface Session {
+    /** The one role it holds; a contract gated on that role alone is one of its calls. */
+    readonly role: string;
+    /** Who it is, in the part's own terms (a mailbox's id): the caller is `<role>:<subjectId>`. */
+    readonly subjectId: string;
+    readonly organizationId: string;
+    /** What its calls carry in `meta.user`, for the part's tools to act on that subject alone. */
+    readonly fields: Readonly<Record<string, string>>;
+}
 
-/** Who validates a mailbox session (the mail service), when it runs. */
-const MAILBOX_SESSION_VALIDATE = 'mailbox.session_validate';
+/** The action a part offers to validate the sessions it issues. */
+const SESSION_VALIDATE = 'session_validate';
+
+/** Role names a session may never claim: they are accounts' roles, held through identity. */
+const ACCOUNT_ROLES: readonly string[] = ['operator', 'owner', 'admin', 'member', 'agent'];
+
+/** A session's fields, read one by one: only string values under plain keys, never `id` or `tenant_id`. */
+function sessionFields(value: unknown): Record<string, string> | undefined {
+    if (value === undefined) return {};
+    if (typeof value !== 'object' || value === null) return undefined;
+
+    const fields: Record<string, string> = {};
+    for (const [key, field] of Object.entries(value)) {
+        if (typeof field !== 'string' || !/^[A-Za-z][A-Za-z0-9]*$/.test(key)) return undefined;
+        if (['id', 'tenantId', 'organizationId', 'apiTokenName', 'apiTokenId'].includes(key)) return undefined;
+        fields[key] = field;
+    }
+
+    return fields;
+}
+
+/** A part's reply, if it is exactly a valid session. */
+export function sessionOf(reply: unknown): Session | undefined {
+    if (typeof reply !== 'object' || reply === null || Reflect.get(reply, 'valid') !== true) return undefined;
+
+    const role = Reflect.get(reply, 'role');
+    const subjectId = Reflect.get(reply, 'subjectId');
+    const organizationId = Reflect.get(reply, 'organizationId');
+    const fields = sessionFields(Reflect.get(reply, 'fields'));
+    if (typeof role !== 'string' || typeof subjectId !== 'string' || typeof organizationId !== 'string' || fields === undefined) return undefined;
+    if (!/^[a-z][a-z0-9_-]*$/.test(role) || ACCOUNT_ROLES.includes(role) || subjectId === '' || organizationId === '') return undefined;
+
+    return { role, subjectId, organizationId, fields };
+}
 
 /** The organization a request names: the `x-organization` header, or `?organization=` (an EventSource cannot set headers). */
 /**
@@ -120,6 +178,8 @@ interface Target {
     readonly host: string;
     readonly tenantId: string;
     readonly rows: readonly ExposeRow[];
+    /** The hosts of the sites served on this api (serve.cdn records naming it): the only origins a call's `client.site` may be. */
+    readonly sites: readonly string[];
 }
 
 /**
@@ -370,13 +430,21 @@ export class ApiGateway {
         }
     }
 
+    /** The hosts of the sites served on an api; none where no site records run (an api with no sites). */
+    private async sitesOf(apiId: string, tenantId: string): Promise<string[]> {
+        if (this.broker.registry.findNodesForTool('serve.cdn.find').length === 0) return [];
+
+        const sites = await this.broker.call('serve.cdn.find', { query: { apiId }, limit: 100 }, { meta: { tenant_id: tenantId } });
+        return sites.map((s) => s.host);
+    }
+
     private resolveTarget(hostname: string): Promise<Target> {
         return this.targets.get(hostname, async () => {
             const api = await this.resolveApi(hostname);
             const stored = await this.resolveExposeRows(api.id, api.tenantId);
             const rows = api.exposeDeclared === true ? [...stored, ...this.declaredRows(api.id, stored, api.exposeRoles)] : stored;
 
-            return { host: api.apiHost, tenantId: api.tenantId, rows };
+            return { host: api.apiHost, tenantId: api.tenantId, rows, sites: await this.sitesOf(api.id, api.tenantId) };
         });
     }
 
@@ -491,12 +559,12 @@ export class ApiGateway {
         if (caller === undefined || !gated) return apiTenantId;
 
         const named = namedOrganization(req);
-        // A mailbox acts in its own organization and no other.
-        if (caller.mailbox !== undefined) {
-            if (named !== undefined && named !== caller.mailbox.organizationId) {
-                throw new MeshError({ message: 'A mailbox acts only in its own organization.', code: 'FORBIDDEN', status: 403 });
+        // A part's session acts in its own organization and no other.
+        if (caller.session !== undefined) {
+            if (named !== undefined && named !== caller.session.organizationId) {
+                throw new MeshError({ message: `A ${caller.session.role} acts only in its own organization.`, code: 'FORBIDDEN', status: 403 });
             }
-            return caller.mailbox.organizationId;
+            return caller.session.organizationId;
         }
         if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
             if (named === undefined) return apiTenantId;
@@ -588,8 +656,9 @@ export class ApiGateway {
     }
 
     private holdsRole(userId: string, role: string, tenantId: string): Promise<boolean> {
-        // A mailbox is no account: it holds no account's role, operator least of all.
-        if (userId.startsWith('mailbox:')) return Promise.resolve(false);
+        // A part's session is no account (`<role>:<subjectId>`; an account's id has no colon): it
+        // holds no account's role, operator least of all.
+        if (userId.includes(':')) return Promise.resolve(false);
         return this.roles.get(`${userId}\u0000${role}\u0000${tenantId}`, async () => {
             // The same meta checkGate always sent -- see its comment for why organizationId too.
             const meta = { user: { id: userId, tenant_id: tenantId, organizationId: tenantId } };
@@ -637,30 +706,27 @@ export class ApiGateway {
             };
         }
 
-        return this.lookUpMailbox(token);
+        return this.lookUpSession(token);
     }
 
     /**
-     * A mailbox's session, asked of the mail service when one runs (a platform without mail has
-     * none). Its answer is read field by field: a reply that isn't exactly a valid session is no
-     * caller at all.
+     * A part's own session: every running `<domain>.session_validate` is asked in turn (a platform
+     * whose parts issue none has none). Each answer is read field by field (`sessionOf`): a reply
+     * that isn't exactly a valid session is no caller at all.
      */
-    private async lookUpMailbox(token: string): Promise<Caller | undefined> {
-        if (this.broker.registry.findNodesForTool(MAILBOX_SESSION_VALIDATE).length === 0) return undefined;
+    private async lookUpSession(token: string): Promise<Caller | undefined> {
+        const validators = new Set(this.broker.registry.getNodes().flatMap((node) => node.services.flatMap((service) => Object.keys(service.tools ?? {})))
+            .filter((key) => key.endsWith(`.${SESSION_VALIDATE}`)));
 
-        const reply: unknown = await this.broker.callNamed(MAILBOX_SESSION_VALIDATE, { token }, {}).catch(() => undefined);
-        if (typeof reply !== 'object' || reply === null || Reflect.get(reply, 'valid') !== true) return undefined;
+        for (const validator of [...validators].sort()) {
+            const reply: unknown = await this.broker.callNamed(validator, { token }, {}).catch(() => undefined);
+            const session = sessionOf(reply);
+            if (session !== undefined) {
+                return { userId: `${session.role}:${session.subjectId}`, viaApiToken: false, roles: [session.role], session };
+            }
+        }
 
-        const mailAddressId = Reflect.get(reply, 'mailAddressId');
-        const organizationId = Reflect.get(reply, 'organizationId');
-        const address = Reflect.get(reply, 'address');
-        if (typeof mailAddressId !== 'string' || typeof organizationId !== 'string' || typeof address !== 'string') return undefined;
-        if (mailAddressId === '' || organizationId === '') return undefined;
-
-        return {
-            userId: `mailbox:${mailAddressId}`, viaApiToken: false, roles: [MAILBOX_ROLE],
-            mailbox: { mailAddressId, organizationId, address },
-        };
+        return undefined;
     }
 
     /**
@@ -766,13 +832,14 @@ export class ApiGateway {
             throw new MeshError({ message: 'Authentication required.', code: 'UNAUTHORIZED', status: 401 });
         }
 
-        // A mailbox passes only a gate asking for `mailbox` and nothing else: every member,
+        // A part's session passes only a gate asking for its own role and nothing else: every member,
         // operator and permission gate refuses it, whatever an expose row says.
-        if (caller.mailbox !== undefined) {
-            const onlyMailbox = required.length > 0 && required.every((r) => r === MAILBOX_ROLE)
-                && (row.role === undefined || row.role === MAILBOX_ROLE) && row.permission === undefined;
-            if (!onlyMailbox) {
-                throw new MeshError({ message: `"${row.contract}" is not a mailbox's call.`, code: 'FORBIDDEN', status: 403 });
+        if (caller.session !== undefined) {
+            const role = caller.session.role;
+            const onlyItsRole = required.length > 0 && required.every((r) => r === role)
+                && (row.role === undefined || row.role === role) && row.permission === undefined;
+            if (!onlyItsRole) {
+                throw new MeshError({ message: `"${row.contract}" is not a ${role}'s call.`, code: 'FORBIDDEN', status: 403 });
             }
             return;
         }
@@ -1146,19 +1213,25 @@ export class ApiGateway {
             ? await this.resolveEffectiveTenantId(caller, target.tenantId, input)
             : organization;
         trace.organizationId = effectiveTenantId;
-        // A mailbox's call carries which mailbox: the webmail's tools act on that one alone. A token's
+        // A part's session's call carries the session's own fields (a mailbox's: which mailbox, so
+        // the webmail's tools act on that one alone). A token's
         // call carries which token, so a service can tell one of an account's tokens from another (a
         // workflow job's token is that job). Every call carries where it came from, so a service can
         // record it (a sign-up's address and browser).
+        // And which of this api's own sites the page was on, when it was one: a link mailed from the
+        // call (a password reset) goes back to that site. Never an origin the api does not serve,
+        // or a forged Origin could send someone's reset link to its own host.
         const agent = req.headers['user-agent'];
+        const site = siteOf(req.headers.origin, target.sites);
         const client = {
             address: clientAddress(req.headers['x-forwarded-for'], req.socket.remoteAddress),
             agent: typeof agent === 'string' ? agent.slice(0, 300) : '',
+            ...(site !== undefined ? { site } : {}),
         };
         const meta = {
             user: {
                 id: caller?.userId ?? '', tenant_id: effectiveTenantId, organizationId: effectiveTenantId,
-                ...(caller?.mailbox !== undefined ? { mailAddressId: caller.mailbox.mailAddressId, mailAddress: caller.mailbox.address } : {}),
+                ...(caller?.session !== undefined ? caller.session.fields : {}),
                 ...(caller?.viaApiToken === true && caller.agentName !== undefined ? { apiTokenName: caller.agentName } : {}),
                 ...(caller?.apiTokenId !== undefined ? { apiTokenId: caller.apiTokenId } : {}),
             },

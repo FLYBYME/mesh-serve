@@ -2,9 +2,10 @@
  * A mailbox signed in with its own address and password, over real HTTP (owner, 10-19: the webmail
  * at mail.<platform> -- "They sign in with their email ... Not the same as the console").
  *
- * The mail service validates its sessions (`mailbox.session_validate`, stood in here). A mailbox is
- * no account: it acts only in its own organization, passes only gates asking for `mailbox` alone,
- * and its call says which mailbox, so the webmail's tools act on that one alone.
+ * The mail service validates its sessions (`mailbox.session_validate`, stood in here), as any part
+ * may for its own (`<domain>.session_validate`). A mailbox is no account: it acts only in its own
+ * organization, passes only gates asking for `mailbox` alone, and its call carries the session's
+ * fields (which mailbox), so the webmail's tools act on that one alone.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
@@ -37,17 +38,25 @@ const PASSWORD = 'a-real-password-for-tests-12';
 
 declare global {
     interface IServiceToolRegistry {
-        'mailbox.session_validate': { params: { token: string }; returns: { valid: boolean; mailAddressId?: string; organizationId?: string; address?: string } };
+        'mailbox.session_validate': { params: { token: string }; returns: SessionReply };
+        'rogue.session_validate': { params: { token: string }; returns: SessionReply };
         'mailboxtest.whoami': { params: Record<string, never>; returns: { id: string; tenant: string; mailAddressId: string; mailAddress: string } };
     }
 }
 
-/** The mail service's, stood in: one session, for info@peera.example. */
-const sessionValidateContract = defineContract({
-    domain: 'mailbox', action: 'session_validate', description: 'test: a mailbox session',
+/** What a part's `<domain>.session_validate` answers (api/gateway.ts `sessionOf`). */
+const sessionReplySchema = z.object({
+    valid: z.boolean(), role: z.string().optional(), subjectId: z.string().optional(), organizationId: z.string().optional(),
+    fields: z.record(z.string(), z.string()).optional(),
+});
+type SessionReply = z.infer<typeof sessionReplySchema>;
+
+/** A part's session validator, stood in: the mail service's, and a rogue one claiming an account's role. */
+const sessionValidateContract = (domain: string) => defineContract({
+    domain, action: 'session_validate', description: `test: a ${domain} session`,
     inputSchema: z.object({ token: z.string() }),
-    outputSchema: z.object({ valid: z.boolean(), mailAddressId: z.string().optional(), organizationId: z.string().optional(), address: z.string().optional() }),
-    rest: { method: 'POST', path: '/mailbox/session_validate' }, filePath: 'test/mailbox.integration.test.ts',
+    outputSchema: sessionReplySchema,
+    rest: { method: 'POST', path: `/${domain}/session_validate` }, filePath: 'test/mailbox.integration.test.ts',
     concurrency: 'on-demand', permissions: [], visibility: 'internal', print: defaultPrint,
 });
 
@@ -72,6 +81,8 @@ describe('a mailbox signed in with its own password', () => {
     const orgId: Record<string, string> = {};
     let ada = '';
     const MAILBOX_TOKEN = 'mbx-session-token-for-info';
+    const ROGUE_TOKEN = 'rogue-session-claiming-operator';
+    const ROGUE_FIELDS_TOKEN = 'rogue-session-setting-id';
 
     const call = async (path: string, token: string, organization?: string): Promise<{ status: number; body: unknown }> => {
         const res = await fetch(`${ORIGIN}/api${path}`, {
@@ -112,9 +123,15 @@ describe('a mailbox signed in with its own password', () => {
         orgId.peera = (await broker.call('identity.organization.create', { slug: 'peera', name: 'Peera', ownerId: ada })).id;
         orgId.other = (await broker.call('identity.organization.create', { slug: 'other', name: 'Other', ownerId: operator })).id;
 
-        broker.registerContract(sessionValidateContract, async (input) => (input.token === MAILBOX_TOKEN
-            ? { valid: true, mailAddressId: 'mbx-info', organizationId: orgId.peera, address: 'info@peera.example' }
+        broker.registerContract(sessionValidateContract('mailbox'), async (input) => (input.token === MAILBOX_TOKEN
+            ? { valid: true, role: 'mailbox', subjectId: 'mbx-info', organizationId: orgId.peera ?? '', fields: { mailAddressId: 'mbx-info', mailAddress: 'info@peera.example' } }
             : { valid: false }));
+        // A part may not mint an account's role, nor set who the call is.
+        broker.registerContract(sessionValidateContract('rogue'), async (input) => (input.token === ROGUE_TOKEN
+            ? { valid: true, role: 'operator', subjectId: 'x', organizationId: orgId.platform ?? '' }
+            : input.token === ROGUE_FIELDS_TOKEN
+                ? { valid: true, role: 'rogue', subjectId: 'y', organizationId: orgId.platform ?? '', fields: { id: 'someone-else' } }
+                : { valid: false }));
         broker.registerContract(whoamiContract, async (_input, ctx) => {
             const user = ctx.meta?.user;
             const field = (key: string): string => {
@@ -160,6 +177,11 @@ describe('a mailbox signed in with its own password', () => {
 
     it('a token the mail service does not know is no one', async () => {
         expect((await call('/mailboxtest/whoami', 'not-a-session')).status).toBe(401);
+    });
+
+    it('a session claiming an account\'s role, or setting who the call is, is no one', async () => {
+        expect((await call('/mailboxNotes', ROGUE_TOKEN)).status).toBe(401);
+        expect((await call('/mailboxNotes', ROGUE_FIELDS_TOKEN)).status).toBe(401);
     });
 
     it('a console member is not a mailbox: the webmail call refuses them', async () => {

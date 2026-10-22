@@ -33,7 +33,7 @@ describe('password reset and email verification', () => {
     let platformId = '';
 
     /** The links queued for an address, newest first, read back out of the email jobs. */
-    const linksFor = async (to: string): Promise<{ template: string; token: string; name: string | undefined }[]> => {
+    const linksFor = async (to: string): Promise<{ template: string; token: string; name: string | undefined; site: string }[]> => {
         const jobs = await broker.call('serve.queue.find', { query: {}, limit: 100 }, { meta: { tenant_id: platformId } });
         return jobs
             .filter((j) => j.payload.to === to)
@@ -41,12 +41,14 @@ describe('password reset and email verification', () => {
                 const vars = j.payload.vars;
                 const url = typeof vars === 'object' && vars !== null && 'url' in vars && typeof vars.url === 'string' ? vars.url : '';
                 const name = typeof vars === 'object' && vars !== null && 'name' in vars && typeof vars.name === 'string' ? vars.name : undefined;
-                return { template: String(j.payload.templateKey), token: new URL(url).searchParams.get('token') ?? '', name };
+                return { template: String(j.payload.templateKey), token: new URL(url).searchParams.get('token') ?? '', name, site: new URL(url).origin };
             })
             .reverse();
     };
 
     beforeAll(async () => {
+        // The install's own site, for a call that came from none of the api's sites.
+        process.env.IDENTITY_LINK_BASE = 'https://install.test';
         const uri = process.env.MONGODB_URI ?? 'mongodb://localhost:27017';
         const client = new MongoClient(uri);
         await client.connect();
@@ -66,10 +68,13 @@ describe('password reset and email verification', () => {
 
         const owner = await broker.call('identity.user.create', { email: 'op@reset.invalid', displayName: 'Op', roles: ['operator'], provisional: false });
         platformId = (await broker.call('identity.organization.create', { slug: 'platform', name: 'Platform', ownerId: owner.id })).id;
-        userId = (await broker.call('identity.user.register', { email: 'Ada@Reset.invalid', password: 'first-password-1234', displayName: 'Ada' })).userId;
+        // Signed up on a site of the api: the gateway says which, as client.site.
+        userId = (await broker.call('identity.user.register', { email: 'Ada@Reset.invalid', password: 'first-password-1234', displayName: 'Ada' },
+            { meta: { client: { address: '192.0.2.1', agent: 'test', site: 'https://console.test' } } })).userId;
     }, 40000);
 
     afterAll(async () => {
+        delete process.env.IDENTITY_LINK_BASE;
         await app.stop();
         const client = new MongoClient(process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
         await client.connect();
@@ -101,6 +106,8 @@ describe('password reset and email verification', () => {
         const links = await linksFor('ada@reset.invalid');
         expect(links.map((l) => l.template)).toEqual(['verify_email']);
         expect(links[0]?.token.length).toBeGreaterThan(40);
+        // Back to the site the person signed up on, not the install's default.
+        expect(links[0]?.site).toBe('https://console.test');
         // The name was typed beside an address nobody has proved yet: it is not put in mail to it.
         expect(links[0]?.name).toBeUndefined();
     });
@@ -136,6 +143,8 @@ describe('password reset and email verification', () => {
         expect(await broker.call('identity.user.reset_request', { email: ' ADA@reset.INVALID ' })).toEqual({ message: RESET_REQUESTED });
         const reset = (await linksFor('ada@reset.invalid')).find((l) => l.template === 'reset_password');
         expect(reset).toBeDefined();
+        // Asked from no site (no client.site): the install's own.
+        expect(reset?.site).toBe('https://install.test');
 
         const done = await broker.call('identity.user.reset_complete', { token: reset?.token ?? '', password: 'second-password-5678' });
         // Every session Ada had -- this one and the one the sign-in test opened.

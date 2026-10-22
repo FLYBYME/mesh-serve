@@ -39,8 +39,8 @@ describe('one-time links', () => {
     });
 
     it('links to the site\'s own page, with the token encoded', () => {
-        expect(tokenLink('https://surfdns.net/', 'reset', 'a+b/c')).toBe('https://surfdns.net/reset-password?token=a%2Bb%2Fc');
-        expect(tokenLink('https://surfdns.net', 'verify', 'x')).toBe('https://surfdns.net/verify-email?token=x');
+        expect(tokenLink('https://console.example.com/', 'reset', 'a+b/c')).toBe('https://console.example.com/reset-password?token=a%2Bb%2Fc');
+        expect(tokenLink('https://console.example.com', 'verify', 'x')).toBe('https://console.example.com/verify-email?token=x');
     });
 
     it('addresses compare as typed by a person: case and spaces do not matter', () => {

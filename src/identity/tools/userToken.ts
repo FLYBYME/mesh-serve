@@ -12,8 +12,20 @@ import {
     type UserTokenPurpose,
 } from '../methods/userToken.js';
 
-/** Where links point: the site's own pages for them. */
-const LINK_BASE = process.env.IDENTITY_LINK_BASE ?? 'https://surfdns.net';
+/**
+ * The site a link goes back to: the one the person was on (the gateway's `client.site`, only ever
+ * one of the api's own sites), else the install's own site (IDENTITY_LINK_BASE) for a call from
+ * none (an operator's CLI, a service); undefined when neither. No default: mesh-serve names no
+ * one's domain.
+ */
+export function linkBase(ctx: IServiceContext): string | undefined {
+    const client = ctx.meta?.client;
+    const site = typeof client === 'object' && client !== null && 'site' in client && typeof client.site === 'string' ? client.site : undefined;
+    if (site !== undefined && site !== '') return site;
+
+    const configured = process.env.IDENTITY_LINK_BASE;
+    return configured !== undefined && configured !== '' ? configured : undefined;
+}
 /**
  * How the link is sent: a contract that sends a templated email, named rather than imported, so
  * mesh-serve never depends on a mail service. It is queued (serve.queue), not called inline: a mail
@@ -53,6 +65,12 @@ export async function issue(
     purpose: UserTokenPurpose,
     vars: Record<string, string> = {},
 ): Promise<boolean> {
+    const base = linkBase(ctx);
+    if (base === undefined) {
+        ctx.logger.warn(`[identity] no ${purpose} link for "${user.id}": the call came from none of the api's sites and IDENTITY_LINK_BASE is not set`);
+        return false;
+    }
+
     const token = newToken();
     const now = new Date();
     await ctx.db('identity.userToken').create({
@@ -72,7 +90,7 @@ export async function issue(
     await ctx.call('serve.queue.create', {
         tenantId,
         contract: MAIL_CONTRACT,
-        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { ...vars, ...greeting(user), url: tokenLink(LINK_BASE, purpose, token) } },
+        payload: { templateKey: TEMPLATE[purpose], to: user.email, vars: { ...vars, ...greeting(user), url: tokenLink(base, purpose, token) } },
         maxAttempts: 5,
         timeoutMs: 30_000,
     }, { meta: { user: { id: '', tenant_id: tenantId } } });
@@ -85,7 +103,9 @@ export async function issue(
  * reports: a mail problem is logged, the password stays set.
  */
 export async function notifyPasswordChanged(ctx: IServiceContext, user: Recipient, how: 'changed' | 'reset'): Promise<void> {
-    await queueNotice(ctx, user, 'password_changed', { how, url: `${LINK_BASE.replace(/\/+$/, '')}/forgot-password` });
+    // The way back in, when there is a site to name; the notice goes either way.
+    const base = linkBase(ctx);
+    await queueNotice(ctx, user, 'password_changed', { how, ...(base !== undefined ? { url: `${base.replace(/\/+$/, '')}/forgot-password` } : {}) });
 }
 
 /**
@@ -210,7 +230,8 @@ export async function verify_complete(input: VerifyCompleteInput, ctx: IServiceC
         await ctx.db('identity.user').update({ id: user.id, emailVerifiedAt });
         // The first time only: the account is real now, so it is welcomed (mail's `welcome` template
         // says what the account can do).
-        await queueNotice(ctx, { ...user, emailVerifiedAt }, 'welcome', { url: LINK_BASE.replace(/\/+$/, '') });
+        const base = linkBase(ctx);
+        await queueNotice(ctx, { ...user, emailVerifiedAt }, 'welcome', base !== undefined ? { url: base.replace(/\/+$/, '') } : {});
     }
     return { ok: true, email: user.email };
 }
