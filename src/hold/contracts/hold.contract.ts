@@ -1,6 +1,41 @@
-import { defineContract, defineCrud, z } from '@flybyme/mesh';
+import { defaultPrint, defineContract, defineCrud, isRecord, z } from '@flybyme/mesh';
 
-import { holdRuleSchema, holdSchema } from '../schema/hold.js';
+import { isSecretName } from '../../api/methods/secretField.js';
+import { holdRuleSchema, holdSchema, holdStatusSchema } from '../schema/hold.js';
+
+export function maskHoldInput(input: Record<string, unknown>): Record<string, unknown> {
+    let masked: Record<string, unknown> | undefined;
+
+    for (const [key] of Object.entries(input)) {
+        if (isSecretName(key)) {
+            masked ??= { ...input };
+            masked[key] = 'hidden';
+        }
+    }
+
+    return masked ?? input;
+}
+
+function maskHoldUnknown(item: unknown): unknown {
+    if (isRecord(item) === false) {
+        return item;
+    }
+
+    const input = item.input;
+    if (isRecord(input) === false) {
+        return item;
+    }
+
+    const maskedInput = maskHoldInput(input);
+    if (maskedInput === input) {
+        return item;
+    }
+
+    return {
+        ...item,
+        input: maskedInput,
+    };
+}
 
 /**
  * `create`/`update` stay internal (the default): only `ApiService`'s own interception places a row
@@ -24,6 +59,35 @@ export const holdCrud = defineCrud('serve.hold', holdSchema, {
     visibility: {
         find: 'public', findOne: 'public', get: 'public', count: 'public',
     },
+    hooks: {
+        find: {
+            after: (result: unknown) => {
+                if (Array.isArray(result) === false) {
+                    return result;
+                }
+
+                return result.map(maskHoldUnknown);
+            },
+        },
+        findOne: {
+            after: (result: unknown) => {
+                if (result === undefined || result === null) {
+                    return result;
+                }
+
+                return maskHoldUnknown(result);
+            },
+        },
+        get: {
+            after: (result: unknown) => {
+                if (result === undefined || result === null) {
+                    return result;
+                }
+
+                return maskHoldUnknown(result);
+            },
+        },
+    },
     dependencies: [],
     filePath: 'src/hold/contracts/hold.contract.ts',
     // An organization's admins see its own held calls (scoped by tenantId); an operator passes
@@ -33,6 +97,18 @@ export const holdCrud = defineCrud('serve.hold', holdSchema, {
 });
 
 export type Hold = z.infer<typeof holdCrud.outputSchema>;
+
+export function maskHold(row: Hold): Hold {
+    const masked = maskHoldInput(row.input);
+    if (masked === row.input) {
+        return row;
+    }
+
+    return {
+        ...row,
+        input: masked,
+    };
+}
 
 export const holdRuleCrud = defineCrud('serve.holdRule', holdRuleSchema, {
     pluralPath: 'hold-rules',
@@ -104,3 +180,26 @@ export const holdDecideContract = defineContract({
 
 export type HoldDecideInput = z.infer<typeof holdDecideContract.inputSchema>;
 export type HoldDecideOutput = z.infer<typeof holdDecideContract.outputSchema>;
+
+export const holdAllInputSchema = z.object({
+    status: holdStatusSchema.optional().describe('Filter by status: held, released, rejected, expired'),
+    limit: z.coerce.number().int().min(1).default(200).describe('How many to return, newest first (default 200)'),
+});
+
+export const holdAllContract = defineContract({
+    domain: 'serve.hold',
+    action: 'all',
+    description: 'Operator: every organization\'s holds, newest first.',
+    inputSchema: holdAllInputSchema,
+    outputSchema: z.array(holdCrud.outputSchema),
+    rest: { method: 'GET', path: '/hold/all' },
+    visibility: 'public',
+    dependencies: ['serve.hold'],
+    filePath: 'src/hold/tools/all.ts',
+    concurrency: 'on-demand',
+    permissions: ['operator'],
+    print: defaultPrint,
+});
+
+export type HoldAllInput = z.infer<typeof holdAllContract.inputSchema>;
+export type HoldAllOutput = z.infer<typeof holdAllContract.outputSchema>;

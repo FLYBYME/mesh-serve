@@ -46,6 +46,7 @@ describe('the approved list: destructive token calls are held, unless an operato
     let apiId = '';
     let platform = '';
     let token = '';
+    let operator = '';
     const meta = (): { meta: { tenant_id: string } } => ({ meta: { tenant_id: platform } });
 
     const createRepo = async (name: string): Promise<number> => {
@@ -89,7 +90,7 @@ describe('the approved list: destructive token calls are held, unless an operato
         await broker.loadDomain('serve.holdRule', {}, { resolve: resolveHandler });
         await broker.call('identity.role.ensureBuiltins', {});
 
-        const operator = (await broker.call('identity.user.create', {
+        operator = (await broker.call('identity.user.create', {
             email: 'operator@hold.invalid', displayName: 'operator', roles: ['operator'], provisional: false,
         })).id;
         platform = (await broker.call('identity.organization.create', { slug: 'platform', name: 'Platform', ownerId: operator })).id;
@@ -192,5 +193,104 @@ describe('the approved list: destructive token calls are held, unless an operato
 
     it('refuses a contract that is not exposed on the api', async () => {
         await expect(broker.call('serve.expose.hold', { apiId, contract: 'serve.repo.nothing', hold: false }, meta())).rejects.toThrow(/not exposed/);
+    });
+
+    it('operator sees every organization\'s holds with secrets masked, while decide replays real values', async () => {
+        expect(broker.contractDeclaration('serve.hold.all')?.permissions).toEqual(['operator']);
+
+        const peerA = (await broker.call('identity.organization.create', { slug: 'peera', name: 'PeerA', ownerId: operator })).id;
+        const peerAMeta = { meta: { tenant_id: peerA } };
+
+        const replayTarget = defineContract({
+            domain: 'testEcho', action: 'replay', description: 'Test: replay target.',
+            inputSchema: z.object({ name: z.string(), secret: z.string() }),
+            outputSchema: z.object({ name: z.string(), receivedSecret: z.string() }),
+            rest: { method: 'POST', path: '/test-echo/replay' }, destructive: true, visibility: 'public',
+            filePath: 'test/hold.integration.test.ts', concurrency: 'on-demand', permissions: ['operator'], print: defaultPrint,
+        });
+        broker.registerContract(replayTarget, async (input) => ({ name: input.name, receivedSecret: input.secret }));
+
+        const olderDate = new Date(Date.now() - 60_000);
+        const newerDate = new Date(Date.now() - 30_000);
+        const newestDate = new Date(Date.now());
+
+        const holdPlatform = await broker.call('serve.hold.create', {
+            tenantId: platform,
+            call: 'testEcho.replay',
+            host: 'api.localhost',
+            input: { name: 'platform-job', data: 'public-data' },
+            requestedBy: { userId: 'user-platform', roles: ['admin'] },
+            status: 'held',
+            requestedAt: olderDate,
+            expiresAt: new Date(Date.now() + 60_000),
+        }, meta());
+
+        const holdPeerA = await broker.call('serve.hold.create', {
+            tenantId: peerA,
+            call: 'testEcho.replay',
+            host: 'api.localhost',
+            input: { name: 'peera-job', secret: 'peera-real-secret' },
+            requestedBy: { userId: 'user-peera', roles: ['admin'] },
+            status: 'held',
+            requestedAt: newerDate,
+            expiresAt: new Date(Date.now() + 60_000),
+        }, peerAMeta);
+
+        const holdReleased = await broker.call('serve.hold.create', {
+            tenantId: platform,
+            call: 'testEcho.replay',
+            host: 'api.localhost',
+            input: { name: 'released-job' },
+            requestedBy: { userId: 'user-platform', roles: ['admin'] },
+            status: 'released',
+            requestedAt: newestDate,
+            expiresAt: new Date(Date.now() + 60_000),
+        }, meta());
+
+        const asOperator = { meta: { user: { id: 'op', roles: ['operator'], tenant_id: platform, organizationId: platform } } };
+
+        const allHolds = await broker.call('serve.hold.all', {}, asOperator);
+        const ids = allHolds.map((h) => h.id);
+
+        expect(ids).toContain(holdPlatform.id);
+        expect(ids).toContain(holdPeerA.id);
+        expect(ids).toContain(holdReleased.id);
+
+        const peerRow = allHolds.find((h) => h.id === holdPeerA.id);
+        expect(peerRow?.tenantId).toBe(peerA);
+        expect(peerRow?.input.secret).toBe('hidden');
+        expect(peerRow?.input).not.toMatchObject({ secret: 'peera-real-secret' });
+
+        const platformRow = allHolds.find((h) => h.id === holdPlatform.id);
+        expect(platformRow?.tenantId).toBe(platform);
+
+        const relevant = allHolds.filter((h) => h.id === holdPeerA.id || h.id === holdPlatform.id);
+        expect(relevant[0]?.id).toBe(holdPeerA.id);
+        expect(relevant[1]?.id).toBe(holdPlatform.id);
+
+        const heldFiltered = await broker.call('serve.hold.all', { status: 'held' }, asOperator);
+        expect(heldFiltered.every((h) => h.status === 'held')).toBe(true);
+        expect(heldFiltered.map((h) => h.id)).toContain(holdPlatform.id);
+        expect(heldFiltered.map((h) => h.id)).toContain(holdPeerA.id);
+        expect(heldFiltered.map((h) => h.id)).not.toContain(holdReleased.id);
+
+        const releasedFiltered = await broker.call('serve.hold.all', { status: 'released' }, asOperator);
+        expect(releasedFiltered.every((h) => h.status === 'released')).toBe(true);
+        expect(releasedFiltered.map((h) => h.id)).toContain(holdReleased.id);
+        expect(releasedFiltered.map((h) => h.id)).not.toContain(holdPeerA.id);
+
+        const readRow = await broker.call('serve.hold.get', { id: holdPeerA.id }, peerAMeta);
+        expect(readRow.input.secret).toBe('hidden');
+
+        const foundRow = await broker.call('serve.hold.find_one', { query: { id: holdPeerA.id } }, peerAMeta);
+        expect(foundRow?.input.secret).toBe('hidden');
+
+        const foundRows = await broker.call('serve.hold.find', { query: { id: holdPeerA.id } }, peerAMeta);
+        expect(foundRows[0]?.input.secret).toBe('hidden');
+
+        const asOperatorInPeerA = { meta: { user: { id: operator, roles: ['operator'], tenant_id: peerA, organizationId: peerA } } };
+        const decided = await broker.call('serve.hold.decide', { holdId: holdPeerA.id, approved: true }, asOperatorInPeerA);
+        expect(decided.status).toBe('released');
+        expect(decided.result).toEqual({ name: 'peera-job', receivedSecret: 'peera-real-secret' });
     });
 });

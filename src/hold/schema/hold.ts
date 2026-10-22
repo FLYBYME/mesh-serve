@@ -6,6 +6,8 @@ export const holdRequestedBySchema = z.object({
     roles: z.array(z.string()).describe('Roles the caller held at the moment the call was placed on hold'),
 }).describe('Who asked for the held call, and how');
 
+export const holdStatusSchema = z.enum(['held', 'released', 'rejected', 'expired']);
+
 export const holdSchema = z.object({
     tenantId: z.string().describe('The organization whose api this call arrived on'),
     call: z.string().describe('The domain.action contract this call would invoke if released'),
@@ -17,7 +19,7 @@ export const holdSchema = z.object({
     // crossing a network hop, which fails a z.string() field's own schema on the way back from
     // exactly the kind of leaderScoped call decide.ts now is).
     requestedAt: z.coerce.date().describe('When the call was placed on hold'),
-    status: z.enum(['held', 'released', 'rejected', 'expired']).default('held'),
+    status: holdStatusSchema.default('held'),
     expiresAt: z.coerce.date().describe('When a still-held row is treated as expired'),
     decidedBy: z.string().optional().describe('The account that released or rejected this'),
     decidedAt: z.coerce.date().optional().describe('When it was decided'),
