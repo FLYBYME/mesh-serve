@@ -188,6 +188,13 @@ describe('agent accounts', () => {
         const checked = await broker.call('identity.apiToken.validate', { token: issued.token });
         expect(checked).toMatchObject({ valid: true, userId: made.userId, organizationId: orgId });
 
+        // Its organization lists it, with its role; another organization does not.
+        expect(await broker.call('identity.agent.find', {}, asAdmin)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ userId: made.userId, name: 'peera', displayName: 'Peera', role: 'member' }),
+        ]));
+        const elsewhere = await broker.call('identity.agent.find', {}, { meta: { user: { id: 'x', tenant_id: otherOrgId, organizationId: otherOrgId } } });
+        expect(elsewhere.some((a) => a.userId === made.userId)).toBe(false);
+
         // Its role is the admin's to change, both ways; the account stays the same.
         const narrowed = await broker.call('identity.agent.save', { name: 'peera', role: 'agent' }, asAdmin);
         expect(narrowed).toMatchObject({ userId: made.userId, role: 'agent', created: false });

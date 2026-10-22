@@ -167,6 +167,30 @@ export const agentIssueContract = defineContract({
     print: (o) => `${o.email}: a token issued (${o.revoked} revoked), roles ${o.roles.join(', ')}`,
 });
 
+/** identity.agent.find -- the caller's organization's agent accounts, each with its role there. */
+export const agentFindOutputSchema = z.array(z.object({
+    userId: z.string(),
+    name: z.string().describe('Which agent: peera'),
+    displayName: z.string(),
+    email: z.string().describe('Its account address: never a mailbox'),
+    role: z.string().describe('Its role in the organization: member or agent'),
+}));
+
+export const agentFindContract = defineContract({
+    domain: 'identity.agent',
+    action: 'find',
+    description: 'Your organization\'s agent accounts, each with its role.',
+    inputSchema: z.object({}).strict(),
+    outputSchema: agentFindOutputSchema,
+    rest: { method: 'GET', path: '/identity/agents' },
+    dependencies: ['identity.user', 'identity.membership'],
+    visibility: 'public',
+    destructive: false,
+    filePath: 'src/identity/tools/agentOwn.ts', concurrency: 'on-demand', permissions: ['member'],
+    print: (o) => o.map((a) => `${a.name} (${a.role})`).join('\n'),
+});
+
+export type AgentFindOutput = z.infer<typeof agentFindOutputSchema>;
 export type AgentSaveInput = z.infer<typeof agentSaveInputSchema>;
 export type AgentSaveOutput = z.infer<typeof agentSaveOutputSchema>;
 export type AgentIssueInput = z.infer<typeof agentIssueInputSchema>;
