@@ -4,6 +4,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import { partSchema } from '../schema/part.js';
 import { organizationOfCreate, validatePartKey } from '../methods/partKey.js';
 import { resolvePinnedArtifact } from '../methods/partArtifact.js';
+import { deleteHookInput, refusePartInUse } from '../methods/inUse.js';
 
 /** The fields the hooks below read, parsed out of what the CRUD layer hands them; the rest pass through untouched. */
 const partCreateHookInput = z.object({
@@ -28,9 +29,15 @@ export const partCrud = defineCrud('serve.part', partSchema, {
     // an existing part's key now points at -- `create` alone only ever covers a genuinely new key,
     // so the existing row silently kept its stale fields otherwise.
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public', delete: 'public',
     },
     hooks: {
+        delete: {
+            before: async (input: unknown, ctx: IServiceContext) => {
+                await refusePartInUse(ctx, deleteHookInput.parse(input).id);
+                return input;
+            },
+        },
         create: {
             before: async (input: unknown, ctx: IServiceContext) => {
                 const record = partCreateHookInput.parse(input);

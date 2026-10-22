@@ -12,7 +12,7 @@ export const siteCrud = defineCrud('serve.cdn', siteSchema, {
     // update: `mesh-serve init -c` reconciles an existing site's `open` array against the config's
     // current application parts on a rerun -- same reasoning as serve.composition (composition.contract.ts).
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public', delete: 'public',
     },
     hooks: {
         create: {

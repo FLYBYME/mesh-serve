@@ -1,5 +1,7 @@
 import { defineContract, defineCrud, z } from '@flybyme/mesh';
+import type { IServiceContext } from '@flybyme/mesh';
 
+import { deleteHookInput, refuseCompositionInUse } from '../methods/inUse.js';
 import { compositionSchema } from '../schema/composition.js';
 import { releaseCrud } from './release.contract.js';
 
@@ -12,7 +14,15 @@ export const compositionCrud = defineCrud('serve.composition', compositionSchema
     // live: a part added to a config after the composition already existed silently never made it
     // into the release, because findOrCreate had nothing to reconcile with on a conflict.
     visibility: {
-        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public',
+        find: 'public', findOne: 'public', get: 'public', count: 'public', create: 'public', update: 'public', delete: 'public',
+    },
+    hooks: {
+        delete: {
+            before: async (input: unknown, ctx: IServiceContext) => {
+                await refuseCompositionInUse(ctx, deleteHookInput.parse(input).id);
+                return input;
+            },
+        },
     },
     dependencies: ['serve.part'],
     filePath: 'src/catalog/contracts/composition.contract.ts',

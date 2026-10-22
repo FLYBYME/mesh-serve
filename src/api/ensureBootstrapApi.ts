@@ -90,6 +90,7 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'serve.part.find_one', role: 'operator' },
     { contract: 'serve.part.create', role: 'operator' },
     { contract: 'serve.part.update', role: 'operator' },
+    { contract: 'serve.part.delete', role: 'operator' },
     { contract: 'serve.part.start', role: 'operator' },
     { contract: 'serve.part.stop', role: 'operator' },
 
@@ -119,12 +120,14 @@ export const BOOTSTRAP_EXPOSED_CONTRACTS: readonly { contract: string; role?: st
     { contract: 'serve.composition.find_one', role: 'operator' },
     { contract: 'serve.composition.create', role: 'operator' },
     { contract: 'serve.composition.update', role: 'operator' },
+    { contract: 'serve.composition.delete', role: 'operator' },
     { contract: 'serve.composition.compose', role: 'operator' },
 
     { contract: 'serve.cdn.find', role: 'operator' },
     { contract: 'serve.cdn.find_one', role: 'operator' },
     { contract: 'serve.cdn.create', role: 'operator' },
     { contract: 'serve.cdn.update', role: 'operator' },
+    { contract: 'serve.cdn.delete', role: 'operator' },
     { contract: 'serve.cdn.deploy', role: 'operator' },
 
     { contract: 'serve.api.find', role: 'operator' },
