@@ -1,6 +1,7 @@
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 
 import { buildDescriptor, type DeclarationLookup, type ExposureDescriptor } from './descriptor.js';
+import { typeOf, zodTypeOf } from './schemaType.js';
 import type { Expose } from '../contracts/expose.contract.js';
 
 /**
@@ -50,11 +51,17 @@ export function apiExportName(id: string): string {
  * `z.object(...)` at the top level is a call the bundler cannot prove free of effects, so all of
  * them shipped -- the company site carried 1,400 schemas (about 1.5 MB) to use five (10-11).
  */
-function schemaDeclaration(schemaName: string, typeName: string, schema: Record<string, unknown>): string {
-    const expression = jsonSchemaToZod(inlineLocalRefs(schema));
+function schemaDeclaration(schemaName: string, typeName: string, requestName: string | undefined, schema: Record<string, unknown>): string {
+    const inlined = inlineLocalRefs(schema);
+    const expression = jsonSchemaToZod(inlined);
 
-    return `export const ${schemaName} = /* @__PURE__ */ (() => ${expression})()\n`
-        + `export type ${typeName} = z.infer<typeof ${schemaName}>\n`;
+    // Its types written out, and the constant declared by them: the file is never checked
+    // (@ts-nocheck), so the compiler reads these instead of inferring each zod expression.
+    const lines = [`export type ${typeName} = ${typeOf(inlined, 'output')}`];
+    if (requestName !== undefined) lines.push(`export type ${requestName} = ${typeOf(inlined, 'input')}`);
+    lines.push(`export const ${schemaName}: ${zodTypeOf(inlined, typeName, requestName ?? typeName)} = /* @__PURE__ */ (() => ${expression})()`);
+
+    return `${lines.join('\n')}\n`;
 }
 
 /** The value at a local JSON pointer (`#/properties/disk/properties/sizeGb`), or undefined. */
@@ -154,16 +161,16 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         if (!isEmptyObjectSchema(call.input)) {
             const schemaName = `${lowerFirst(name)}InputSchema`;
             // `XInput` stays what it was — the parsed shape (`z.infer`), which the server sees.
-            schemas.push(schemaDeclaration(schemaName, `${name}Input`, call.input as Record<string, unknown>));
-            // A *caller* passes the schema's input side: a field with a default may be left out.
-            // Typing the call with `z.infer` made every defaulted field required at every call site
-            // (`domain.find` demanded `offset`, found by the company site's dashboard).
-            inputType = `z.input<typeof ${schemaName}>`;
+            // A *caller* passes `XRequest`, the input side: a field with a default may be left out.
+            // Typing the call with the parsed shape made every defaulted field required at every
+            // call site (`domain.find` demanded `offset`, found by the company site's dashboard).
+            schemas.push(schemaDeclaration(schemaName, `${name}Input`, `${name}Request`, call.input as Record<string, unknown>));
+            inputType = `${name}Request`;
             options = `, { inputSchema: ${schemaName} }`;
         }
 
         const outputType = `${name}Output`;
-        schemas.push(schemaDeclaration(`${lowerFirst(name)}OutputSchema`, outputType, call.output as Record<string, unknown>));
+        schemas.push(schemaDeclaration(`${lowerFirst(name)}OutputSchema`, outputType, undefined, call.output as Record<string, unknown>));
 
         const gate = gateLiteral(call.gate);
         const doc = [
@@ -192,6 +199,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
     ];
 
     const lines = [
+        '// @ts-nocheck -- every type below is written out; checking the zod expressions only repeats them.',
         '// GENERATED FILE -- do not edit.',
         '//',
         `// Rendered from ${descriptor.host}'s live exposure (its /api/_describe).`,

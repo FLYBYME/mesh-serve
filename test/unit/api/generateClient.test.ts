@@ -51,9 +51,19 @@ describe('rendering from a described api, as `mesh-serve generate` does locally'
 describe('the generated client', () => {
     it('types a call by its schema\'s input side, so defaulted fields are optional to a caller', async () => {
         const source = await generateClient('api.test', 'api.test', [row], () => declaration);
-        expect(source).toContain('"domain.find": /* @__PURE__ */ call<z.input<typeof domainFindInputSchema>, DomainFindOutput, never>(');
+        expect(source).toContain('"domain.find": /* @__PURE__ */ call<DomainFindRequest, DomainFindOutput, never>(');
+        expect(source).toContain('export type DomainFindRequest = { "limit"?: number | undefined; "offset"?: number | undefined }');
         // The named parsed type is still emitted, for code that holds a parsed value.
-        expect(source).toMatch(/export type DomainFindInput = z\.infer<typeof domainFindInputSchema>/);
+        expect(source).toContain('export type DomainFindInput = { "limit": number; "offset": number }');
+    });
+
+    it('writes every type out and is never checked, so no zod expression is inferred', async () => {
+        const source = await generateClient('api.test', 'api.test', [row], () => declaration);
+        expect(source.startsWith('// @ts-nocheck')).toBe(true);
+        expect(source).not.toContain('z.infer<');
+        expect(source).not.toContain('z.input<');
+        expect(source).toContain('export const domainFindInputSchema: z.ZodObject<{ "limit": z.ZodType<number, z.ZodTypeDef, number | undefined>; "offset": z.ZodType<number, z.ZodTypeDef, number | undefined> }, \'strip\', z.ZodTypeAny, DomainFindInput, DomainFindRequest> =');
+        expect(source).toContain('export const domainFindOutputSchema: z.ZodArray<z.ZodType<string, z.ZodTypeDef, string>> =');
     });
 
     it('declares the events the api streams, so models treat those collections as live', () => {
