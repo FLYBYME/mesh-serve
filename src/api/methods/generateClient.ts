@@ -191,6 +191,37 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
     // Only written when there are some, so an api with no events renders the text it always did.
     // (`?? []`: a descriptor read from an api older than events has no `events` at all.)
     const events = descriptor.events ?? [];
+
+    // Each event's payload typed and checkable: its type, its schema (declared by the type, like a
+    // call's), a name -> payload type map and a name -> schema map. An event the api describes no
+    // payload for is `unknown`. Only written when there are events, as `events` below.
+    const apiName = camelIdentifier(id);
+    const eventMap: string[] = [];
+    const eventSchemas: string[] = [];
+    for (const event of events) {
+        if (event.payload === undefined) {
+            eventMap.push(`    ${JSON.stringify(event.name)}: unknown;`);
+            continue;
+        }
+        const name = `${pascalCase(event.name)}Event`;
+        const schemaName = `${lowerFirst(name)}Schema`;
+        schemas.push(schemaDeclaration(schemaName, name, undefined, event.payload));
+        eventMap.push(`    ${JSON.stringify(event.name)}: ${name};`);
+        eventSchemas.push(`    ${JSON.stringify(event.name)}: ${schemaName},`);
+    }
+    const eventsTypeName = `${apiName.charAt(0).toUpperCase()}${apiName.slice(1)}Events`;
+    const eventDeclarations = events.length === 0 ? [] : [
+        `export type ${eventsTypeName} = {`,
+        ...eventMap,
+        '};',
+        `export type ${eventsTypeName.slice(0, -1)}Name = keyof ${eventsTypeName};`,
+        '',
+        `export const ${apiName}EventSchemas = /* @__PURE__ */ (() => ({`,
+        ...eventSchemas,
+        '}))();',
+        '',
+    ];
+
     const eventEntries = events.length === 0 ? [] : [
         '    events: [',
         ...events.map((event) => `        { name: ${JSON.stringify(event.name)}${
@@ -216,6 +247,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         '',
         ...schemas,
         '',
+        ...eventDeclarations,
         // Pure: a bundle that never uses the api drops it, and with it every input schema it holds.
         'export const ' + apiExportName(id) + ' = /* @__PURE__ */ defineApi({',
         `    id: ${JSON.stringify(id)},`,

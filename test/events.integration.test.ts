@@ -272,9 +272,10 @@ describe('/api/events', () => {
     it('advertises its events, with their gates, in the descriptor', async () => {
         const descriptor = await (await fetch(`${ORIGIN}/api/_describe`)).json() as { events: unknown[]; calls: Array<{ key: string }> };
         // Its two rows, among the events the bootstrap api streams by their definitions' gates.
+        // Each with its payload described, so a client types what it receives (10-23).
         expect(descriptor.events).toEqual(expect.arrayContaining([
-            { name: 'serve.part.failed', gate: { kind: 'role', role: 'operator' } },
-            { name: 'eventstest.started' },
+            expect.objectContaining({ name: 'serve.part.failed', gate: { kind: 'role', role: 'operator' }, payload: expect.objectContaining({ type: 'object' }) }),
+            expect.objectContaining({ name: 'eventstest.started', payload: expect.objectContaining({ type: 'object' }) }),
         ]));
         // An event row is never routed as a call.
         expect(descriptor.calls.map((call) => call.key)).not.toContain('serve.part.failed');

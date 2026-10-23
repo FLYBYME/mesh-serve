@@ -82,6 +82,21 @@ describe('the generated client', () => {
         ].join('\n'));
     });
 
+    it('types each event by its payload, and keeps a schema to check one by; one with none described is unknown', () => {
+        const payload = { type: 'object', properties: { id: { type: 'string' }, host: { type: 'string' } }, required: ['id', 'host'] };
+        const described = {
+            ...buildDescriptor('api.test', [row], () => declaration),
+            events: [{ name: 'domain.created', payload }, { name: 'domain.deleted' }],
+        };
+        const source = renderClient('api.test', described);
+
+        expect(source).toContain('export type DomainCreatedEvent = { "id": string; "host": string }');
+        expect(source).toContain('export const domainCreatedEventSchema: z.ZodObject<');
+        expect(source).toContain(['export type ApiTestEvents = {', '    "domain.created": DomainCreatedEvent;', '    "domain.deleted": unknown;', '};'].join('\n'));
+        expect(source).toContain('export type ApiTestEventName = keyof ApiTestEvents;');
+        expect(source).toContain(['export const apiTestEventSchemas = /* @__PURE__ */ (() => ({', '    "domain.created": domainCreatedEventSchema,', '}))();'].join('\n'));
+    });
+
     it('writes no events entry for an api that streams none', async () => {
         const source = await generateClient('api.test', 'api.test', [row], () => declaration);
         expect(source).not.toContain('events:');

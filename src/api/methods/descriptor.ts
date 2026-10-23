@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-import { eventPermissions, eventScope } from '@flybyme/mesh';
+import { eventPayloadSchema, eventPermissions, eventScope } from '@flybyme/mesh';
 import type { ContractDeclaration } from '@flybyme/mesh';
 
 import type { ExposeRow } from '../contracts/expose.contract.js';
@@ -32,6 +32,49 @@ export interface DescribedCall {
 export interface DescribedEvent {
     readonly name: string;
     readonly gate?: { readonly kind: 'role'; readonly role: string };
+    /** Its payload as JSON Schema, when known: a client types and checks what it receives by it. */
+    readonly payload?: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What one occurrence of an event carries: a defined event's own schema (here, or as a peer that
+ * defines it advertised it), else a collection's CRUD event, built from the collection's row as its
+ * `get` describes it -- `created` is the row, `updated` `{ id, patch, item }`, `deleted`
+ * `{ id, <its scope field>, item? }` (mesh's CrudExecutor).
+ */
+export function eventPayloadOf(name: string, declare: DeclarationLookup): Record<string, unknown> | undefined {
+    const defined = eventPayloadSchema(name);
+    if (defined !== undefined) return defined;
+
+    const dot = name.lastIndexOf('.');
+    const action = name.slice(dot + 1);
+    if (dot <= 0 || (action !== 'created' && action !== 'updated' && action !== 'deleted')) return undefined;
+
+    const row = declare(`${name.slice(0, dot)}.get`)?.output;
+    if (!isRecord(row)) return undefined;
+
+    if (action === 'created') return row;
+
+    if (action === 'updated') {
+        return {
+            type: 'object',
+            properties: { id: { type: 'string' }, patch: { type: 'object', additionalProperties: true }, item: row },
+            required: ['id', 'patch', 'item'],
+        };
+    }
+
+    const scope = eventScope(name);
+    const scopeField = scope !== undefined && scope !== 'global' && 'scopedBy' in scope ? scope.scopedBy : undefined;
+
+    return {
+        type: 'object',
+        properties: { id: { type: 'string' }, ...(scopeField !== undefined ? { [scopeField]: { type: 'string' } } : {}), item: row },
+        required: ['id'],
+    };
 }
 
 export interface ExposureDescriptor {
@@ -86,7 +129,12 @@ export function buildDescriptor(host: string, rows: readonly ExposeRow[], declar
             // The row's role, or the definition's own when the row names none (a row made from it).
             const role = row.role ?? eventPermissions(row.contract)?.[0];
             if (streamableFrom(row.contract)) {
-                events.push({ name: row.contract, ...(role !== undefined ? { gate: { kind: 'role', role } } : {}) });
+                const payload = eventPayloadOf(row.contract, declare);
+                events.push({
+                    name: row.contract,
+                    ...(role !== undefined ? { gate: { kind: 'role', role } } : {}),
+                    ...(payload !== undefined ? { payload } : {}),
+                });
             }
             continue;
         }
@@ -119,10 +167,11 @@ export function buildDescriptor(host: string, rows: readonly ExposeRow[], declar
 
     // Events are part of the gate, not the shape: they change what a site may receive, not how a
     // call is made. Appended only when present, so an api with no events keeps the exposure hash
-    // every client generated before events existed was built against.
+    // every client generated before events existed was built against -- and by name and gate only,
+    // so describing their payloads (10-23) did not make every client already built a stale one.
     const exposure = crypto.createHash('sha256')
         .update(JSON.stringify(calls.map((c) => ({ key: c.key, gate: c.gate }))))
-        .update(events.length > 0 ? JSON.stringify(events) : '')
+        .update(events.length > 0 ? JSON.stringify(events.map((e) => ({ name: e.name, ...(e.gate !== undefined ? { gate: e.gate } : {}) }))) : '')
         .digest('hex');
 
     return { host, base: API_BASE, exposure, shapeHash, calls, events };
