@@ -1,10 +1,11 @@
 import http from 'node:http';
 
-import { ContextStack, eventPermissions, isMeshError, knownEvents, MeshError } from '@flybyme/mesh';
+import { ContextStack, eventPermissions, isMeshError, MeshError } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import { behindProxy } from './behindProxy.js';
 import { descriptorKey } from './methods/descriptorKey.js';
+import { declaredRowsNow } from './methods/declaredRows.js';
 import type { activitySchema } from './schema/activity.js';
 import './contracts/activity.contract.js';
 
@@ -482,7 +483,7 @@ export class ApiGateway {
         const kept = this.declaredRowsByContent.get(key);
         if (kept !== undefined) return kept;
 
-        const rows = this.declaredRowsNow(apiId, stored, roles);
+        const rows = declaredRowsNow(this.broker, apiId, stored, roles);
         this.declaredRowsByContent.set(key, rows);
         while (this.declaredRowsByContent.size > 16) {
             const oldest = this.declaredRowsByContent.keys().next().value;
@@ -490,34 +491,6 @@ export class ApiGateway {
             this.declaredRowsByContent.delete(oldest);
         }
 
-        return rows;
-    }
-
-    private declaredRowsNow(apiId: string, stored: readonly ExposeRow[], roles?: readonly string[]): ExposeRow[] {
-        const named = new Set(stored.filter((row) => row.kind !== 'event').map((row) => row.contract));
-        const keys = new Set(this.broker.registry.getNodes().flatMap((node) => node.services.flatMap((service) => Object.keys(service.tools ?? {}))));
-        const allowed = (required: readonly string[]): boolean => roles === undefined || required.every((role) => roles.includes(role));
-
-        const rows: ExposeRow[] = [];
-        for (const key of keys) {
-            if (named.has(key)) continue;
-
-            const contract = this.broker.contractDeclaration(key);
-            if (contract === undefined || contract.visibility !== 'public' || contract.permissions.length === 0) continue;
-            if (!allowed(contract.permissions)) continue;
-
-            rows.push({ apiId, kind: 'contract', contract: key });
-        }
-
-        const streamed = new Set(stored.filter((row) => row.kind === 'event').map((row) => row.contract));
-        for (const name of knownEvents()) {
-            if (streamed.has(name) || !streamableFrom(name)) continue;
-
-            const required = eventPermissions(name);
-            if (required === undefined || required.length === 0 || !allowed(required)) continue;
-
-            rows.push({ apiId, kind: 'event', contract: name });
-        }
         return rows;
     }
 

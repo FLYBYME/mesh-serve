@@ -194,6 +194,14 @@ describe('the platform api exposes what a contract gates, without a row', () => 
         expect(described.events.map((event) => event.name)).not.toContain('serve.part.updated');
     });
 
+    it('serve.api.describe lists the calls /api/_describe does, the declared ones too (10-25)', async () => {
+        const served = await (await fetch(`${PLATFORM}/api/_describe`)).json() as { calls: { key: string }[] };
+        const described = await broker.call('serve.api.describe', { host: 'api.localhost' });
+
+        expect(described.calls.map((call) => call.key).sort()).toEqual(served.calls.map((call) => call.key).sort());
+        expect(described.calls.find((call) => call.key === 'serve.node.find')?.gate).toBe('operator');
+    });
+
     it('exposes nothing this way on an api that does not say exposeDeclared', async () => {
         expect(await stream(CUSTOMER, 'serve.part.updated', 'operator')).toBe(404);
         expect(await get(CUSTOMER, '/api/nodes', 'operator')).toBe(404);
