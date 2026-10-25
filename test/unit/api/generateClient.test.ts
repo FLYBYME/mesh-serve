@@ -292,7 +292,15 @@ describe('generate --only <patterns> over the real live descriptor', () => {
     it('a collection kept by one call keeps its find and events', () => {
         const filtered = filterDescriptor(realDescriptor, 'infer.agentPersona.get');
         const callKeys = filtered.calls.map((c) => c.key);
-        expect(callKeys).toEqual(['infer.agentPersona.find', 'infer.agentPersona.get']);
+        // Its own verbs come too (writes go through cx.models: create/update/delete), not find_one.
+        expect([...callKeys].sort()).toEqual([
+            'infer.agentPersona.count',
+            'infer.agentPersona.create',
+            'infer.agentPersona.delete',
+            'infer.agentPersona.find',
+            'infer.agentPersona.get',
+            'infer.agentPersona.update',
+        ]);
 
         const eventNames = filtered.events.map((e) => e.name);
         expect(eventNames).toEqual([

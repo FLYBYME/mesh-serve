@@ -218,8 +218,14 @@ export function filterDescriptor(descriptor: ExposureDescriptor, only: string): 
         }
     }
 
+    // A collection's own verbs too, where the api has them: `cx.models('<name>')` writes through
+    // create/update/delete and reads one row through get -- keeping only find left those out.
+    const COLLECTION_VERBS = ['find', 'get', 'count', 'create', 'update', 'delete'];
+    const existingKeys = new Set(descriptor.calls.map((c) => c.key));
     for (const domain of keptCollectionDomains) {
-        keptCallKeys.add(`${domain}.find`);
+        for (const verb of COLLECTION_VERBS) {
+            if (existingKeys.has(`${domain}.${verb}`)) keptCallKeys.add(`${domain}.${verb}`);
+        }
         for (const event of availableEvents) {
             if (
                 event.name === `${domain}.created` ||
