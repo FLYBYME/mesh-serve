@@ -139,25 +139,51 @@ export async function unloadAndEvictModule(ctx: IServiceContext, absolutePath: s
     // list above missed. Only what is still this load's own is removed.
     ctx.broker.unregisterOwner(record.owner);
 
-    // `require.resolve` rather than the raw path: the cache is keyed by the resolved filename, and
-    // a caller could hand us a path that differs by a symlink or a trailing segment.
-    let evicted = false;
-    try {
-        const resolved = require.resolve(absolutePath);
-        const cached = require.cache[resolved];
-        if (cached !== undefined) {
-            delete require.cache[resolved];
-            dropFromParent(cached);
-            evicted = true;
-        }
-    } catch {
-        // Not a CommonJS module -- an ESM part was loaded with import() and cannot be dropped.
-        // Its contracts are still unmounted, which is the part that affects behavior.
-        evicted = false;
-    }
+    const evicted = evictModule(absolutePath);
 
     loadedParts.delete(key);
     return { domains: [...record.domains], contracts: record.contracts.length, evicted };
+}
+
+/** Drops a loaded part's module from Node's cache; false for an ESM part, which cannot be dropped. */
+function evictModule(absolutePath: string): boolean {
+    // `require.resolve` rather than the raw path: the cache is keyed by the resolved filename, and
+    // a caller could hand us a path that differs by a symlink or a trailing segment.
+    try {
+        const resolved = require.resolve(absolutePath);
+        const cached = require.cache[resolved];
+        if (cached === undefined) {
+            return false;
+        }
+
+        delete require.cache[resolved];
+        dropFromParent(cached);
+
+        return true;
+    } catch {
+        // Not a CommonJS module -- an ESM part was loaded with import() and cannot be dropped.
+        // Its contracts are still unmounted, which is the part that affects behavior.
+        return false;
+    }
+}
+
+/**
+ * A load that threw part way: everything it mounted is taken back and its module dropped, then the
+ * error goes on, naming the part. Left as it was (10-24), a part whose `register` mounted one area
+ * and threw on the next kept serving the first, looked running to nobody and stopped by nothing:
+ * every start after failed at once ("already mounted"), and `desired: stopped` had nothing to stop.
+ */
+function undoFailedLoad(ctx: IServiceContext, absolutePath: string, owner: string, err: unknown): MeshError {
+    ctx.broker.unregisterOwner(owner);
+    evictModule(absolutePath);
+
+    const said = err instanceof Error ? err.message : String(err);
+
+    return new MeshError({
+        message: `Loading "${absolutePath}" failed, and what it had mounted was taken back: ${said}`,
+        code: 'PART_LOAD_FAILED',
+        status: 500,
+    });
 }
 
 /**
@@ -221,15 +247,19 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         // deciding which of those calls is redundant belongs here, where that rule lives.
         const owner = ownerOf(ctx.nodeID, absolutePath);
         const mounted: string[] = [];
-        await ctx.broker.withOwner(owner, async () => {
-            for (const domain of rootDomains(imported.domains ?? [])) {
-                // `resolve` as well as the map: a bundle's map covers everything it bundled, but a
-                // part loaded from real files on disk has no map at all, and the two share this one
-                // path rather than diverging.
-                const { contracts } = await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
-                mounted.push(...contracts);
-            }
-        });
+        try {
+            await ctx.broker.withOwner(owner, async () => {
+                for (const domain of rootDomains(imported.domains ?? [])) {
+                    // `resolve` as well as the map: a bundle's map covers everything it bundled, but a
+                    // part loaded from real files on disk has no map at all, and the two share this one
+                    // path rather than diverging.
+                    const { contracts } = await ctx.broker.loadDomain(domain, handlers, { resolve: resolveHandler });
+                    mounted.push(...contracts);
+                }
+            });
+        } catch (err) {
+            throw undoFailedLoad(ctx, absolutePath, owner, err);
+        }
         // Recorded so unloadAndEvictModule can reverse exactly this, rather than re-deriving it
         // from a manifest that may since have been evicted.
         loadedParts.set(partKey(ctx.nodeID, absolutePath), { domains: [...imported.domains], contracts: mounted, owner });
@@ -251,7 +281,12 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         // below cannot see -- is taken back on unload too.
         const owner = ownerOf(ctx.nodeID, absolutePath);
         const register = imported.register;
-        const registration = await ctx.broker.withOwner(owner, () => register(ctx.broker));
+        let registration: Awaited<ReturnType<typeof register>>;
+        try {
+            registration = await ctx.broker.withOwner(owner, () => register(ctx.broker));
+        } catch (err) {
+            throw undoFailedLoad(ctx, absolutePath, owner, err);
+        }
         const domain = typeof registration === 'string' ? registration : registration.domain;
         if (typeof registration !== 'string' && registration.stop) {
             partTeardown.set(domain, registration.stop);

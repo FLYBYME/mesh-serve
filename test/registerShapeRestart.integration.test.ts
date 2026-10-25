@@ -92,4 +92,23 @@ describe('a register()-shaped part, stopped and started again', () => {
 
         await unloadAndEvictModule(ctx, FIXTURE_PATH);
     });
+
+    it('a register that throws part way takes back what it mounted, and fails the same way again (10-24)', async () => {
+        const half = path.join(path.dirname(FIXTURE_PATH), 'half.ts');
+
+        await expect(loadAndRegisterModule(ctx, half)).rejects.toMatchObject({
+            code: 'PART_LOAD_FAILED',
+            message: expect.stringContaining('the second area could not be mounted'),
+        });
+
+        // Nothing of it left serving, and nothing recorded as loaded.
+        expect(broker.listContracts().some((c) => c.domain === 'registerShapeHalf')).toBe(false);
+        expect(isPartLoaded(ctx.nodeID, half)).toBe(false);
+
+        // Started again it fails for its own reason, not "already mounted" by its first try.
+        await expect(loadAndRegisterModule(ctx, half)).rejects.toMatchObject({
+            message: expect.not.stringContaining('already mounted'),
+        });
+        expect(broker.listContracts().some((c) => c.domain === 'registerShapeHalf')).toBe(false);
+    });
 });

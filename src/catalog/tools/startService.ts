@@ -44,10 +44,14 @@ async function startClaimed(ctx: IServiceContext, part: Part): Promise<PartStart
         ctx.emit('serve.part.started', { ...lifecycle, ...(artifactId !== undefined ? { artifactId } : {}) });
         return started;
     } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        // In the node's log as well as on the stream: a part that failed to start said nothing in
+        // the log before (10-24), and the log is where a failed deploy is looked for first.
+        ctx.logger.error(`serve.part.start: "${part.key}" failed on ${ctx.nodeID}: ${error}`);
         ctx.emit('serve.part.failed', {
             ...lifecycle,
             ...(artifactId !== undefined ? { artifactId } : {}),
-            error: err instanceof Error ? err.message : String(err),
+            error,
         });
         throw err;
     }
