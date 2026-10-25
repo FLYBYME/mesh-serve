@@ -141,13 +141,117 @@ export async function generateClient(id: string, host: string, rows: readonly Ex
     return renderClient(id, buildDescriptor(host, rows, declare));
 }
 
+export interface RenderClientOptions {
+    readonly only?: string;
+}
+
+/**
+ * Turns a wildcard pattern (e.g. "infer.*" or "identity.whoami") into a RegExp anchored at start and end.
+ * `*` matches any run of characters; regex special characters other than `*` are escaped.
+ */
+function patternToRegExp(pattern: string): RegExp {
+    const escaped = pattern
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Filters a descriptor's calls and events by comma-separated patterns before `renderClient`.
+ *
+ * Each pattern may contain `*` (matching any run of characters). A pattern matching nothing is
+ * an error naming it.
+ *
+ * If a pattern keeps any of a collection's calls, its find call (`<name>.find`) and its
+ * `.created/.updated/.deleted` events are kept too, so `cx.models('<name>')` never half-works.
+ */
+export function filterDescriptor(descriptor: ExposureDescriptor, only: string): ExposureDescriptor {
+    const rawPatterns = only
+        .split(',')
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+
+    if (rawPatterns.length === 0) {
+        throw new Error('Pattern "" matched no calls or events.');
+    }
+
+    const availableEvents = descriptor.events ?? [];
+
+    const unmatched = rawPatterns.filter((p) => {
+        const rx = patternToRegExp(p);
+        const matchesCall = descriptor.calls.some((c) => rx.test(c.key));
+        const matchesEvent = availableEvents.some((e) => rx.test(e.name));
+        return !matchesCall && !matchesEvent;
+    });
+
+    if (unmatched.length > 0) {
+        throw new Error(`Pattern ${unmatched.map((p) => `"${p}"`).join(', ')} matched no calls or events.`);
+    }
+
+    const regexes = rawPatterns.map(patternToRegExp);
+
+    const keptCallKeys = new Set<string>();
+    for (const call of descriptor.calls) {
+        if (regexes.some((rx) => rx.test(call.key))) {
+            keptCallKeys.add(call.key);
+        }
+    }
+
+    const keptEventNames = new Set<string>();
+    for (const event of availableEvents) {
+        if (regexes.some((rx) => rx.test(event.name))) {
+            keptEventNames.add(event.name);
+        }
+    }
+
+    const collectionDomains = new Set<string>();
+    for (const call of descriptor.calls) {
+        if (call.action === 'find' || call.key.endsWith('.find')) {
+            collectionDomains.add(call.domain);
+        }
+    }
+
+    const keptCollectionDomains = new Set<string>();
+    for (const call of descriptor.calls) {
+        if (keptCallKeys.has(call.key) && collectionDomains.has(call.domain)) {
+            keptCollectionDomains.add(call.domain);
+        }
+    }
+
+    for (const domain of keptCollectionDomains) {
+        keptCallKeys.add(`${domain}.find`);
+        for (const event of availableEvents) {
+            if (
+                event.name === `${domain}.created` ||
+                event.name === `${domain}.updated` ||
+                event.name === `${domain}.deleted` ||
+                event.name === `${domain}.changed`
+            ) {
+                keptEventNames.add(event.name);
+            }
+        }
+    }
+
+    const calls = descriptor.calls.filter((c) => keptCallKeys.has(c.key));
+    const events = availableEvents.filter((e) => keptEventNames.has(e.name));
+
+    return {
+        host: descriptor.host,
+        base: descriptor.base,
+        exposure: descriptor.exposure,
+        shapeHash: descriptor.shapeHash,
+        calls,
+        events,
+    };
+}
+
 /**
  * The client for a described api — the whole of the rendering. Pure: a descriptor in, source text
  * out, so it runs wherever the descriptor is, including an operator's machine with no access to the
  * api's records (`mesh-serve generate`). A fix to what is rendered then takes effect with the
  * operator's installed mesh-serve, not after every node is upgraded.
  */
-export function renderClient(id: string, descriptor: ExposureDescriptor): string {
+export function renderClient(id: string, descriptor: ExposureDescriptor, options?: RenderClientOptions): string {
     const schemas: string[] = [];
     const callEntries: string[] = [];
 
@@ -236,6 +340,7 @@ export function renderClient(id: string, descriptor: ExposureDescriptor): string
         `// Rendered from ${descriptor.host}'s live exposure (its /api/_describe).`,
         `// Exposure: ${descriptor.exposure}`,
         `// ShapeHash: ${descriptor.shapeHash}`,
+        ...(options?.only !== undefined ? [`// Only: ${options.only}`] : []),
         '//',
         '// Regenerate rather than editing. The exposure and shape hashes above are checked at run time',
         "// against what the API reports, so a hand-edited client is a client that lies about a surface",

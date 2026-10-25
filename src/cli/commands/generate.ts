@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Command as CommanderCommand } from 'commander';
 import { z } from '@flybyme/mesh';
 
-import { renderClient } from '../../api/methods/generateClient.js';
+import { filterDescriptor, renderClient } from '../../api/methods/generateClient.js';
 import { BaseCommand } from '../core/BaseCommand.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { ApiError, callApi, describeApi } from '../core/apiClient.js';
@@ -13,6 +13,7 @@ const generateInputSchema = z.object({
     api: z.string().optional().describe('The serve.api id to render a typed client for -- not necessarily the api you are currently switched to'),
     host: z.string().optional().describe('Or the api by hostname, e.g. api.surfdns.net -- then no session is needed at all'),
     out: z.string().default('./generated/api.ts').describe('Where to write the generated client'),
+    only: z.string().optional().describe('Comma-separated patterns to keep calls and events for, e.g. "infer.*,identity.whoami" -- a collection kept by any call keeps its find and events too'),
 });
 
 /**
@@ -77,10 +78,24 @@ export class GenerateCommand extends BaseCommand {
             throw err;
         }
 
-        const source = renderClient(descriptor.host, descriptor);
+        let filteredDescriptor = descriptor;
+        let onlyOptions: { readonly only?: string } | undefined = undefined;
+        if (args.only !== undefined) {
+            try {
+                filteredDescriptor = filterDescriptor(descriptor, args.only);
+                onlyOptions = { only: args.only };
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                this.logger.error(message);
+                process.exitCode = 1;
+                return;
+            }
+        }
+
+        const source = renderClient(filteredDescriptor.host, filteredDescriptor, onlyOptions);
         await fs.mkdir(path.dirname(args.out), { recursive: true });
         await fs.writeFile(args.out, source);
-        this.logger.info(`Wrote ${args.out} (${source.length} bytes, ${descriptor.calls.length} calls from ${descriptor.host}).`);
+        this.logger.info(`Wrote ${args.out} (${source.length} bytes, ${filteredDescriptor.calls.length} calls from ${filteredDescriptor.host}).`);
     }
 
     /** An api id's hostname, asked of the current api. */

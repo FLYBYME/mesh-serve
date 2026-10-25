@@ -1,8 +1,11 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import * as esbuild from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import type { ContractDeclaration } from '@flybyme/mesh';
-import { buildDescriptor } from '../../../src/api/methods/descriptor.js';
-import { gateLiteral, generateClient, inlineLocalRefs, renderClient } from '../../../src/api/methods/generateClient.js';
+import { buildDescriptor, type DescribedCall, type DescribedEvent, type ExposureDescriptor } from '../../../src/api/methods/descriptor.js';
+import { filterDescriptor, gateLiteral, generateClient, inlineLocalRefs, renderClient } from '../../../src/api/methods/generateClient.js';
 import type { Expose } from '../../../src/api/contracts/expose.contract.js';
 
 /**
@@ -212,5 +215,111 @@ describe('a local $ref', () => {
                 },
             },
         });
+    });
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isDescribedCall(value: unknown): value is DescribedCall {
+    if (!isRecord(value)) return false;
+    return typeof value.key === 'string' &&
+        typeof value.domain === 'string' &&
+        typeof value.action === 'string' &&
+        typeof value.description === 'string' &&
+        typeof value.method === 'string' &&
+        typeof value.path === 'string' &&
+        typeof value.gate === 'string' &&
+        'input' in value &&
+        'output' in value;
+}
+
+function isDescribedEvent(value: unknown): value is DescribedEvent {
+    if (!isRecord(value)) return false;
+    return typeof value.name === 'string';
+}
+
+function isExposureDescriptor(value: unknown): value is ExposureDescriptor {
+    if (!isRecord(value)) return false;
+    if (typeof value.host !== 'string') return false;
+    if (typeof value.base !== 'string') return false;
+    if (typeof value.exposure !== 'string') return false;
+    if (typeof value.shapeHash !== 'string') return false;
+    if (!Array.isArray(value.calls) || !value.calls.every(isDescribedCall)) return false;
+    if (!Array.isArray(value.events) || !value.events.every(isDescribedEvent)) return false;
+    return true;
+}
+
+describe('generate --only <patterns> over the real live descriptor', () => {
+    const descriptorPath = path.join(os.homedir(), 'code/agy/live-rows/api.surfdns.net._describe.json');
+    const raw = fs.readFileSync(descriptorPath, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!isExposureDescriptor(parsed)) {
+        throw new Error('Expected api.surfdns.net._describe.json to match ExposureDescriptor');
+    }
+    const realDescriptor = parsed;
+
+    it('--only \'infer.*\' keeps only infer calls and events, every one of them', () => {
+        const filtered = filterDescriptor(realDescriptor, 'infer.*');
+        expect(filtered.calls.length).toBe(88);
+        expect(filtered.calls.every((c) => c.key.startsWith('infer.'))).toBe(true);
+        expect(filtered.events.length).toBe(42);
+        expect(filtered.events.every((e) => e.name.startsWith('infer.'))).toBe(true);
+    });
+
+    it('the output compiles and asserts on its text and structure', async () => {
+        const filtered = filterDescriptor(realDescriptor, 'infer.*');
+        const text = renderClient(filtered.host, filtered, { only: 'infer.*' });
+
+        expect(text).toContain('// Only: infer.*');
+        expect(text).toContain('export const apiSurfdnsNetApi = /* @__PURE__ */ defineApi({');
+        expect(text).toContain('"infer.thread.complete": /* @__PURE__ */ call<');
+        expect(text).toContain('"infer.message.created"');
+
+        const bundle = await esbuild.build({
+            stdin: { contents: text, loader: 'ts' },
+            bundle: false,
+            write: false,
+            format: 'esm',
+        });
+        expect(bundle.outputFiles.length).toBe(1);
+        const output = bundle.outputFiles[0];
+        if (output === undefined) throw new Error('expected output file');
+        expect(output.text.length).toBeGreaterThan(0);
+    });
+
+    it('a collection kept by one call keeps its find and events', () => {
+        const filtered = filterDescriptor(realDescriptor, 'infer.agentPersona.get');
+        const callKeys = filtered.calls.map((c) => c.key);
+        expect(callKeys).toEqual(['infer.agentPersona.find', 'infer.agentPersona.get']);
+
+        const eventNames = filtered.events.map((e) => e.name);
+        expect(eventNames).toEqual([
+            'infer.agentPersona.created',
+            'infer.agentPersona.deleted',
+            'infer.agentPersona.updated',
+        ]);
+    });
+
+    it('a pattern matching nothing fails naming it', () => {
+        expect(() => filterDescriptor(realDescriptor, 'infer.*,identity.nosuchthing'))
+            .toThrow('identity.nosuchthing');
+        expect(() => filterDescriptor(realDescriptor, 'nosuchcall.*'))
+            .toThrow('nosuchcall.*');
+    });
+
+    it('no --only gives today\'s output exactly', () => {
+        const fullOutput = renderClient(realDescriptor.host, realDescriptor);
+        expect(fullOutput).not.toContain('// Only:');
+        expect(renderClient(realDescriptor.host, realDescriptor, undefined)).toBe(fullOutput);
+    });
+
+    it('the size: --only \'infer.*,identity.*\' is under a fifth of the full file', () => {
+        const fullOutput = renderClient(realDescriptor.host, realDescriptor);
+        const filtered = filterDescriptor(realDescriptor, 'infer.*,identity.*');
+        const filteredOutput = renderClient(filtered.host, filtered, { only: 'infer.*,identity.*' });
+
+        expect(filteredOutput.length).toBeLessThan(fullOutput.length / 5);
     });
 });
