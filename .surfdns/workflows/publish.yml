@@ -27,3 +27,14 @@ jobs:
         run: npm run build:dist --if-present
       - name: publish
         uses: npm-publish
+  # The node image, built and pushed by the platform's own step (owner, 10-25: "our workflow pushes
+  # images"; GitHub's docker-publish is gone): <registry>/<organization>/mesh-serve:<tag>. The
+  # Dockerfile's npm ci reads our packages with the job's own read token (its `npmrc` secret).
+  image:
+    needs: [publish]
+    steps:
+      - name: image
+        uses: image
+        with:
+          name: mesh-serve
+          tags: ['${{ git.tag }}']
