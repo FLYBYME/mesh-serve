@@ -71,5 +71,12 @@ echo active > "$T/state"
 bash "$INSTALL" > /dev/null 2>&1
 check "the installer can run again (idempotent)" "[ -f '$T/sbin/mesh-node-upgrade' ] && [ \"\$(image)\" = mesh-serve:v0.8.17 ]"
 
+sed -i 's|ghcr.io/flybyme/mesh-serve:|registry.example.net/org1/mesh-serve:|' "$UNIT"
+MESH_SERVE_REPO=registry.example.net/org1/mesh-serve bash "$INSTALL" > /dev/null 2>&1
+request v0.8.20
+check "another repository, set at install: pulled from it" "[ \"\$(status)\" = done ] && grep -q 'docker pull -q registry.example.net/org1/mesh-serve:v0.8.20' '$T/calls' && grep -q 'registry.example.net/org1/mesh-serve:v0.8.20' '$UNIT'"
+
+check "a repository that is not one: the installer refuses" "! MESH_SERVE_REPO='x; rm -rf /' bash '$INSTALL' > /dev/null 2>&1"
+
 echo "--- $fails failure(s)"
 exit $fails

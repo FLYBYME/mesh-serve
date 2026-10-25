@@ -13,7 +13,8 @@ import { findPackageRoot } from './corePartPath.js';
  * leaves a request where its host can see it: `~/.mesh` is a host directory mounted into the
  * container (/var/lib/mesh on surf, /home/ubuntu/.mesh elsewhere). A systemd path unit on the host
  * (deploy/node-upgrade/install.sh) watches `upgrade/request`, checks it is exactly a release version,
- * pulls `ghcr.io/flybyme/mesh-serve:<version>`, points the unit at it, restarts mesh-node -- rolling
+ * pulls `<repository>:<version>` (the repository is fixed when that unit is installed; by default
+ * `ghcr.io/flybyme/mesh-serve`), points the unit at it, restarts mesh-node -- rolling
  * back if the new one does not come up -- and writes `upgrade/result.json` for the node to report.
  *
  * What the node writes is a version string and nothing else: the host builds the image name itself,

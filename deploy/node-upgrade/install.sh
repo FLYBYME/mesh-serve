@@ -8,8 +8,9 @@
 # path unit that watches that file, and the script it runs:
 #   - accepts exactly a release version (vX.Y.Z) and builds the image name itself, from a fixed
 #     registry path -- a request can never name another image;
-#   - pulls ghcr.io/flybyme/mesh-serve:<version>, backs up the unit, points it at the new image,
-#     restarts mesh-node;
+#   - pulls <repository>:<version>, backs up the unit, points it at the new image, restarts
+#     mesh-node; the repository is fixed here, at install time: MESH_SERVE_REPO, by default
+#     ghcr.io/flybyme/mesh-serve (ssh <node> 'sudo MESH_SERVE_REPO=<registry>/<path> bash -s' < ...);
 #   - rolls back to the previous image if mesh-node is not active 20 s later;
 #   - writes ~/.mesh/upgrade/result.json, which the node reports through serve.node.version.
 # Idempotent: running it again reinstalls the same files.
@@ -19,6 +20,8 @@ set -euo pipefail
 UNIT=${MESH_NODE_UNIT:-/etc/systemd/system/mesh-node.service}
 SBIN=${MESH_UPGRADE_SBIN:-/usr/local/sbin}
 SYSTEMD_DIR=${MESH_UPGRADE_SYSTEMD_DIR:-/etc/systemd/system}
+REPO=${MESH_SERVE_REPO:-ghcr.io/flybyme/mesh-serve}
+[[ "$REPO" =~ ^[a-z0-9.:-]+(/[a-z0-9._-]+)+$ ]] || { echo "MESH_SERVE_REPO is not an image repository: $REPO" >&2; exit 1; }
 [ -f "$UNIT" ] || { echo "no $UNIT on this host -- not a mesh node" >&2; exit 1; }
 
 # The host directory the container sees as /home/node/.mesh: "-v <host>:/home/node/.mesh".
@@ -35,11 +38,11 @@ set -uo pipefail
 UNIT=$UNIT
 DIR=$DIR
 OWNER=$OWNER
+REPO=$REPO
 EOF
 cat >> "$SBIN/mesh-node-upgrade" <<'EOF'
 REQ="$DIR/upgrade/request"
 RES="$DIR/upgrade/result.json"
-REPO=ghcr.io/flybyme/mesh-serve
 [ -f "$REQ" ] || exit 0
 want=$(head -c 64 "$REQ" | tr -d ' \r\n')
 rm -f "$REQ"
