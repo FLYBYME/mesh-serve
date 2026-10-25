@@ -19,6 +19,10 @@ import { formatTraceparent, newSpanId, newTraceId, readTraceparent } from './met
 import { Recent } from './recent.js';
 import { clientAddress, FormLimiter, formTiming } from './methods/formLimit.js';
 import { secretFieldOf } from './methods/secretField.js';
+import {
+    callResult, errorResult, heldResult, initializeResult, rpcError, rpcRequestOf, rpcResult, toolName, toolsOf,
+    RPC_INVALID_REQUEST, RPC_METHOD_NOT_FOUND, RPC_PARSE_ERROR, type McpTool, type ToolSource,
+} from './methods/mcp.js';
 
 /** Expose rows read per call. Any size works -- the loop reads until a short page -- this one makes it one call for any real api. */
 const EXPOSE_PAGE = 500;
@@ -181,7 +185,12 @@ interface Target {
     readonly rows: readonly ExposeRow[];
     /** The hosts of the sites served on this api (serve.cdn records naming it): the only origins a call's `client.site` may be. */
     readonly sites: readonly string[];
+    /** How it is spoken (serve.api.protocol): REST, or MCP whose tools are the same rows. */
+    readonly protocol: 'rest' | 'mcp';
 }
+
+/** How one call through the gateway ended: it ran, or it was held for a decision. */
+type Invoked = { readonly held: false; readonly result: unknown } | { readonly held: true; readonly hold: unknown };
 
 /**
  * The REST/SSE gateway: one cohesive thing that owns an `http.Server`, which is why it stays a
@@ -447,7 +456,7 @@ export class ApiGateway {
             const stored = await this.resolveExposeRows(api.id, api.tenantId);
             const rows = api.exposeDeclared === true ? [...stored, ...this.declaredRows(api.id, stored, api.exposeRoles)] : stored;
 
-            return { host: api.apiHost, tenantId: api.tenantId, rows, sites: await this.sitesOf(api.id, api.tenantId) };
+            return { host: api.apiHost, tenantId: api.tenantId, rows, sites: await this.sitesOf(api.id, api.tenantId), protocol: api.protocol ?? 'rest' };
         });
     }
 
@@ -1184,6 +1193,9 @@ export class ApiGateway {
     private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         const hostname = await this.resolveHostname(req);
         const target = await this.resolveTarget(hostname);
+        if (target.protocol === 'mcp') {
+            return this.handleMcp(target, req, res);
+        }
 
         const urlPath = (req.url ?? '/').split('?')[0];
         if (urlPath === `${API_BASE}/_describe`) {
@@ -1222,6 +1234,40 @@ export class ApiGateway {
         res: http.ServerResponse,
         trace: CallTrace,
     ): Promise<void> {
+        const invoked = await this.invoke(
+            target, route, req, trace,
+            () => this.parseInput(req, route.params, BODY_LIMIT_BYTES, route.contract.input),
+            // Which node answered: two versions of identity answered differently and nothing said which (2026-10-06).
+            (nodeID) => { if (!res.headersSent) res.setHeader('x-mesh-node', nodeID); },
+        );
+
+        if (invoked.held) {
+            res.setHeader('Content-Type', 'application/json');
+            res.statusCode = 202;
+            res.end(JSON.stringify(invoked.hold));
+            return;
+        }
+
+        res.setHeader('x-exposure-shape', this.describe(target).shapeHash);
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 200;
+        res.end(JSON.stringify(invoked.result));
+    }
+
+    /**
+     * One call through this gateway, however it arrived (a REST request, or an MCP tools/call): who
+     * is calling, in which organization, its gate, its input (read only once the gate has passed),
+     * the form checks, a hold for a token's destructive call, then the call itself. Both doors go
+     * through here, so a contract is gated, scoped and held the same way on each.
+     */
+    private async invoke(
+        target: Target,
+        route: Route,
+        req: http.IncomingMessage,
+        trace: CallTrace,
+        readInput: () => Promise<Record<string, unknown>>,
+        onRouted: (nodeID: string) => void,
+    ): Promise<Invoked> {
         const caller = await this.resolveCaller(req);
         trace.caller = caller;
         const gated = route.contract.permissions.length > 0 || route.row.role !== undefined || route.row.permission !== undefined;
@@ -1230,7 +1276,7 @@ export class ApiGateway {
         await this.checkGate(route.row, route.contract, caller, organization, target.tenantId);
 
         // A public form's own measure of how long it was shown is the gateway's to check, never the service's.
-        const timing = formTiming(route.row.contract, await this.parseInput(req, route.params, BODY_LIMIT_BYTES, route.contract.input));
+        const timing = formTiming(route.row.contract, await readInput());
         const input = timing.input;
         trace.input = input;
 
@@ -1324,11 +1370,7 @@ export class ApiGateway {
                 });
             }
 
-            const held = await this.placeOnHold(route, caller, target, input, effectiveTenantId);
-            res.setHeader('Content-Type', 'application/json');
-            res.statusCode = 202;
-            res.end(JSON.stringify(held));
-            return;
+            return { held: true, hold: await this.placeOnHold(route, caller, target, input, effectiveTenantId) };
         }
 
         // route.row.contract is a domain.action key validated at runtime (findRoute already
@@ -1339,9 +1381,7 @@ export class ApiGateway {
         // minutes, running on surf) answered 500 here while the import carried on.
         const timeout = route.contract.timeout;
         const result = await this.broker.callNamed(route.row.contract, input, {
-            meta, ...(timeout !== undefined ? { timeout } : {}),
-            // Which node answered: two versions of identity answered differently and nothing said which (2026-10-06).
-            onRouted: (nodeID) => { if (!res.headersSent) res.setHeader('x-mesh-node', nodeID); },
+            meta, ...(timeout !== undefined ? { timeout } : {}), onRouted,
         });
 
         // A sign-out or a renewal through this gateway ends the old ticket here at once, not after
@@ -1352,10 +1392,150 @@ export class ApiGateway {
             if (token !== undefined) this.callers.forget(token);
         }
 
-        res.setHeader('x-exposure-shape', this.describe(target).shapeHash);
-        res.setHeader('Content-Type', 'application/json');
-        res.statusCode = 200;
-        res.end(JSON.stringify(result));
+        return { held: false, result };
+    }
+
+    /**
+     * An api whose protocol is `mcp` (design/mcp.md): MCP's Streamable HTTP transport, one JSON-RPC
+     * message per POST, answered as JSON. Its tools are this api's callable rows that the caller
+     * passes the gate of; a tools/call goes through `invoke`, as a REST call to the same contract
+     * does. No server-sent stream (GET is refused, as the transport allows), no sessions.
+     */
+    private async handleMcp(target: Target, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const reply = (status: number, body?: Record<string, unknown>): void => {
+            res.statusCode = status;
+            if (body === undefined) {
+                res.end();
+                return;
+            }
+
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(body));
+        };
+
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
+            res.setHeader('Allow', 'POST');
+            reply(405, rpcError(undefined, RPC_INVALID_REQUEST, 'This MCP server answers POST only: it opens no event stream.'));
+            return;
+        }
+
+        let body: unknown;
+        try {
+            body = JSON.parse(await this.readBody(req, BODY_LIMIT_BYTES));
+        } catch (err) {
+            if (isMeshError(err)) throw err;
+            reply(400, rpcError(undefined, RPC_PARSE_ERROR, 'Malformed JSON body.'));
+            return;
+        }
+
+        const request = rpcRequestOf(body);
+        if ('error' in request) {
+            reply(400, rpcError(undefined, RPC_INVALID_REQUEST, request.error));
+            return;
+        }
+
+        // A notification (no id) -- notifications/initialized, a cancel -- wants no answer.
+        if (request.id === undefined) {
+            reply(202);
+            return;
+        }
+
+        switch (request.method) {
+            case 'initialize':
+                reply(200, rpcResult(request.id, initializeResult(request.params, target.host, this.version)));
+                return;
+            case 'ping':
+                reply(200, rpcResult(request.id, {}));
+                return;
+            case 'tools/list': {
+                const { tools } = await this.mcpTools(target, req);
+                reply(200, rpcResult(request.id, { tools }));
+                return;
+            }
+            case 'tools/call':
+                reply(200, rpcResult(request.id, await this.mcpCall(target, req, request.params)));
+                return;
+            default:
+                reply(200, rpcError(request.id, RPC_METHOD_NOT_FOUND, `No method "${request.method}" here: this server has tools only.`));
+        }
+    }
+
+    /**
+     * The tools this caller may call: every callable row whose gate it passes, so a list never
+     * names what would only be refused. Checked as a call would be, in the caller's organization.
+     */
+    private async mcpTools(target: Target, req: http.IncomingMessage): Promise<{ tools: McpTool[]; routes: Map<string, Route> }> {
+        const caller = await this.resolveCaller(req);
+        const routes = new Map<string, Route>();
+        const sources: ToolSource[] = [];
+        for (const entries of this.routable(target).values()) {
+            for (const { row, contract } of entries) {
+                const gated = contract.permissions.length > 0 || row.role !== undefined || row.permission !== undefined;
+                try {
+                    const organization = await this.callOrganization(req, gated, caller, target.tenantId);
+                    await this.checkGate(row, contract, caller, organization, target.tenantId);
+                } catch (err) {
+                    if (isMeshError(err) && err.status < 500) continue;
+                    throw err;
+                }
+
+                sources.push({ key: row.contract, description: contract.description, method: contract.rest.method, destructive: contract.destructive, input: contract.input });
+                routes.set(row.contract, { row, contract, params: {} });
+            }
+        }
+
+        const { tools, byName, clashes } = toolsOf(sources);
+        if (clashes.length > 0) {
+            this.broker.logger.warn(`[api] ${target.host}: left out of its MCP tools, their names clash with another's: ${clashes.join(', ')}`);
+        }
+        const named = new Map<string, Route>();
+        for (const [name, source] of byName) {
+            const route = routes.get(source.key);
+            if (route !== undefined) named.set(name, route);
+        }
+
+        return { tools, routes: named };
+    }
+
+    /** tools/call: the named tool's contract through `invoke`, its answer -- or why not -- as the tool's result. */
+    private async mcpCall(target: Target, req: http.IncomingMessage, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+        const name = params['name'];
+        const args = params['arguments'];
+        if (typeof name !== 'string') {
+            return errorResult('tools/call needs the tool\'s name.');
+        }
+
+        // Found among the rows themselves, not the caller's list: a gate refuses a call the same way
+        // whether or not it was listed, and says why.
+        let route: Route | undefined;
+        for (const entries of this.routable(target).values()) {
+            for (const { row, contract } of entries) {
+                if (toolName(row.contract) === name && route === undefined) route = { row, contract, params: {} };
+            }
+        }
+        if (route === undefined) {
+            return errorResult(`No tool "${name}" on ${target.host}.`);
+        }
+
+        const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? Object.fromEntries(Object.entries(args)) : {};
+        const trace: CallTrace = { startedAt: Date.now() };
+        try {
+            const invoked = await this.invoke(target, route, req, trace, async () => input, () => undefined);
+            this.recordActivity(target, route, req, trace, invoked.held ? 202 : 200);
+
+            return invoked.held ? heldResult(route.row.contract, invoked.hold) : callResult(invoked.result);
+        } catch (err) {
+            const status = isMeshError(err) ? err.status : err instanceof Error && err.message.includes('Local tool not found') ? 503 : 500;
+            const message = err instanceof Error ? err.message : String(err);
+            this.recordActivity(target, route, req, trace, status, message);
+            if (status >= 500 && !(err instanceof Error && err.message.includes('Local tool not found'))) {
+                this.broker.logger.error(`[api] ${target.host}: MCP tool ${route.row.contract} failed`, err);
+
+                return errorResult(`${route.row.contract} failed on the server.`);
+            }
+
+            return errorResult(message);
+        }
     }
 
     /** How long a held call waits before it's treated as expired. Not enforced by a timer --
