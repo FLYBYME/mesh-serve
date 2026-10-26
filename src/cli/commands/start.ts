@@ -77,10 +77,15 @@ export class StartCommand extends BaseCommand {
         // Printed exactly as before (the journal is the record), and also kept in memory for
         // serve.node.logs -- reading a node's logs without SSH.
         const console$ = { [LogLevel.DEBUG]: console.debug, [LogLevel.INFO]: console.info, [LogLevel.WARN]: console.warn, [LogLevel.ERROR]: console.error };
+        // MESH_LOG_FORMAT=json: one object per line, with the trace and span the line was written in,
+        // for the log store to search by field (design/streams-site.md). The arguments are in that
+        // line already, so they are not printed again after it.
+        const json = process.env.MESH_LOG_FORMAT === 'json';
         const logger = new Logger(LogLevelMap[args.logLevel], {}, (level, formatted, _original, ...rest) => {
-            (console$[level] ?? console.log)(formatted, ...rest);
-            recordLog(level, formatted, rest);
-        });
+            const extra = json ? [] : rest;
+            (console$[level] ?? console.log)(formatted, ...extra);
+            recordLog(level, formatted, extra);
+        }, json ? 'json' : 'text');
         const serializer = new JSONSerializer();
         // Boot flags, then whatever serve.node.label saved on top (methods/labels.ts).
         const labels = { ...this.parseLabels(args.labels), ...readSavedLabels() };
@@ -170,12 +175,19 @@ export class StartCommand extends BaseCommand {
         const broker = node.getProvider<IServiceBroker>('broker');
         // What this node runs, with every presence: serve.node.serving reads it, beside each contract's hash.
         broker.registry.setLocalSoftware({ 'mesh-serve': runningVersion(), mesh: meshFrameworkVersion() });
-        // Spans, when asked for: one JSON line each on stdout, which the logs agent already ships
-        // to VictoriaLogs. Off unless MESH_SPANS=1 -- a line per call is real volume on a small server.
-        if (process.env.MESH_SPANS === '1') {
-            broker.setSpanSink?.((span) => { process.stdout.write(`${JSON.stringify({ type: 'span', ...span })}\n`); });
-            this.logger.info('Spans on: one JSON line per call, event and database operation (MESH_SPANS=1).');
-        }
+        // Spans: one JSON line each on stdout, which the logs agent ships. A failed one always -- a
+        // handler's error otherwise reached only its caller, and a 500 left no trace on any node
+        // (open.md, 10-26) -- every one with MESH_SPANS=1, since a line per call is real volume.
+        const allSpans = process.env.MESH_SPANS === '1';
+        broker.setSpanSink?.((span) => {
+            if (!allSpans && span.outcome === 'ok') return;
+
+            const line = JSON.stringify({ type: 'span', ...span });
+            process.stdout.write(`${line}\n`);
+            // In serve.node.logs too, so a failed call is found where an operator looks first.
+            if (span.outcome !== 'ok') recordLog(LogLevel.ERROR, line, []);
+        });
+        if (allSpans) this.logger.info('Spans on: one JSON line per call, event and database operation (MESH_SPANS=1).');
         if (metricsPort !== undefined) {
             // Who this is, and the process/event-loop gauges. Until now a scrape had only the
             // broker's and transport's own counters.
