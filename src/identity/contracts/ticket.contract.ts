@@ -5,6 +5,7 @@ import { ticketSchema } from '../schema/ticket.js';
 export const ticketCrud = defineCrud('identity.ticket', ticketSchema, {
     pluralPath: 'tickets',
     unique: [{ fields: 'token', scope: 'global' }],
+    hidden: ['token'],
     visibility: {},
     // The generated resolve-by-id is renamed out of the way: `ticketResolveContract` below owns
     // the name `identity.ticket.resolve`, and resolves by *token*, which is what that key has

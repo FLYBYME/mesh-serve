@@ -5,6 +5,7 @@ import { apiTokenSchema } from '../schema/apiToken.js';
 export const apiTokenCrud = defineCrud('identity.apiToken', apiTokenSchema, {
     pluralPath: 'apiTokens',
     unique: [{ fields: 'tokenHash', scope: 'global' }],
+    hidden: ['tokenHash'],
     visibility: {},
     dependencies: [],
     filePath: 'src/identity/contracts/apiToken.contract.ts',
@@ -121,6 +122,7 @@ export const validateOutputSchema = z.object({
     userId: z.string().optional().describe('The account this token acts as, when valid'),
     organizationId: z.string().optional().describe('The token\'s own optional organization scope (apiTokenSchema.organizationId), when it has one'),
     roles: z.array(z.string()).optional().describe('Roles granted to this token'),
+    grants: z.array(z.string()).optional().describe('When the token names roles: those roles and every role they inherit. A gate asking for a role not here refuses the token, whatever its account holds. Absent: the token acts with its account\'s roles'),
     name: z.string().optional().describe('The token\'s name'),
     id: z.string().optional().describe('The token\'s own id (never the token): which of the account\'s tokens this is, so a service can tell one apart from another of the same account'),
 }).describe('Whether the token is valid, and what it represents');

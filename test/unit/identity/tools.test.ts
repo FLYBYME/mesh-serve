@@ -495,6 +495,9 @@ describe('identity tools', () => {
                         revokedAt: undefined,
                         expiresAt: undefined,
                     }),
+                    'identity.role.find': async () => [
+                        { key: 'operator', permissions: [], inherits: [] },
+                    ],
                 },
             });
 
@@ -505,6 +508,7 @@ describe('identity tools', () => {
                 userId: 'u-789',
                 organizationId: 'org-42',
                 roles: ['operator'],
+                grants: ['operator'],
                 name: 'ci-token',
             });
         });
@@ -673,6 +677,8 @@ describe('identity tools', () => {
                 handlers: {
                     'identity.ticket.find_one': async ({ query }) => {
                         if (query.token === activeTicket.token) return activeTicket;
+                        // secrets.ts reads the stored hash back by id for the event's tokenId.
+                        if (query.id === activeTicket.id) return activeTicket;
                         return undefined;
                     },
                     'identity.ticket.update': async (params) => {

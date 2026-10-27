@@ -5,6 +5,9 @@ import { userSchema } from '../schema/user.js';
 export const userCrud = defineCrud('identity.user', userSchema, {
     pluralPath: 'users',
     unique: [{ fields: 'email', scope: 'global' }],
+    // Out of every read and event (identity.user.updated went out with it); sign-in reads it with
+    // methods/secrets.ts. Review 10-26.
+    hidden: ['passwordHash'],
     visibility: {},
     dependencies: [],
     filePath: 'src/identity/contracts/user.contract.ts',

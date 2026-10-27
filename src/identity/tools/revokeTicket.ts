@@ -2,6 +2,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { RevokeInput, RevokeOutput } from '../contracts/ticket.contract.js';
 import { hashToken } from '../methods/hash.js';
+import { ticketHashOf } from '../methods/secrets.js';
 
 export async function revokeTicket(
     input: RevokeInput,
@@ -23,10 +24,11 @@ export async function revokeTicket(
             revokedAt: now,
             ...(input.reason === undefined ? {} : { revokedReason: input.reason }),
         });
+        const tokenId = await ticketHashOf(ctx, ticket.id);
         ctx.emit('identity.ticket.revoked', {
             id: ticket.id,
             userId: ticket.userId,
-            tokenId: ticket.token,
+            tokenId,
             revokedAt: now.getTime(),
             revokedReason: input.reason,
         });

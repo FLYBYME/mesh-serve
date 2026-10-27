@@ -58,6 +58,13 @@ interface Caller {
     readonly agentName?: string;
     /** The api token's own id, when viaApiToken: which token, not only whose (a workflow job's). */
     readonly apiTokenId?: string;
+    /** The api token's organization, when it was issued for one: it acts there and nowhere else. */
+    readonly tokenOrganizationId?: string;
+    /**
+     * When the api token names roles: those and what they inherit (identity.apiToken.validate's
+     * `grants`). A gate passes only for a role here and held by the account. Absent: the account's.
+     */
+    readonly tokenGrants?: readonly string[];
     /** Informational only (a held call's frozen requestedBy, display) -- never trusted for a gate
      *  decision; checkGate always re-resolves fresh. */
     readonly roles: readonly string[];
@@ -116,6 +123,11 @@ export function sessionOf(reply: unknown): Session | undefined {
     if (!/^[a-z][a-z0-9_-]*$/.test(role) || ACCOUNT_ROLES.includes(role) || subjectId === '' || organizationId === '') return undefined;
 
     return { role, subjectId, organizationId, fields };
+}
+
+/** Whether the caller's api token, if it names roles, carries `role`. A person, or a token naming none: yes. */
+function tokenAllows(caller: Caller, role: string): boolean {
+    return caller.tokenGrants === undefined || caller.tokenGrants.includes(role);
 }
 
 /** The organization a request names: the `x-organization` header, or `?organization=` (an EventSource cannot set headers). */
@@ -551,7 +563,14 @@ export class ApiGateway {
             }
             return caller.session.organizationId;
         }
-        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
+        // An api token issued for an organization acts in it and no other, an operator's too.
+        if (caller.tokenOrganizationId !== undefined) {
+            if (named !== undefined && named !== caller.tokenOrganizationId) {
+                throw new MeshError({ message: 'This api token acts only in the organization it was issued for.', code: 'FORBIDDEN', status: 403 });
+            }
+            return caller.tokenOrganizationId;
+        }
+        if (tokenAllows(caller, 'operator') && await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
             if (named === undefined) return apiTenantId;
 
             // An operator acts in any organization the request names, operator-only calls too
@@ -691,9 +710,13 @@ export class ApiGateway {
 
         const apiToken = await this.broker.call('identity.apiToken.validate', { token });
         if (apiToken.valid && apiToken.userId !== undefined) {
+            // Its organization and roles are kept: both were dropped here, so a token issued for one
+            // organization, or with fewer roles than its account, acted as the whole account (review 10-26).
             return {
                 userId: apiToken.userId, viaApiToken: true, agentName: apiToken.name,
                 ...(apiToken.id !== undefined ? { apiTokenId: apiToken.id } : {}),
+                ...(apiToken.organizationId !== undefined ? { tokenOrganizationId: apiToken.organizationId } : {}),
+                ...(apiToken.grants !== undefined ? { tokenGrants: apiToken.grants } : {}),
                 roles: apiToken.roles ?? [],
             };
         }
@@ -837,9 +860,17 @@ export class ApiGateway {
         }
 
         // An operator passes every gate, in whichever organization the call runs (callOrganization):
-        // acting for a client takes that client's member calls too (owner, 10-10).
-        if (await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
+        // acting for a client takes that client's member calls too (owner, 10-10). Not through a
+        // token that does not carry the role.
+        if (tokenAllows(caller, 'operator') && await this.holdsRole(caller.userId, 'operator', apiTenantId)) {
             return;
+        }
+
+        // A token that names roles passes a gate only for those (and what they inherit).
+        for (const roleKey of [...required, ...(row.role !== undefined ? [row.role] : [])]) {
+            if (!tokenAllows(caller, roleKey)) {
+                throw new MeshError({ message: `"${row.contract}" requires role "${roleKey}", which this api token does not carry.`, code: 'FORBIDDEN', status: 403 });
+            }
         }
 
         // identity.membership is scopedBy: 'organizationId', not 'tenantId' like every other

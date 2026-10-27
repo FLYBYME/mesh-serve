@@ -53,7 +53,16 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
         };
     };
 
+    // The store as it is (Database.repo, what identity/methods/secrets.ts reads hidden fields
+    // with): the mock has no `hidden` to strip, so it answers from the same handlers as ctx.db.
+    const database = {
+        repo: (_schema: unknown, domain: string) => ({
+            findOne: (query: any) => callFn(`${domain}.find_one`, { query }),
+        }),
+    };
+
     const broker = {
+        getProvider: (name: string) => (name === 'database' ? database : undefined),
         call: callFn,
         callNamed: callFn,
         callOnLeader: callOnLeaderFn,

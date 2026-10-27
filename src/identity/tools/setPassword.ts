@@ -4,6 +4,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { SetPasswordInput, SetPasswordOutput } from '../contracts/user.contract.js';
 import { hashPassword, verifyPassword } from '../methods/hash.js';
 import { notifyPasswordChanged } from './userToken.js';
+import { passwordHashOf } from '../methods/secrets.js';
 
 export async function setPassword(
     input: SetPasswordInput,
@@ -28,8 +29,9 @@ export async function setPassword(
     // A ticket alone is not enough to replace a password that exists: a stolen ticket would
     // otherwise lock the owner out for good. A provisional account has none yet -- setting the
     // first one is how it is claimed.
-    if (!wasProvisional && user.passwordHash !== undefined && user.passwordHash !== '') {
-        if (input.currentPassword === undefined || !(await verifyPassword(input.currentPassword, user.passwordHash))) {
+    const currentHash = await passwordHashOf(ctx, userId);
+    if (!wasProvisional && currentHash !== undefined && currentHash !== '') {
+        if (input.currentPassword === undefined || !(await verifyPassword(input.currentPassword, currentHash))) {
             throw new MeshError({ message: 'Your current password is required, and did not match.', code: 'INVALID_CREDENTIALS', status: 401 });
         }
     }

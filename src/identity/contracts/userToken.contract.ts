@@ -6,6 +6,7 @@ import { RESET_REQUESTED } from '../methods/userToken.js';
 /** One-time links (methods/userToken.ts). Internal: nothing outside identity reads or writes them. */
 export const userTokenCrud = defineCrud('identity.userToken', userTokenSchema, {
     pluralPath: 'user-tokens',
+    hidden: ['tokenHash'],
     visibility: {},
     dependencies: ['identity.user'],
     filePath: 'src/identity/contracts/userToken.contract.ts',

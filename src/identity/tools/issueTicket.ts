@@ -4,6 +4,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { IssueInput, IssueOutput } from '../contracts/ticket.contract.js';
 import { hashToken, verifyPassword, issuedToken } from '../methods/hash.js';
 import { findUserByEmail } from '../methods/findByEmail.js';
+import { passwordHashOf } from '../methods/secrets.js';
 
 /** How long a ticket lasts: from its sign-in, or its renewal (identity.ticket.renew). */
 export const TICKET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -13,7 +14,8 @@ export async function issueTicket(
     ctx: IServiceContext
 ): Promise<IssueOutput> {
     const user = await findUserByEmail(ctx, input.email);
-    if (user === undefined || !(await verifyPassword(input.password, user.passwordHash ?? ''))) {
+    const passwordHash = user === undefined ? undefined : await passwordHashOf(ctx, user.id);
+    if (user === undefined || !(await verifyPassword(input.password, passwordHash ?? ''))) {
         throw new MeshError({ message: 'Invalid email or password.', code: 'INVALID_CREDENTIALS', status: 401 });
     }
     if (user.suspendedAt !== undefined) {
