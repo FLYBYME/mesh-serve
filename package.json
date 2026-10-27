@@ -39,7 +39,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "^4.14.10",
+        "@flybyme/mesh": "^4.14.11",
         "@flybyme/mesh-web": "^0.21.19",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
