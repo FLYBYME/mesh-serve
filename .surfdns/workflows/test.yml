@@ -9,7 +9,8 @@ on:
 jobs:
   test:
     image: node:22
-    memory: 4Gi
+    # With its MongoDB, 4Gi: the most a job and its services may ask for.
+    memory: 3Gi
     services:
       mongo:
         image: mongo:7
