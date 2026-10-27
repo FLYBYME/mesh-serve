@@ -26,6 +26,7 @@ import '../src/api/contracts/api.contract.js';
 import '../src/api/contracts/expose.contract.js';
 import { hashPassword } from '../src/identity/methods/hash.js';
 import { ensureBootstrapApi } from '../src/api/ensureBootstrapApi.js';
+import { API_LIMIT } from '../src/api/gateway.js';
 
 const DB_NAME = 'mesh-serve-api-token-scope-integration-test';
 const WS_PORT = 16613;
@@ -138,6 +139,13 @@ describe('an api token is held to its organization and roles', () => {
         expect(await call('admin', betaOnly)).toEqual({ status: 200, tenant: org.beta });
         expect(await call('admin', betaOnly, org.beta)).toEqual({ status: 200, tenant: org.beta });
         expect((await call('admin', betaOnly, org.platform)).status).toBe(403);
+    });
+
+    it('a caller from outside asks for at most API_LIMIT rows', async () => {
+        const res = await fetch(`${ORIGIN}/api/scopetest/member?limit=${API_LIMIT + 1}`, { headers: { authorization: `Bearer ${tokens['whole'] ?? ''}` } });
+        expect(res.status).toBe(400);
+        const ok = await fetch(`${ORIGIN}/api/scopetest/member?limit=${API_LIMIT}`, { headers: { authorization: `Bearer ${tokens['whole'] ?? ''}` } });
+        expect(ok.status).toBe(200);
     });
 
     it('a token that names roles passes only their gates, never its account\'s higher ones', async () => {

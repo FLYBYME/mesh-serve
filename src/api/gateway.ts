@@ -33,6 +33,8 @@ const EXPOSE_PAGE = 500;
  * carries more: a build comes in pieces (serve.artifact.import_piece), never one 32 MB body.
  */
 export const BODY_LIMIT_BYTES = 1024 * 1024;
+/** The most rows a find answers a caller from outside (the largest our own sites ask for). */
+export const API_LIMIT = 1000;
 
 /** `https://<host>` when the request's Origin is https and one of `sites`, else undefined. */
 export function siteOf(origin: string | undefined, sites: readonly string[]): string | undefined {
@@ -1011,6 +1013,12 @@ export class ApiGateway {
                 message: `Query operators are not accepted over the api (${operator}): a query is field equality only.`,
                 code: 'BAD_REQUEST', status: 400,
             });
+        }
+        // A page at most API_LIMIT long from the outside; mesh allows far more to its own code.
+        const raw = input['limit'];
+        const limit = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : Number.NaN;
+        if (limit > API_LIMIT) {
+            throw new MeshError({ message: `limit is at most ${API_LIMIT} over the api; page with offset.`, code: 'BAD_REQUEST', status: 400 });
         }
         return input;
     }
