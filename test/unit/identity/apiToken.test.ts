@@ -190,6 +190,7 @@ describe('identity.apiToken.validate', () => {
         const plaintext = 'plaintext-token-value';
         const { ctx } = context(undefined, {
             'identity.apiToken.find_one': async () => ({ id: 't1', name: 'git', userId: 'alice', roles: [], tokenHash: hashToken(plaintext) }),
+            'identity.user.find_one': async () => ({ id: 'alice' }),
         });
         const debug = vi.spyOn(ctx.logger, 'debug');
 

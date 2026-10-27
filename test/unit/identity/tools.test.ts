@@ -498,6 +498,7 @@ describe('identity tools', () => {
                     'identity.role.find': async () => [
                         { key: 'operator', permissions: [], inherits: [] },
                     ],
+                    'identity.user.find_one': async () => ({ id: 'u-789' }),
                 },
             });
 
@@ -568,6 +569,7 @@ describe('identity tools', () => {
                         if (query.token === activeTicket.token) return activeTicket;
                         return undefined;
                     },
+                    'identity.user.find_one': async () => ({ id: 'u-456' }),
                 },
             });
 

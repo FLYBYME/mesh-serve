@@ -2,6 +2,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 
 import type { ValidateInput, ValidateOutput } from '../contracts/ticket.contract.js';
 import { hashToken } from '../methods/hash.js';
+import { accountStopped } from '../methods/sessions.js';
 
 export async function validateTicket(
     input: ValidateInput,
@@ -15,6 +16,8 @@ export async function validateTicket(
         ctx.logger.debug('ticket not found or already revoked');
         return { valid: false };
     }
+    // Suspending an account stops its sessions at once, not when they expire (review 10-26).
+    if (await accountStopped(ctx, ticket.userId)) return { valid: false };
 
     ctx.logger.debug(`validated ticket for ${ticket.userId}`);
 

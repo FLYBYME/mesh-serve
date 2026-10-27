@@ -7,6 +7,7 @@ import type {
 } from '../contracts/userToken.contract.js';
 import { hashPassword } from '../methods/hash.js';
 import { findUserByEmail } from '../methods/findByEmail.js';
+import { endSessions } from '../methods/sessions.js';
 import {
     hashToken, mayRequest, newToken, normalizeEmail, RESET_REQUESTED, TOKEN_LIFETIME_MS, tokenLink, tokenProblem,
     type UserTokenPurpose,
@@ -191,14 +192,7 @@ export async function reset_complete(input: ResetCompleteInput, ctx: IServiceCon
     });
 
     // Whoever had the old password may have a session: every one ends.
-    const tickets = await ctx.db('identity.ticket').find({ query: { userId: user.id }, limit: 1000 });
-    let signedOutSessions = 0;
-    for (const ticket of tickets) {
-        if (ticket.revokedAt !== undefined) continue;
-        await ctx.db('identity.ticket').update({ id: ticket.id, revokedAt: new Date(), revokedReason: 'password reset' });
-        signedOutSessions++;
-    }
-    if (signedOutSessions > 0) ctx.emit('identity.user.signed_out', { userId: user.id });
+    const signedOutSessions = await endSessions(ctx, user.id, 'password reset');
     ctx.logger.info(`[identity] password reset for "${user.id}"; ${signedOutSessions} sessions ended`);
     await notifyPasswordChanged(ctx, user, 'reset');
     return { ok: true, signedOutSessions };

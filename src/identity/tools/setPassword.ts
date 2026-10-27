@@ -5,6 +5,7 @@ import type { SetPasswordInput, SetPasswordOutput } from '../contracts/user.cont
 import { hashPassword, verifyPassword } from '../methods/hash.js';
 import { notifyPasswordChanged } from './userToken.js';
 import { passwordHashOf } from '../methods/secrets.js';
+import { endSessions } from '../methods/sessions.js';
 
 export async function setPassword(
     input: SetPasswordInput,
@@ -44,7 +45,12 @@ export async function setPassword(
 
     ctx.logger.debug(`set password for user "${userId}"`, { id: userId, claimed: wasProvisional });
     // Claiming an account sets its first password: nothing was changed, so nothing to report.
-    if (!wasProvisional) await notifyPasswordChanged(ctx, user, 'changed');
+    // A change ends every session, this one too: a session made with the old password stops
+    // with it (review 10-26). The caller signs in again with the new one.
+    if (!wasProvisional) {
+        await endSessions(ctx, userId, 'password changed');
+        await notifyPasswordChanged(ctx, user, 'changed');
+    }
 
     return { ok: true, claimed: wasProvisional };
 }

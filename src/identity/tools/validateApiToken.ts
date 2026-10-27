@@ -2,6 +2,7 @@ import type { IServiceContext } from '@flybyme/mesh';
 import type { ValidateInput, ValidateOutput } from '../contracts/apiToken.contract.js';
 import { hashToken } from '../methods/hash.js';
 import { expandRoles } from '../methods/roles.js';
+import { accountStopped } from '../methods/sessions.js';
 
 export async function validateApiToken(
     input: ValidateInput,
@@ -13,6 +14,8 @@ export async function validateApiToken(
         || (token.expiresAt !== undefined && token.expiresAt.getTime() < Date.now())) {
         return { valid: false };
     }
+    // A suspended account's tokens stop with it (review 10-26).
+    if (await accountStopped(ctx, token.userId)) return { valid: false };
 
     // Never the token itself: anyone who can read the log could replay it.
     ctx.logger.debug(`validated api token "${token.name}" for "${token.userId}"`, { id: token.userId, name: token.name });
