@@ -36,7 +36,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # effective independent of the process's uid, still confined to what --cap-add=NET_BIND_SERVICE
 # grants the container in the first place. `readlink -f`: setcap needs the real inode, not the
 # `/usr/local/bin/node` symlink.
-RUN setcap cap_net_bind_service=+ep "$(readlink -f "$(which node)")"
+#
+# On a copy, not node itself: a container that drops every capability (a client's) can't exec a
+# binary carrying one at all, so a capped `node` stopped this image running there. bin/entry.sh
+# starts the copy where it can, and plain node where it can't.
+RUN cp "$(readlink -f "$(which node)")" /usr/local/bin/node-bind \
+    && setcap cap_net_bind_service=+ep /usr/local/bin/node-bind
 
 # The base image already ships a `node` user at uid/gid 1000 -- which happens to be the real
 # `ubuntu` user's own uid/gid on every one of these VPS boxes, confirmed directly (`id ubuntu`).
@@ -52,5 +57,5 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 
 USER node
 ENV HOME=/home/node
-ENTRYPOINT ["node", "/app/bin/mesh-serve.mjs"]
+ENTRYPOINT ["/app/bin/entry.sh"]
 CMD ["--help"]
