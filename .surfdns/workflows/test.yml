@@ -1,0 +1,33 @@
+# Every push to any branch: build, typecheck and tests (design/workflows.md, "One way to build").
+# It replaces GitHub's ci.yml, which could not install our packages (registry.surfdns.net) and was
+# red on every push. The integration tests' MongoDB runs beside the job, on localhost:27017.
+name: test
+on:
+  push:
+    branches: ['*']
+  manual: true
+jobs:
+  test:
+    image: node:22
+    memory: 4Gi
+    services:
+      mongo:
+        image: mongo:7
+        memory: 1Gi
+        port: 27017
+    steps:
+      # As publish.yml: dependencies not yet published install from git.surfdns.net.
+      - name: our repositories from git.surfdns.net
+        run: |
+          base="$(dirname "$(git remote get-url origin)")/"
+          git config --global url."$base".insteadOf "ssh://git@github.com/FLYBYME/"
+          git config --global --add url."$base".insteadOf "https://github.com/FLYBYME/"
+          git config --global --add url."$base".insteadOf "git@github.com:FLYBYME/"
+          git config --global http.https://git.surfdns.net/.extraHeader "Authorization: Bearer $GIT_AUTH_TOKEN"
+      - name: install
+        run: npm ci --no-audit --no-fund
+      - name: build
+        run: npm run build
+      # Typecheck, then the parts' builds, then every test.
+      - name: test
+        run: npm test
