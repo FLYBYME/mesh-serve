@@ -252,16 +252,26 @@ function isExposureDescriptor(value: unknown): value is ExposureDescriptor {
 }
 
 // A snapshot of one live api's descriptor, kept on the machine that made it, never in this repo
-// (mesh-serve names no deployment of itself). Where it is absent -- a workflow job -- these skip.
+// (mesh-serve names no deployment of itself). Where it is absent -- a workflow job -- these tests
+// are not registered: a skipped describe's body still runs, and would read the missing file.
 const descriptorPath = path.join(os.homedir(), 'code/agy/live-rows/api.surfdns.net._describe.json');
 
-describe.skipIf(!fs.existsSync(descriptorPath))('generate --only <patterns> over the real live descriptor', () => {
-    const raw = fs.readFileSync(descriptorPath, 'utf-8');
-    const parsed: unknown = JSON.parse(raw);
+function liveDescriptor(): ExposureDescriptor | undefined {
+    if (!fs.existsSync(descriptorPath)) return undefined;
+    const parsed: unknown = JSON.parse(fs.readFileSync(descriptorPath, 'utf-8'));
     if (!isExposureDescriptor(parsed)) {
         throw new Error('Expected api.surfdns.net._describe.json to match ExposureDescriptor');
     }
-    const realDescriptor = parsed;
+    return parsed;
+}
+
+describe('generate --only <patterns> over the real live descriptor', () => {
+    const live = liveDescriptor();
+    if (live === undefined) {
+        it.skip('needs the live descriptor snapshot on this machine', () => undefined);
+        return;
+    }
+    const realDescriptor = live;
 
     it('--only \'infer.*\' keeps only infer calls and events, every one of them', () => {
         const filtered = filterDescriptor(realDescriptor, 'infer.*');
