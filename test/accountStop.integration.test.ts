@@ -35,7 +35,7 @@ describe('a stopped account stops what it holds', () => {
             email, displayName: email, passwordHash: await hashPassword(PASSWORD), roles: [], provisional: false,
         })).id;
         const ticket = (await broker.call('identity.ticket.issue', { email, password: PASSWORD })).token;
-        const apiToken = (await broker.call('identity.apiToken.issue', { name: 'ci', userId }, { meta: { user: { id: userId } } })).token;
+        const apiToken = (await broker.call('identity.apiToken.issue', { name: 'ci', userId }, { meta: { user: { id: userId, tenant_id: '' } } })).token;
         return { userId, ticket, apiToken };
     };
 
@@ -79,7 +79,7 @@ describe('a stopped account stops what it holds', () => {
     it('changing a password ends the sessions made with the old one', async () => {
         const held = await account('changed@stop.invalid');
 
-        await broker.call('identity.user.setPassword', { password: 'a-new-password-for-tests-15', currentPassword: PASSWORD }, { meta: { user: { id: held.userId } } });
+        await broker.call('identity.user.setPassword', { password: 'a-new-password-for-tests-15', currentPassword: PASSWORD }, { meta: { user: { id: held.userId, tenant_id: '' } } });
 
         expect((await broker.call('identity.ticket.validate', { token: held.ticket })).valid).toBe(false);
         expect((await broker.call('identity.apiToken.validate', { token: held.apiToken })).valid).toBe(true);
