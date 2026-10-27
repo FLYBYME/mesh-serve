@@ -221,6 +221,17 @@ export function rootDomains(domains: readonly string[]): string[] {
 }
 
 export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: string): Promise<{ domain: string; nodeID: string }> {
+    // One build is one module: a second part on the same build would share it, overwrite its
+    // record, and its unload (or its failed load) would take the first part down too -- the 10-26
+    // 04:53 outage, a part deployed onto another's build. Refused before anything is touched.
+    if (loadedParts.has(partKey(ctx.nodeID, absolutePath))) {
+        throw new MeshError({
+            message: `"${absolutePath}" is already loaded on ${ctx.nodeID} by another part: one build runs as one part.`,
+            code: 'CONFLICT',
+            status: 409,
+        });
+    }
+
     const isCjs = absolutePath.endsWith('.cjs');
     // pathToFileURL, not the bare path: Node's dynamic import() accepts an absolute path on POSIX
     // by convention rather than by spec, and a Windows-hosted supervisor would refuse it outright.

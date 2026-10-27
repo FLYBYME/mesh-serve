@@ -132,6 +132,20 @@ describe('reloading a part in place', () => {
         expect(parent?.children).not.toContain(loaded);
     });
 
+    it('refuses a second load of the same build, and the first part keeps running', async () => {
+        const v5 = writeBuild(dir, 'v5');
+        await broker.call('partreload.load', { modulePath: v5 });
+        try {
+            await expect(broker.call('partreload.load', { modulePath: v5 })).rejects.toMatchObject({ status: 409 });
+            heard.length = 0;
+            await ping();
+            // Once: the refused load mounted nothing beside it.
+            expect(heard.filter((build) => build === 'v5')).toEqual(['v5']);
+        } finally {
+            await broker.call('partreload.unload', { modulePath: v5 });
+        }
+    });
+
     it('leaves nothing subscribed once the part is unloaded', async () => {
         const v3 = writeBuild(dir, 'v3');
         await broker.call('partreload.load', { modulePath: v3 });
