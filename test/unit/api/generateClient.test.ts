@@ -251,8 +251,11 @@ function isExposureDescriptor(value: unknown): value is ExposureDescriptor {
     return true;
 }
 
-describe('generate --only <patterns> over the real live descriptor', () => {
-    const descriptorPath = path.join(os.homedir(), 'code/agy/live-rows/api.surfdns.net._describe.json');
+// A snapshot of one live api's descriptor, kept on the machine that made it, never in this repo
+// (mesh-serve names no deployment of itself). Where it is absent -- a workflow job -- these skip.
+const descriptorPath = path.join(os.homedir(), 'code/agy/live-rows/api.surfdns.net._describe.json');
+
+describe.skipIf(!fs.existsSync(descriptorPath))('generate --only <patterns> over the real live descriptor', () => {
     const raw = fs.readFileSync(descriptorPath, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
     if (!isExposureDescriptor(parsed)) {
