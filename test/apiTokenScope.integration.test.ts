@@ -141,6 +141,14 @@ describe('an api token is held to its organization and roles', () => {
         expect((await call('admin', betaOnly, org.platform)).status).toBe(403);
     });
 
+    it('_describe is gzipped for a caller that takes it, and the same descriptor either way', async () => {
+        const zipped = await fetch(`${ORIGIN}/api/_describe`, { headers: { 'accept-encoding': 'gzip' } });
+        expect(zipped.headers.get('content-encoding')).toBe('gzip');
+        const plain = await fetch(`${ORIGIN}/api/_describe`, { headers: { 'accept-encoding': 'identity' } });
+        expect(plain.headers.get('content-encoding')).toBeNull();
+        expect(await zipped.json()).toEqual(await plain.json());
+    });
+
     it('a caller from outside asks for at most API_LIMIT rows', async () => {
         const res = await fetch(`${ORIGIN}/api/scopetest/member?limit=${API_LIMIT + 1}`, { headers: { authorization: `Bearer ${tokens['whole'] ?? ''}` } });
         expect(res.status).toBe(400);

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 
 import { ContextStack, eventPermissions, isMeshError, MeshError } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
@@ -244,6 +245,8 @@ export class ApiGateway {
     private readonly descriptors = new WeakMap<Target, ReturnType<typeof buildDescriptor>>();
     /** The same, by what it is built from: a target looked up again, nothing changed, reuses it. */
     private readonly descriptorsByContent = new Map<string, ReturnType<typeof buildDescriptor>>();
+    /** A descriptor's JSON, gzipped once: it goes when the descriptor does. */
+    private readonly describeGzipped = new WeakMap<ReturnType<typeof buildDescriptor>, Buffer>();
     /** Rows an exposeDeclared api adds (declaredRows), by what they are read from. */
     private readonly declaredRowsByContent = new Map<string, ExposeRow[]>();
     /** Each target's callable rows with their declarations (routable), kept the same way. */
@@ -1194,11 +1197,24 @@ export class ApiGateway {
     }
 
 
-    private async handleDescribe(target: Target, res: http.ServerResponse): Promise<void> {
+    private async handleDescribe(target: Target, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         const descriptor = this.describe(target);
 
         res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Vary', 'Accept-Encoding');
         res.statusCode = 200;
+        // 3 MB of JSON, ~0.3 s to make: sent plain it took 5-9 s to reach a laptop (10-27). Gzipped
+        // once per descriptor, it is a tenth of that.
+        if (/\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) {
+            let body = this.describeGzipped.get(descriptor);
+            if (body === undefined) {
+                body = gzipSync(JSON.stringify(descriptor));
+                this.describeGzipped.set(descriptor, body);
+            }
+            res.setHeader('Content-Encoding', 'gzip');
+            res.end(body);
+            return;
+        }
         res.end(JSON.stringify(descriptor));
     }
 
@@ -1211,7 +1227,7 @@ export class ApiGateway {
 
         const urlPath = (req.url ?? '/').split('?')[0];
         if (urlPath === `${API_BASE}/_describe`) {
-            return this.handleDescribe(target, res);
+            return this.handleDescribe(target, req, res);
         }
         if (urlPath === `${API_BASE}/events` && (req.method ?? 'GET').toUpperCase() === 'GET') {
             return this.handleEvents(target, req, res);
