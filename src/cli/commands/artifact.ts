@@ -34,6 +34,14 @@ type Manifest = z.infer<typeof ManifestSchema>;
 const MANIFEST = 'manifest.json';
 const FILES = 'files';
 
+/** `--repo` as an absolute folder when it names one on this machine; undefined for a remote URL. */
+export async function localFolder(repo: string): Promise<string | undefined> {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(repo) || /^[^/]+@[^:]+:/.test(repo)) return undefined;
+    const stat = await fs.stat(repo).catch(() => undefined);
+
+    return stat?.isDirectory() === true ? path.resolve(repo) : undefined;
+}
+
 /**
  * Builds a part outside the platform with the builder's own code (`buildService` / `buildPart`,
  * the functions the queue runs), for the very first builds of a fresh install -- before any builder
@@ -74,7 +82,10 @@ export class ArtifactBuildCommand extends BaseCommand {
 
         const part = { path: opts.path, entryPoint: opts.entry };
         // The builder keys its checkouts by the repo record's id; here the URL stands in for one.
-        const repo = { id: `external-${crypto.createHash('sha256').update(opts.repo).digest('hex').slice(0, 16)}`, url: opts.repo };
+        // A folder on this machine by its absolute path: `--repo .` from two folders was one key,
+        // so the second build reused the first one's checkout.
+        const url = await localFolder(opts.repo) ?? opts.repo;
+        const repo = { id: `external-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 16)}`, url };
         const built: BuiltOutput = kind.data === 'service'
             ? await buildService(part, repo, opts.ref)
             : await buildPart(part, repo, opts.ref, opts.external);
