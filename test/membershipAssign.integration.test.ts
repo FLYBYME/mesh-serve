@@ -18,7 +18,8 @@ import '../src/identity/contracts/role.contract.js';
 import '../src/identity/contracts/identity.contract.js';
 
 const DB_NAME = 'mesh-serve-membership-assign-test';
-const WS_PORT = 16613;
+// Its own port: 16613 is mcp.integration's, and the two collided when run at once.
+const WS_PORT = 16622;
 
 describe('identity.membership.assign: only in an organization the caller runs', () => {
     let app: MeshApp;

@@ -29,8 +29,9 @@ import { ensureBootstrapApi } from '../src/api/ensureBootstrapApi.js';
 import { API_LIMIT } from '../src/api/gateway.js';
 
 const DB_NAME = 'mesh-serve-api-token-scope-integration-test';
-const WS_PORT = 16613;
-const API_PORT = 15613;
+// Its own pair: mcp.integration's 16613/15613 collided with it whenever both ran at once.
+const WS_PORT = 16621;
+const API_PORT = 15621;
 const ORIGIN = `http://api.localhost:${API_PORT}`;
 
 declare global {
