@@ -2,7 +2,7 @@ import type { Command as CommanderCommand } from 'commander';
 import {
     BrokerModule,
     DatabaseModule,
-    JSONSerializer, Logger, LogLevel, MeshApp,
+    JSONSerializer, Logger, LogLevel, MeshApp, meshMetrics,
     NetworkModule,
     PlacementRegistry, RegistryModule,
     z,
@@ -13,6 +13,7 @@ import { BaseCommand } from '../core/BaseCommand.js';
 import { stopOnSignal } from '../core/stopOnSignal.js';
 import { ZodToCliMapper } from '../core/ZodToCliMapper.js';
 import { meshFrameworkVersion, resolveMetricsPort, startMetricsServer } from '../core/metricsServer.js';
+import { MetricLines, resolveTelemetryMode, spanLine } from '../core/telemetryLines.js';
 import { runningVersion } from '../../catalog/methods/upgrade.js';
 import type { IServiceBroker } from '@flybyme/mesh';
 
@@ -29,6 +30,8 @@ import '../../catalog/contracts/composition.contract.js';
 import '../../catalog/contracts/artifact.contract.js';
 import '../../catalog/contracts/release.contract.js';
 import { CORE_PART_NAMES, type CorePartName } from '../../catalog/contracts/corePart.contract.js';
+
+const METRIC_LINES_EVERY_MS = 5_000;
 
 const LogLevelMap: Record<string, LogLevel> = {
     error: LogLevel.ERROR,
@@ -175,24 +178,26 @@ export class StartCommand extends BaseCommand {
         const broker = node.getProvider<IServiceBroker>('broker');
         // What this node runs, with every presence: serve.node.serving reads it, beside each contract's hash.
         broker.registry.setLocalSoftware({ 'mesh-serve': runningVersion(), mesh: meshFrameworkVersion() });
-        // Spans: one JSON line each on stdout, which the logs agent ships. A failed one always -- a
-        // handler's error otherwise reached only its caller, and a 500 left no trace on any node
-        // (open.md, 10-26) -- every one with MESH_SPANS=1, since a line per call is real volume.
-        const allSpans = process.env.MESH_SPANS === '1';
+        // Spans and metrics: JSON lines on stdout, which the logs agent ships (telemetryLines.ts).
+        // Every span, so everything the mesh did in any minute can be seen (owner, 10-28); a failed
+        // one is also a line in serve.node.logs, since a 500 once left no trace on any node.
+        const telemetry = resolveTelemetryMode();
         broker.setSpanSink?.((span) => {
-            if (!allSpans && span.outcome === 'ok') return;
+            if (telemetry === 'failed' && span.outcome === 'ok') return;
 
-            const line = JSON.stringify({ type: 'span', ...span });
+            const line = spanLine(span);
             process.stdout.write(`${line}\n`);
-            // In serve.node.logs too, so a failed call is found where an operator looks first.
             if (span.outcome !== 'ok') recordLog(LogLevel.ERROR, line, []);
         });
-        if (allSpans) this.logger.info('Spans on: one JSON line per call, event and database operation (MESH_SPANS=1).');
-        if (metricsPort !== undefined) {
-            // Who this is, and the process/event-loop gauges. Until now a scrape had only the
-            // broker's and transport's own counters.
-            installNodeMetrics({ nodeID: args.nodeID, version: runningVersion(), meshVersion: meshFrameworkVersion(), registry: broker.registry });
+        // Who this is, and the process/event-loop gauges: in the metric lines and on /metrics.
+        installNodeMetrics({ nodeID: args.nodeID, version: runningVersion(), meshVersion: meshFrameworkVersion(), registry: broker.registry });
+        if (telemetry === 'all') {
+            const lines = new MetricLines({ registry: meshMetrics.registry, nodeID: args.nodeID, write: (line) => process.stdout.write(`${line}\n`) });
+            setInterval(() => lines.tick(), METRIC_LINES_EVERY_MS).unref();
         }
+        this.logger.info(telemetry === 'all'
+            ? 'Telemetry: a JSON line per span, and metric lines every 5 s, on stdout (MESH_SPANS=failed for failed spans only).'
+            : 'Telemetry: failed spans only (MESH_SPANS=failed).');
         for (const domain of CATALOG_DOMAINS) {
             await broker.loadDomain(domain, {}, { resolve: resolveHandler });
         }

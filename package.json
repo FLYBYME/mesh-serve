@@ -1,6 +1,6 @@
 {
     "name": "@flybyme/mesh-serve",
-    "version": "0.10.96",
+    "version": "0.10.97",
     "description": "The serving half of the platform: build a repository into content-addressed artifacts, and serve them by hostname.",
     "type": "module",
     "main": "./dist/index.js",
@@ -39,7 +39,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@flybyme/mesh": "^4.14.13",
+        "@flybyme/mesh": "^4.15.0",
         "@flybyme/mesh-web": "^0.21.19",
         "commander": "^15.0.0",
         "esbuild": "^0.28.2",
