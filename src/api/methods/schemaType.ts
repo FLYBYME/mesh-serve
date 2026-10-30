@@ -25,8 +25,14 @@ function union(parts: readonly string[]): string {
     if (parts.length === 0) return 'never';
     if (parts.includes('any')) return 'any';
 
+    // `undefined` goes last and bare, so a field typed `X | undefined` is still seen as one that may
+    // be left out (admitsUndefined).
     const unique = [...new Set(parts)];
-    return unique.length === 1 ? (unique[0] ?? 'never') : unique.map((p) => `(${p})`).join(' | ');
+    const defined = unique.filter((p) => p !== 'undefined');
+    const type = defined.length === 1 ? (defined[0] ?? 'never') : defined.map((p) => `(${p})`).join(' | ');
+    if (!unique.includes('undefined')) return type;
+
+    return defined.length === 0 ? 'undefined' : `${type} | undefined`;
 }
 
 function intersection(parts: readonly string[]): string {
@@ -122,6 +128,10 @@ function bareType(schema: Schema, side: Side): string {
     if (Array.isArray(schema.anyOf)) return union(schema.anyOf.map((o) => typeOf(o, side)));
     if (Array.isArray(schema.allOf)) return intersection(schema.allOf.map((o) => typeOf(o, side)));
     if (Array.isArray(schema.oneOf)) return union(schema.oneOf.map((o) => typeOf(o, side)));
+    // `{ not: {} }` matches nothing at all: zod-to-json-schema's way of writing `undefined`, as in a
+    // find_one's "the record, or nothing" (`anyOf: [{ not: {} }, record]`). Read as any, it made
+    // every find_one's answer any (10-29). Any other `not` is a refinement no type can say.
+    if (isSchema(schema.not) && Object.keys(schema.not).length === 0) return 'undefined';
     if (schema.not !== undefined) return 'any';
     if (Array.isArray(schema.enum)) return union(schema.enum.map(literal));
     if (schema.const !== undefined) return literal(schema.const);

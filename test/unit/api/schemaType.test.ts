@@ -32,7 +32,16 @@ describe('a schema\'s type, as zod gives it', () => {
         expect(typeOf({ type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: { type: 'number' } }, 'output'))
             .toBe('({ "a": string }) & ({ [key: string]: number })');
         expect(typeOf({ type: 'object' }, 'output')).toBe('Record<string, any>');
-        expect(typeOf({ anyOf: [{ not: {} }, { type: 'string' }] }, 'output')).toBe('any');
+        expect(typeOf({ not: { type: 'string' } }, 'output')).toBe('any');
+    });
+
+    it('`not: {}` is nothing: a find_one is its record or undefined, never any', () => {
+        const record = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false };
+
+        expect(typeOf({ anyOf: [{ not: {} }, record] }, 'output')).toBe('{ "id": string } | undefined');
+        expect(typeOf({ anyOf: [{ not: {} }, { type: 'string' }, { type: 'number' }] }, 'output')).toBe('(string) | (number) | undefined');
+        expect(typeOf({ type: 'object', properties: { a: { anyOf: [{ not: {} }, { type: 'string' }] } }, required: ['a'] }, 'output'))
+            .toBe('{ "a"?: string | undefined }');
     });
 });
 
