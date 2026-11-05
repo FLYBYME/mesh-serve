@@ -102,6 +102,8 @@ async function main(): Promise<void> {
         target: 'node20',
         sourcemap: true,
         minify: true,
+        // Every class and function keeps its name: a library may branch on one (build.ts, 11-05).
+        keepNames: true,
         logLevel: 'info',
         // Resolved from this package's own node_modules at runtime -- no artifact-store symlink
         // trick needed (Database.methods.build.ts's ensureArtifactNodeModules), since these bundles

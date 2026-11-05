@@ -288,6 +288,10 @@ export async function runEsbuild(
         // still map, and the sources are the commit. A browser's map keeps them, for devtools.
         sourcesContent: platform !== 'node',
         minify: true,
+        // Minified, but every class and function keeps its name: a library may branch on one. 11-05,
+        // ssh2 skips a half-open session by `channel.constructor.name === 'Session'`; renamed, it went
+        // on to a field a session has not got, and a scanner's dropped connection ended the node.
+        keepNames: true,
         logLevel: 'silent',
         external,
         // A sibling library installed from git (`github:FLYBYME/surfdns-certs#master`) arrives with

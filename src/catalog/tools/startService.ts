@@ -85,7 +85,7 @@ async function loadPart(
 
     const absolutePath = artifactAssetPath(hash, jsAsset.url, ctx.nodeID);
     const { domain, nodeID } = await loadAndRegisterModule(ctx, absolutePath);
-    markServiceRunning(ctx.nodeID, part.id, domain, absolutePath, artifact.id);
+    markServiceRunning(ctx.nodeID, part.id, domain, absolutePath, artifact.id, part.tenantId);
 
     // After it is marked running, not before: runOnStart's failure path unloads the part and clears
     // exactly that mark, so the mark has to exist for the cleanup to undo.

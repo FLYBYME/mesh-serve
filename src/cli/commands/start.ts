@@ -19,6 +19,7 @@ import type { IServiceBroker } from '@flybyme/mesh';
 
 import { resolveHandler } from '../../catalog/methods/resolveHandler.js';
 import { recordLog } from '../../catalog/methods/logBuffer.js';
+import { installPartFaultIsolation } from '../../catalog/methods/partFaults.js';
 import { partsFromLabels, readSavedLabels } from '../../catalog/methods/labels.js';
 import { createCorePartPlacement } from '../../catalog/methods/corePartPlacement.js';
 import { CATALOG_DOMAINS } from '../../catalog/domains.js';
@@ -176,6 +177,8 @@ export class StartCommand extends BaseCommand {
         // so the list of its domains is written out here, and this is the only place in the
         // codebase that names a part's domains by hand.
         const broker = node.getProvider<IServiceBroker>('broker');
+        // One part's uncaught exception stops that part here, not the whole node (partFaults.ts).
+        installPartFaultIsolation({ broker, nodeID: args.nodeID, logger: this.logger });
         // What this node runs, with every presence: serve.node.serving reads it, beside each contract's hash.
         broker.registry.setLocalSoftware({ 'mesh-serve': runningVersion(), mesh: meshFrameworkVersion() });
         // Spans and metrics: JSON lines on stdout, which the logs agent ships (telemetryLines.ts).

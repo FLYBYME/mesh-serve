@@ -12,6 +12,8 @@ export interface RunningService {
     readonly modulePath?: string;
     /** The serve.artifact actually loaded -- absent only for core parts, which are not built artifacts. */
     readonly artifactId?: string;
+    /** The organization its serve.part row belongs to: stopping it is scoped by it. */
+    readonly tenantId?: string;
 }
 
 const running = new Map<string, RunningService>();
@@ -28,12 +30,49 @@ function key(nodeID: string, partId: string): string {
     return `${nodeID}\u0000${partId}`;
 }
 
-export function markServiceRunning(nodeID: string, partId: string, domain: string, modulePath?: string, artifactId?: string): void {
+export function markServiceRunning(nodeID: string, partId: string, domain: string, modulePath?: string, artifactId?: string, tenantId?: string): void {
     running.set(key(nodeID, partId), {
         domain,
         ...(modulePath !== undefined ? { modulePath } : {}),
         ...(artifactId !== undefined ? { artifactId } : {}),
+        ...(tenantId !== undefined ? { tenantId } : {}),
     });
+}
+
+/** A catalog part loaded on this node, as a fault names it. */
+export interface RunningPart extends RunningService {
+    readonly partId: string;
+    readonly modulePath: string;
+}
+
+/**
+ * The catalog part this stack runs through, nearest the throw first: the first frame inside a
+ * loaded part's own folder (`<artifacts>/<hash>/`) names it. Undefined when no frame does -- the
+ * error is mesh-serve's own, or a library's called from nothing a part owns. Core parts are not
+ * catalog parts (no serve.part row to stop) and are never named.
+ */
+export function partInStack(nodeID: string, stack: string): RunningPart | undefined {
+    const prefix = `${nodeID}\u0000`;
+    const parts: RunningPart[] = [];
+    for (const [entryKey, service] of running) {
+        if (!entryKey.startsWith(prefix) || service.modulePath === undefined) continue;
+        const partId = entryKey.slice(prefix.length);
+        if (partId.startsWith('core:')) continue;
+        parts.push({ ...service, partId, modulePath: service.modulePath });
+    }
+
+    for (const line of stack.split('\n')) {
+        const found = parts.find((p) => line.includes(folderOf(p.modulePath)));
+        if (found !== undefined) return found;
+    }
+
+    return undefined;
+}
+
+/** The folder a part's module sits in, with its trailing separator: `/a/b/` never matches `/a/bc/`. */
+function folderOf(modulePath: string): string {
+    const cut = modulePath.lastIndexOf('/');
+    return cut < 0 ? modulePath : modulePath.slice(0, cut + 1);
 }
 
 export function getRunningService(nodeID: string, partId: string): RunningService | undefined {
