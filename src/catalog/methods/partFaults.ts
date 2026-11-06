@@ -1,6 +1,6 @@
 import type { IServiceBroker } from '@flybyme/mesh';
 
-import { partInStack, type RunningPart } from './services.js';
+import { partInStack, partOfOwner, type RunningPart } from './services.js';
 
 /**
  * One part's uncaught exception costs that part, not its node.
@@ -9,7 +9,8 @@ import { partInStack, type RunningPart } from './services.js';
  * runs lives in that process: 11-05, a library bug in one part (an SSH server's cleanup on a
  * scanner's dropped connection) ended a node, and the nameserver beside it went with it until the
  * process came back. Here the stack decides: when it runs through a catalog part's own build
- * (`partInStack`), that part is stopped on this node -- unmounted and its module dropped, as
+ * (`partInStack`) -- or, with no frame of the part's, when the work that threw was the part's (the
+ * broker's owner in effect, `partOfOwner`) -- that part is stopped on this node -- unmounted and its module dropped, as
  * `serve.part.stop` always does -- and the supervisor's next pass starts it again, since it is still
  * desired. Everything else on the node carries on.
  *
@@ -28,7 +29,7 @@ export interface FaultLogger {
 }
 
 export interface FaultIsolationOptions {
-    readonly broker: Pick<IServiceBroker, 'callNamed'>;
+    readonly broker: Pick<IServiceBroker, 'callNamed' | 'ownerInEffect'>;
     readonly nodeID: string;
     readonly logger: FaultLogger;
     /** How the process ends when nothing can be isolated: process.exit, swapped in tests. */
@@ -59,7 +60,10 @@ export function createFaultHandler(options: FaultIsolationOptions): (err: unknow
 
     return (err, origin) => {
         const stack = stackOf(err);
-        const part = partInStack(nodeID, stack);
+        // The stack first; else whose work this was (the broker's owner in effect, which Node keeps
+        // across timers and sockets into this handler): 11-05, node:net's EADDRINUSE out of the SSH
+        // door's listen had no frame of the door's and ended ns2's node.
+        const part = partInStack(nodeID, stack) ?? partOfOwner(nodeID, options.broker.ownerInEffect());
 
         if (part === undefined || part.tenantId === undefined) {
             logger.error(`Uncaught ${origin} on ${nodeID}, in no part that can be stopped alone; the node ends.\n${stack}`);

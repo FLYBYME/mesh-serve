@@ -52,6 +52,34 @@ export interface RunningPart extends RunningService {
  * catalog parts (no serve.part row to stop) and are never named.
  */
 export function partInStack(nodeID: string, stack: string): RunningPart | undefined {
+    const parts = catalogPartsOn(nodeID);
+
+    for (const line of stack.split('\n')) {
+        const found = parts.find((p) => line.includes(folderOf(p.modulePath)));
+        if (found !== undefined) return found;
+    }
+
+    return undefined;
+}
+
+/**
+ * The catalog part whose load owns `owner` (the broker's owner in effect: `part:<module>@<node>`,
+ * loadModule.ts), when the stack names none -- an error raised by Node alone (node:net's
+ * EADDRINUSE, 11-05) out of work a part's contract started. Core parts are never named.
+ */
+export function partOfOwner(nodeID: string, owner: string | undefined): RunningPart | undefined {
+    if (owner === undefined) return undefined;
+
+    return catalogPartsOn(nodeID).find((p) => ownerOf(nodeID, p.modulePath) === owner);
+}
+
+/** Who a load's registrations belong to: one owner per module and node (broker.withOwner). */
+export function ownerOf(nodeID: string, absolutePath: string): string {
+    return `part:${absolutePath}@${nodeID}`;
+}
+
+/** Every catalog part loaded on this node, with the module it came from. */
+function catalogPartsOn(nodeID: string): RunningPart[] {
     const prefix = `${nodeID}\u0000`;
     const parts: RunningPart[] = [];
     for (const [entryKey, service] of running) {
@@ -61,12 +89,7 @@ export function partInStack(nodeID: string, stack: string): RunningPart | undefi
         parts.push({ ...service, partId, modulePath: service.modulePath });
     }
 
-    for (const line of stack.split('\n')) {
-        const found = parts.find((p) => line.includes(folderOf(p.modulePath)));
-        if (found !== undefined) return found;
-    }
-
-    return undefined;
+    return parts;
 }
 
 /** The folder a part's module sits in, with its trailing separator: `/a/b/` never matches `/a/bc/`. */

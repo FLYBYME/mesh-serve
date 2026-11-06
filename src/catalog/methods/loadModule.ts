@@ -5,6 +5,7 @@ import { MeshError, toolKey } from '@flybyme/mesh';
 import type { ContractHandlerMap, IServiceContext } from '@flybyme/mesh';
 
 import { resolveHandler } from './resolveHandler.js';
+import { ownerOf } from './services.js';
 
 const require = createRequire(import.meta.url);
 
@@ -90,10 +91,6 @@ const loadedParts = new Map<string, LoadedPartRecord>();
 
 function partKey(nodeID: string, absolutePath: string): string {
     return `${nodeID}\u0000${absolutePath}`;
-}
-
-function ownerOf(nodeID: string, absolutePath: string): string {
-    return `part:${absolutePath}@${nodeID}`;
 }
 
 /**

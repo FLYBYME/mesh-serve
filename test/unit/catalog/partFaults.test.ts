@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { clearServiceRunning, markServiceRunning, partInStack } from '../../../src/catalog/methods/services.js';
+import { clearServiceRunning, markServiceRunning, ownerOf, partInStack } from '../../../src/catalog/methods/services.js';
 import { createFaultHandler, type FaultIsolationOptions } from '../../../src/catalog/methods/partFaults.js';
 
 const NODE = 'fault-node';
@@ -21,13 +21,26 @@ function crashIn(modulePath: string): Error {
     return err;
 }
 
+/** 11-05 23:28's error: raised by node:net alone, no frame of the part that listened. */
+function addressInUse(): Error {
+    const err = new Error('listen EADDRINUSE: address already in use 0.0.0.0:2223');
+    err.stack = [
+        `Error: ${err.message}`,
+        '    at Server.setupListenHandle [as _listen2] (node:net:1908:16)',
+        '    at listenInCluster (node:net:1965:12)',
+        '    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)',
+    ].join('\n');
+
+    return err;
+}
+
 interface Recorded {
     readonly calls: Array<{ tool: string; params: Record<string, unknown>; nodeID?: string; tenant?: unknown }>;
     readonly exits: number[];
     readonly errors: string[];
 }
 
-function harness(stop: () => Promise<unknown> = () => Promise.resolve({ stopped: true })): { options: FaultIsolationOptions; seen: Recorded } {
+function harness(stop: () => Promise<unknown> = () => Promise.resolve({ stopped: true }), owner?: string): { options: FaultIsolationOptions; seen: Recorded } {
     const seen: Recorded = { calls: [], exits: [], errors: [] };
     const options: FaultIsolationOptions = {
         nodeID: NODE,
@@ -36,6 +49,7 @@ function harness(stop: () => Promise<unknown> = () => Promise.resolve({ stopped:
                 seen.calls.push({ tool, params, ...(opts?.nodeID !== undefined ? { nodeID: opts.nodeID } : {}), tenant: opts?.meta?.tenant_id });
                 return stop();
             },
+            ownerInEffect: () => owner,
         },
         logger: { error: (m) => { seen.errors.push(m); }, info: () => undefined },
         exit: (code) => { seen.exits.push(code); },
@@ -129,6 +143,42 @@ describe('a part\'s uncaught exception', () => {
         await settle();
 
         expect(seen.exits).toEqual([1]);
+    });
+
+    it('with no frame of its own, the part whose work threw is stopped (11-05: EADDRINUSE from node:net alone)', async () => {
+        markServiceRunning(NODE, 'ssh', 'ssh', SSH, 'a1', 'org-1');
+        markServiceRunning(NODE, 'dns', 'dns', DNS, 'a2', 'org-1');
+        const { options, seen } = harness(undefined, ownerOf(NODE, SSH));
+
+        const outcome = createFaultHandler(options)(addressInUse(), 'uncaughtException');
+        await settle();
+
+        expect(outcome.kind).toBe('stopping');
+        expect(seen.calls).toEqual([{ tool: 'serve.part.stop', params: { id: 'ssh' }, nodeID: NODE, tenant: 'org-1' }]);
+        expect(seen.exits).toEqual([]);
+    });
+
+    it('the stack still decides over whose work it was', async () => {
+        markServiceRunning(NODE, 'ssh', 'ssh', SSH, 'a1', 'org-1');
+        markServiceRunning(NODE, 'dns', 'dns', DNS, 'a2', 'org-1');
+        const { options, seen } = harness(undefined, ownerOf(NODE, SSH));
+
+        createFaultHandler(options)(crashIn(DNS), 'uncaughtException');
+        await settle();
+
+        expect(seen.calls.map((c) => c.params.id)).toEqual(['dns']);
+    });
+
+    it('ends the node when the owner is no catalog part here: a core part, another node, or none', () => {
+        markServiceRunning(NODE, 'core:api', 'serve.api', SSH);
+        markServiceRunning('other-node', 'ssh', 'ssh', DNS, 'a1', 'org-1');
+
+        for (const owner of [ownerOf(NODE, SSH), ownerOf('other-node', DNS), 'part:/somewhere/else.cjs@fault-node', undefined]) {
+            const { options, seen } = harness(undefined, owner);
+            expect(createFaultHandler(options)(addressInUse(), 'uncaughtException').kind).toBe('exit');
+            expect(seen.exits).toEqual([1]);
+        }
+        clearServiceRunning('other-node', 'ssh');
     });
 
     it('a thrown non-Error is still read, and with no part ends the node', () => {
