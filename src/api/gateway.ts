@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { gzipSync } from 'node:zlib';
 
-import { ContextStack, eventPermissions, isMeshError, MeshError } from '@flybyme/mesh';
+import { ContextStack, eventPermissions, isMeshError, MeshError, markLogged, unloggedFault } from '@flybyme/mesh';
 import type { ContractDeclaration, Database, IServiceBroker, z } from '@flybyme/mesh';
 import { ACTIVITY_RETENTION_DAYS, outcomeOf, shouldRecord, summarizeInput } from './methods/activity.js';
 import { behindProxy } from './behindProxy.js';
@@ -367,7 +367,12 @@ export class ApiGateway {
                     res.setHeader('Content-Type', 'application/json');
                     res.end(JSON.stringify({ error: err.message }));
                 } else {
-                    this.broker?.logger.error('Error handling api request', err);
+                    // A handler's fault was logged where it threw (mesh 4.18.3); this is for one
+                    // of the gateway's own.
+                    if (unloggedFault(err)) {
+                        markLogged(err);
+                        this.broker?.logger.error('Error handling api request', err);
+                    }
                     res.statusCode = 500;
                     res.setHeader('Content-Type', 'application/json');
                     res.end(JSON.stringify({ error: 'Internal Server Error' }));
