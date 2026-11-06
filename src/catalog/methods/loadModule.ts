@@ -132,12 +132,14 @@ export async function unloadAndEvictModule(ctx: IServiceContext, absolutePath: s
         await stopLoadedPart(domain);
     }
 
-    for (const toolKey of record.contracts) {
-        ctx.broker.unregisterContract(toolKey);
-    }
+    // All unmounted at once, then their closes waited for together (mesh's onStop): the copy that
+    // replaces this one must not meet it on its own port. 11-05: it did -- the SSH door's reload got
+    // EADDRINUSE from its old copy, and the node went down.
+    const closes = record.contracts.map((toolKey) => ctx.broker.unregisterContract(toolKey));
     // Everything else the load registered -- event handlers, CRUD hooks -- and any contract the
     // list above missed. Only what is still this load's own is removed.
-    ctx.broker.unregisterOwner(record.owner);
+    closes.push(ctx.broker.unregisterOwner(record.owner));
+    await Promise.all(closes);
 
     const evicted = evictModule(absolutePath);
 
@@ -173,8 +175,8 @@ function evictModule(absolutePath: string): boolean {
  * and threw on the next kept serving the first, looked running to nobody and stopped by nothing:
  * every start after failed at once ("already mounted"), and `desired: stopped` had nothing to stop.
  */
-function undoFailedLoad(ctx: IServiceContext, absolutePath: string, owner: string, err: unknown): MeshError {
-    ctx.broker.unregisterOwner(owner);
+async function undoFailedLoad(ctx: IServiceContext, absolutePath: string, owner: string, err: unknown): Promise<MeshError> {
+    await ctx.broker.unregisterOwner(owner);
     evictModule(absolutePath);
 
     const said = err instanceof Error ? err.message : String(err);
@@ -269,7 +271,7 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
                 }
             });
         } catch (err) {
-            throw undoFailedLoad(ctx, absolutePath, owner, err);
+            throw await undoFailedLoad(ctx, absolutePath, owner, err);
         }
         // Recorded so unloadAndEvictModule can reverse exactly this, rather than re-deriving it
         // from a manifest that may since have been evicted.
@@ -296,7 +298,7 @@ export async function loadAndRegisterModule(ctx: IServiceContext, absolutePath: 
         try {
             registration = await ctx.broker.withOwner(owner, () => register(ctx.broker));
         } catch (err) {
-            throw undoFailedLoad(ctx, absolutePath, owner, err);
+            throw await undoFailedLoad(ctx, absolutePath, owner, err);
         }
         const domain = typeof registration === 'string' ? registration : registration.domain;
         if (typeof registration !== 'string' && registration.stop) {

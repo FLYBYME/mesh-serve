@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     BrokerModule, defineContract, defaultPrint, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule,
-    PlacementRegistry, RegistryModule, z,
+    onStop, PlacementRegistry, RegistryModule, z,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
@@ -30,9 +30,12 @@ declare global {
     interface IServiceToolRegistry {
         'partreload.load': { params: { modulePath: string }; returns: { domain: string } };
         'partreload.unload': { params: { modulePath: string }; returns: { contracts: number } };
+        'partreloadport.listen': { params: { port: number }; returns: { port: number } };
     }
     // The built part records what it heard here; a real part would do real work.
     var partReloadHeard: string[] | undefined;
+    // What a built part would import from @flybyme/mesh: a build in a temp folder cannot resolve it.
+    var partReloadMesh: { defineContract: typeof defineContract; defaultPrint: typeof defaultPrint; onStop: typeof onStop; z: typeof z } | undefined;
 }
 
 const loadContract = defineContract({
@@ -62,6 +65,36 @@ exports.register = function register(broker) {
     return file;
 }
 
+/**
+ * One build of a part holding a port, as the SSH door does: a long-running contract that listens,
+ * and lets go through onStop -- slowly, as a real server with sessions does.
+ */
+function writePortBuild(dir: string, build: string): string {
+    const file = path.join(dir, `port-${build}.cjs`);
+    fs.writeFileSync(file, `
+const net = require('node:net');
+exports.register = function register(broker) {
+    const { defineContract, defaultPrint, onStop, z } = globalThis.partReloadMesh;
+    const listen = defineContract({
+        domain: 'partreloadport', action: 'listen', description: 'test: hold a port until stopped',
+        inputSchema: z.object({ port: z.number() }), outputSchema: z.object({ port: z.number() }),
+        rest: { method: 'POST', path: '/partreloadport/listen' }, filePath: 'test/partReload.integration.test.ts',
+        concurrency: 'long-running', permissions: [], print: defaultPrint,
+    });
+    broker.registerContract(listen, (input, ctx) => new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once('error', reject);
+        server.listen(input.port, '127.0.0.1', () => {
+            onStop(ctx.signal, () => new Promise((done) => setTimeout(() => server.close(() => done()), 200)));
+            resolve({ port: server.address().port });
+        });
+    }));
+    return 'partreloadport';
+};
+`);
+    return file;
+}
+
 describe('reloading a part in place', () => {
     let app: MeshApp;
     let broker: IServiceBroker;
@@ -70,6 +103,7 @@ describe('reloading a part in place', () => {
     beforeAll(async () => {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'part-reload-'));
         globalThis.partReloadHeard = heard;
+        globalThis.partReloadMesh = { defineContract, defaultPrint, onStop, z };
 
         app = new MeshApp({ nodeID: 'part-reload-node', logger: new Logger(LogLevel.ERROR) });
         app.use(new RegistryModule({ implementation: PlacementRegistry }));
@@ -143,6 +177,24 @@ describe('reloading a part in place', () => {
             expect(heard.filter((build) => build === 'v5')).toEqual(['v5']);
         } finally {
             await broker.call('partreload.unload', { modulePath: v5 });
+        }
+    });
+
+    it('lets the new build have the old one\'s port: the unload waits for it to close', async () => {
+        // 11-05: the SSH door's reload met its own old copy on its port (EADDRINUSE), and the node
+        // it ran on went down. The old copy had been asked to close, not waited for.
+        const p1 = writePortBuild(dir, 'p1');
+        const p2 = writePortBuild(dir, 'p2');
+
+        await broker.call('partreload.load', { modulePath: p1 });
+        const { port } = await broker.call('partreloadport.listen', { port: 0 });
+
+        await broker.call('partreload.unload', { modulePath: p1 });
+        await broker.call('partreload.load', { modulePath: p2 });
+        try {
+            await expect(broker.call('partreloadport.listen', { port })).resolves.toEqual({ port });
+        } finally {
+            await broker.call('partreload.unload', { modulePath: p2 });
         }
     });
 
