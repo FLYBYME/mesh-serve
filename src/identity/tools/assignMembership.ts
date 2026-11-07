@@ -1,6 +1,7 @@
 import { callerUserId, MeshError, type IServiceContext } from '@flybyme/mesh';
 
 import type { MembershipAssignInput, MembershipAssignOutput } from '../contracts/membership.contract.js';
+import { admitMember } from '../methods/admit.js';
 import { inOrganization } from '../methods/roles.js';
 
 /**
@@ -90,6 +91,9 @@ export async function assignMembership(input: MembershipAssignInput, ctx: IServi
             await memberships.delete({ id: current.id });
         }
     } else if (current === undefined) {
+        // Someone new, where the organization may have only so many: an operator places anyone.
+        if (!isOperator) await admitMember(ctx, org);
+
         const invitedBy = ctx.meta?.user?.id ?? '';
         await memberships.create({ userId: input.userId, organizationId: org.id, roleKey: input.roleKey, invitedBy, joinedAt: new Date() });
     } else {

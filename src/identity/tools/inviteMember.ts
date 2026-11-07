@@ -1,6 +1,7 @@
 import { MeshError, callerUserId, resolveCallerTenant, type IServiceContext } from '@flybyme/mesh';
 
 import type { MembershipInviteInput, MembershipInviteOutput } from '../contracts/membership.contract.js';
+import { admitMember } from '../methods/admit.js';
 import { findUserByEmail } from '../methods/findByEmail.js';
 import { normalizeEmail } from '../methods/userToken.js';
 import { issue } from './userToken.js';
@@ -26,6 +27,10 @@ export async function invite(input: MembershipInviteInput, ctx: IServiceContext)
     if (user !== undefined && user.kind === 'agent') {
         throw new MeshError({ message: 'That address is an agent account: it cannot be invited.', code: 'FORBIDDEN', status: 403 });
     }
+
+    // Room for one more, asked before a new account is made: a refused invite leaves nothing behind.
+    // assign asks again; an operator is asked in neither.
+    if (!(by?.roles.includes('operator') ?? false)) await admitMember(ctx, org);
 
     const invited = user === undefined;
     if (user === undefined) {

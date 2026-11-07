@@ -5,8 +5,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongoClient } from 'mongodb';
+import { z } from 'zod';
 import {
-    BrokerModule, DatabaseModule, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
+    BrokerModule, DatabaseModule, defaultPrint, defineContract, JSONSerializer, Logger, LogLevel, MeshApp, NetworkModule, PlacementRegistry, RegistryModule,
 } from '@flybyme/mesh';
 import type { IServiceBroker } from '@flybyme/mesh';
 import { WSTransport } from '@flybyme/mesh/node';
@@ -16,6 +17,15 @@ import '../src/identity/contracts/organization.contract.js';
 import '../src/identity/contracts/membership.contract.js';
 import '../src/identity/contracts/role.contract.js';
 import '../src/identity/contracts/identity.contract.js';
+
+/** A stand-in for an application's seat limit (SurfDNS's is billing.check). */
+const seatsContract = defineContract({
+    domain: 'seatstest', action: 'check', description: 'test: may this organization have one more person',
+    inputSchema: z.object({ resource: z.string(), current: z.number(), adding: z.number() }),
+    outputSchema: z.object({ allowed: z.boolean(), why: z.string().optional() }),
+    rest: { method: 'POST', path: '/seatstest/check' }, filePath: 'test/membershipAssign.integration.test.ts',
+    concurrency: 'on-demand', permissions: [], visibility: 'internal', print: defaultPrint,
+});
 
 const DB_NAME = 'mesh-serve-membership-assign-test';
 // Its own port: 16613 is mcp.integration's, and the two collided when run at once.
@@ -137,5 +147,48 @@ describe('identity.membership.assign: only in an organization the caller runs', 
 
         expect(made.changed).toBe(true);
         expect(await roleIn(daveId, orgB)).toBe('member');
+    });
+
+    it('asks IDENTITY_ADMIT_CONTRACT before someone joins: past the limit, refused before anything is made', async () => {
+        // B has Carol (owner) and Dave: a stand-in limit of three people.
+        const asked: { tenant: string; current: number }[] = [];
+        broker.registerContract(seatsContract, async (input, ctx) => {
+            const user = ctx.meta?.user;
+            const tenant = typeof user === 'object' && user !== null ? Reflect.get(user, 'tenant_id') : undefined;
+            asked.push({ tenant: typeof tenant === 'string' ? tenant : '', current: input.current });
+            const allowed = input.current + input.adding <= 3;
+
+            return allowed ? { allowed } : { allowed, why: 'Your plan allows 3 people.' };
+        });
+        process.env.IDENTITY_ADMIT_CONTRACT = 'seatstest.check';
+
+        try {
+            const erin = await broker.call('identity.user.create', { email: 'erin@assign.invalid', displayName: 'Erin', roles: [], provisional: false });
+            const frank = await broker.call('identity.user.create', { email: 'frank@assign.invalid', displayName: 'Frank', roles: [], provisional: false });
+            await broker.call('identity.user.update', { id: carolId, emailVerifiedAt: new Date() }, as(opId, platformId));
+
+            const added = await broker.call('identity.membership.assign', { userId: erin.id, organizationId: orgB, roleKey: 'member' }, as(carolId, orgB));
+            expect(added.changed).toBe(true);
+            expect(asked).toEqual([{ tenant: orgB, current: 2 }]);
+
+            await expect(broker.call('identity.membership.assign', { userId: frank.id, organizationId: orgB, roleKey: 'member' }, as(carolId, orgB)))
+                .rejects.toMatchObject({ status: 402, message: 'Your plan allows 3 people.' });
+            expect(await roleIn(frank.id, orgB)).toBeNull();
+
+            // An invite to a new address is refused before its account is made.
+            await expect(broker.call('identity.membership.invite', { email: 'ghost@assign.invalid', roleKey: 'member' }, as(carolId, orgB)))
+                .rejects.toMatchObject({ status: 402 });
+            const ghosts = await broker.call('identity.user.find', { query: { email: 'ghost@assign.invalid' } }, as(opId, platformId));
+            expect(ghosts).toHaveLength(0);
+
+            // An operator places anyone, and isn't asked.
+            const before = asked.length;
+            await broker.call('identity.membership.assign', { userId: frank.id, organizationId: orgB, roleKey: 'member' }, as(opId, platformId));
+            expect(await roleIn(frank.id, orgB)).toBe('member');
+            expect(asked).toHaveLength(before);
+        } finally {
+            delete process.env.IDENTITY_ADMIT_CONTRACT;
+            await broker.unregisterContract('seatstest.check');
+        }
     });
 });
