@@ -293,6 +293,9 @@ export async function runEsbuild(
         // on to a field a session has not got, and a scanner's dropped connection ended the node.
         keepNames: true,
         logLevel: 'silent',
+        // A font a stylesheet names (an editor's icon font) is a file of the artifact, beside the CSS
+        // that loads it; esbuild has no loader for one of its own, and the build used to fail on it.
+        ...(platform === 'browser' ? { loader: { '.ttf': 'file', '.woff': 'file', '.woff2': 'file' } } : {}),
         external,
         // A sibling library installed from git (`github:FLYBYME/surfdns-certs#master`) arrives with
         // no dist/ -- dist is gitignored, and ensureNpmInstall's --ignore-scripts means its `prepare`
@@ -434,6 +437,27 @@ function assetOf(relPath: string, content: Buffer): ArtifactAssetInput {
 }
 
 /**
+ * A browser part's web workers: each `.ts`/`.js` file in a `workers/` folder beside its entry point,
+ * built as an entry of its own into the same output (`workers/<name>.js`, next to the part's own
+ * file), so the part starts one with `new Worker(new URL('./workers/<name>.js', import.meta.url),
+ * { type: 'module' })`. esbuild does not follow such a URL itself, and an editor (Monaco) needs its
+ * workers; served from the same artifact, a worker is same-origin, as the page's CSP asks. No
+ * `workers/` folder: the part's one entry, as before.
+ */
+export async function workerEntries(entry: string): Promise<string[]> {
+    const dir = path.join(path.dirname(entry), 'workers');
+
+    if (!(await exists(dir))) return [];
+
+    const names = await fs.readdir(dir);
+
+    return names
+        .filter((name) => /\.(ts|js)$/.test(name) && !name.endsWith('.d.ts'))
+        .sort()
+        .map((name) => path.join(dir, name));
+}
+
+/**
  * Builds one part at one git ref: checks out the repo, bundles the part's entry with esbuild, and
  * stores the result under its content hash. Does not touch serve.artifact -- the caller records the
  * outcome.
@@ -450,10 +474,11 @@ export async function buildPart(part: BuildablePart, repo: BuildableRepo, ref: s
         const commit = await headCommit(repoDir);
         const entry = path.join(repoDir, part.path, part.entryPoint);
         const wants = await readWants(repoDir, part);
+        const workers = await workerEntries(entry);
 
         const buildTmpDir = path.join(os.tmpdir(), `mesh-build-${crypto.randomUUID()}`);
         try {
-            await runEsbuild([entry], buildTmpDir, external);
+            await runEsbuild([entry, ...workers], buildTmpDir, external);
             return { ...await hashAndStoreOutput(buildTmpDir, repoDir), wants, commit };
         } finally {
             await fs.rm(buildTmpDir, { recursive: true, force: true });
