@@ -95,5 +95,38 @@ export const organizationRemoveContract = defineContract({
     print: (o) => `${o.name} removed, with ${o.memberships} memberships`,
 });
 
+export const organizationRenameInputSchema = z.object({
+    name: z.string().trim().min(1).max(80).describe('Its new name, as people see it'),
+}).describe('Rename your organization');
+
+export const organizationRenameOutputSchema = z.object({
+    organizationId: z.string(),
+    name: z.string(),
+    was: z.string().describe('Its name before'),
+});
+
+/**
+ * identity.organization.rename -- an owner or admin renames their own organization (the one the call
+ * is made in). Only its name: its slug stays, since namespaces, addresses and records are named by it.
+ * A client renames theirs as any service lets them; there was no way at all (11-12: devops became
+ * Development).
+ */
+export const organizationRenameContract = defineContract({
+    domain: 'identity.organization',
+    action: 'rename',
+    description: 'Rename your organization: its name only, as people see it; its slug and everything named by it stay. Owners and admins.',
+    inputSchema: organizationRenameInputSchema,
+    outputSchema: organizationRenameOutputSchema,
+    rest: { method: 'POST', path: '/identity/organizations/rename' },
+    dependencies: ['identity.organization', 'identity.membership'],
+    visibility: 'public',
+    destructive: false,
+    filePath: 'src/identity/tools/renameOrganization.ts', concurrency: 'on-demand', permissions: ['member'],
+    print: (o) => `${o.was} is now ${o.name}`,
+});
+
+export type OrganizationRenameInput = z.infer<typeof organizationRenameInputSchema>;
+export type OrganizationRenameOutput = z.infer<typeof organizationRenameOutputSchema>;
+
 export type OrganizationRemoveInput = z.infer<typeof organizationRemoveInputSchema>;
 export type OrganizationRemoveOutput = z.infer<typeof organizationRemoveOutputSchema>;
