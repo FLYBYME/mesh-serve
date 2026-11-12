@@ -32,6 +32,38 @@ export const whoamiContract = defineContract({
 export type WhoamiInput = z.infer<typeof whoamiContract.inputSchema>;
 export type WhoamiOutput = z.infer<typeof whoamiContract.outputSchema>;
 
+export const peopleInputSchema = z.object({}).describe('No input; the organization is the caller\'s');
+
+export const peopleOutputSchema = z.object({
+    people: z.array(z.object({
+        id: z.string().describe('Their user id'),
+        name: z.string().describe('Their display name'),
+        email: z.string(),
+        role: z.string().describe('Their role in this organization'),
+    })).describe('Everyone in the caller\'s organization, by name'),
+}).describe('The people in the caller\'s organization');
+
+/**
+ * The people a member works with, by name: what a member may know of the others in their own
+ * organization (to assign work, to see who changed something). identity.user.list is the operator's,
+ * across every organization; this is one organization's, for its members (11-12, boards).
+ */
+export const peopleContract = defineContract({
+    domain: 'identity',
+    action: 'people',
+    description: 'The people in your organization: each one\'s name, email and role.',
+    inputSchema: peopleInputSchema,
+    outputSchema: peopleOutputSchema,
+    rest: { method: 'GET', path: '/identity/people' },
+    dependencies: ['identity.user', 'identity.membership'],
+    visibility: 'public',
+    filePath: 'src/identity/tools/people.ts', concurrency: 'on-demand', permissions: ['member'],
+    print: (o) => o.people.map((p) => `${p.name} <${p.email}>  ${p.role}`).join('\n'),
+});
+
+export type PeopleInput = z.infer<typeof peopleContract.inputSchema>;
+export type PeopleOutput = z.infer<typeof peopleContract.outputSchema>;
+
 export const permitsInputSchema = z.object({
     userId: z.string().min(1).describe('The account making the call'),
     contract: z.string().min(1).describe('The contract key being called, e.g. serve.expose.create'),
